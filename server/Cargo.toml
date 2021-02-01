@@ -1,0 +1,12 @@
+[package]
+name = "stackable-spark-operator-server"
+version = "0.1.0"
+authors = ["Malte Sander <malte.sander.it@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+stackable-operator = { git = "https://github.com/stackabletech/operator-rs.git", branch = "main" }
+stackable-spark-crd = { path = "../crd" }
+stackable-spark-operator = { path = "../operator" }
+
+tokio = { version = "0.2", features = ["macros", "rt-threaded"] }

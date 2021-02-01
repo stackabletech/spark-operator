@@ -1,0 +1,6 @@
+apiVersion: spark.stackable.de/v1
+kind: SparkCluster
+metadata:
+  name: spark-cluster
+spec:
+  master: "test-master"
