@@ -19,9 +19,9 @@ pub struct SparkClusterSpec {
     pub master: SparkNode,
     pub worker: SparkNode,
     pub history_server: Option<SparkNode>,
-    //pub image: String,
-    //pub secret: String,
-    //pub log_dir: String,
+    pub image: String,
+    pub secret: Option<String>,
+    pub log_dir: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -119,6 +119,12 @@ impl CRD for SparkCluster {
                                 type: string
                               memory:
                                 type: string
+                    image:
+                      type: string
+                    secret:
+                      type: string
+                    log_dir:
+                      type: string                                
                 status:
                   type: object
                   properties:

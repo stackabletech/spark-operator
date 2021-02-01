@@ -57,6 +57,12 @@ spec:
                             type: string
                           memory:
                             type: string
+                image:
+                  type: string
+                secret:
+                  type: string
+                log_dir:
+                  type: string
             status:
               type: object
               properties:

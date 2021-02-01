@@ -15,4 +15,6 @@ spec:
         instances: 2
         cores: "2"
         memory: "1g"
+  image: "spark:3.0.1"
+  secret: "very_secret"
 
