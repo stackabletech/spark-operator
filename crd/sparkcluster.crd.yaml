@@ -26,4 +26,46 @@ spec:
               type: object
               properties:
                 master:
-                  type: string
+                  type: object
+                  properties:
+                    selectors:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          node_name:
+                            type: string
+                          instances:
+                            type: integer
+                          cores:
+                            type: string
+                          memory:
+                            type: string
+                worker:
+                  type: object
+                  properties:
+                    selectors:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          node_name:
+                            type: string
+                          instances:
+                            type: integer
+                          cores:
+                            type: string
+                          memory:
+                            type: string
+            status:
+              type: object
+              properties:
+                image:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                    version:
+                      type: string
+                    timestamp:
+                      type: string

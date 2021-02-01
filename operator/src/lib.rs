@@ -1,8 +1,17 @@
 #![feature(backtrace)]
 mod error;
 
-use kube::api::ListParams;
+use crate::error::Error;
+
 use kube::Api;
+use tracing::{debug, error, info, trace};
+
+use handlebars::Handlebars;
+use k8s_openapi::api::core::v1::{
+    ConfigMap, ConfigMapVolumeSource, Container, Pod, PodSpec, Volume, VolumeMount,
+};
+use kube::api::{ListParams, Meta};
+use serde_json::json;
 
 use stackable_operator::client::Client;
 use stackable_operator::controller::Controller;
@@ -10,11 +19,14 @@ use stackable_operator::controller::{ControllerStrategy, ReconciliationState};
 use stackable_operator::reconcile::{
     ReconcileFunctionAction, ReconcileResult, ReconciliationContext,
 };
-
-use k8s_openapi::api::core::v1::{ConfigMap, Pod};
-use stackable_spark_crd::{SparkCluster, SparkClusterSpec};
+use stackable_operator::{create_config_map, finalizer, metadata, podutils, reconcile};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap};
 use std::pin::Pin;
+use std::time::Duration;
 use tokio::macros::support::Future;
+
+use stackable_spark_crd::{SparkCluster, SparkClusterSpec, SparkClusterStatus};
 
 const FINALIZER_NAME: &str = "spark.stackable.de/cleanup";
 
@@ -22,12 +34,114 @@ type SparkReconcileResult = ReconcileResult<error::Error>;
 
 struct SparkState {
     context: ReconciliationContext<SparkCluster>,
-    spark_spec: SparkClusterSpec,
+    spec: SparkClusterSpec,
+    status: Option<SparkClusterStatus>,
 }
 
 impl SparkState {
-    pub async fn delete_excess_pods(&self) -> SparkReconcileResult {
+    pub async fn read_cluster_status(&self) -> SparkReconcileResult {
+        info!("read_cluster_status: {:?}", &self.spec);
         Ok(ReconcileFunctionAction::Continue)
+    }
+
+    pub async fn reconcile_cluster(&self) -> SparkReconcileResult {
+        info!("reconcile_cluster: {:?}", &self.spec);
+        Ok(ReconcileFunctionAction::Continue)
+    }
+
+    async fn create_pod(&self, spark_cluster_spec: &SparkClusterSpec) -> Result<Pod, Error> {
+        let pod = self.build_pod(spark_cluster_spec)?;
+        Ok(self.context.client.create(&pod).await?)
+    }
+
+    fn build_pod(&self, spark_cluster_spec: &SparkClusterSpec) -> Result<Pod, Error> {
+        let (containers, volumes) = self.build_containers(spark_cluster_spec);
+
+        Ok(Pod {
+            metadata: metadata::build_metadata(None, &self.context.resource)?,
+            spec: Some(PodSpec {
+                node_name: Some(
+                    spark_cluster_spec
+                        .master
+                        .selectors
+                        .get(0)
+                        .unwrap()
+                        .node_name
+                        .clone(),
+                ),
+                tolerations: Some(stackable_operator::create_tolerations()),
+                containers,
+                volumes: Some(volumes),
+                ..PodSpec::default()
+            }),
+
+            ..Pod::default()
+        })
+    }
+
+    fn build_containers(
+        &self,
+        spark_cluster_spec: &SparkClusterSpec,
+    ) -> (Vec<Container>, Vec<Volume>) {
+        let version = self.context.resource.spec.master.clone();
+        let image_name = format!(
+            "stackable/spark:{}",
+            serde_json::json!(version).as_str().unwrap()
+        );
+
+        let containers = vec![Container {
+            image: Some(image_name),
+            name: "spark".to_string(),
+            command: Some(vec![
+                "bin/zkServer.sh".to_string(),
+                "start-foreground".to_string(),
+                // "--config".to_string(), TODO: Version 3.4 does not support --config but later versions do
+                "{{ configroot }}/conf/zoo.cfg".to_string(), // TODO: Later versions can probably point to a directory instead, investigate
+            ]),
+            volume_mounts: Some(vec![
+                // One mount for the config directory, this will be relative to the extracted package
+                VolumeMount {
+                    mount_path: "conf".to_string(),
+                    name: "config-volume".to_string(),
+                    ..VolumeMount::default()
+                },
+                // We need a second mount for the data directory
+                // because we need to write the myid file into the data directory
+                VolumeMount {
+                    mount_path: "/tmp/zookeeper".to_string(), // TODO: Make configurable
+                    name: "data-volume".to_string(),
+                    ..VolumeMount::default()
+                },
+            ]),
+            ..Container::default()
+        }];
+
+        let cm_name_prefix = format!("zk-{}", self.get_pod_name(spark_cluster_spec));
+        let volumes = vec![
+            Volume {
+                name: "config-volume".to_string(),
+                config_map: Some(ConfigMapVolumeSource {
+                    name: Some(format!("{}-config", cm_name_prefix)),
+                    ..ConfigMapVolumeSource::default()
+                }),
+                ..Volume::default()
+            },
+            Volume {
+                name: "data-volume".to_string(),
+                config_map: Some(ConfigMapVolumeSource {
+                    name: Some(format!("{}-data", cm_name_prefix)),
+                    ..ConfigMapVolumeSource::default()
+                }),
+                ..Volume::default()
+            },
+        ];
+
+        (containers, volumes)
+    }
+
+    /// All pod names follow a simple pattern: <name of ZooKeeperCluster object>-<Node name>
+    fn get_pod_name(&self, spark_cluster_spec: &SparkClusterSpec) -> String {
+        format!("{}-{}", self.context.name(), "spark-master")
     }
 }
 
@@ -37,8 +151,10 @@ impl ReconciliationState for SparkState {
     fn reconcile_operations(
         &self,
     ) -> Vec<Pin<Box<dyn Future<Output = Result<ReconcileFunctionAction, Self::Error>> + '_>>> {
-        let vec: Vec<Pin<Box<dyn Future<Output = SparkReconcileResult> + '_>>> =
-            vec![Box::pin(self.delete_excess_pods())];
+        let vec: Vec<Pin<Box<dyn Future<Output = SparkReconcileResult> + '_>>> = vec![
+            Box::pin(self.read_cluster_status()),
+            Box::pin(self.reconcile_cluster()),
+        ];
 
         vec
     }
@@ -63,7 +179,8 @@ impl ControllerStrategy for SparkStrategy {
 
     fn init_reconcile_state(&self, context: ReconciliationContext<Self::Item>) -> Self::State {
         SparkState {
-            spark_spec: context.resource.spec.clone(),
+            spec: context.resource.spec.clone(),
+            status: context.resource.status.clone(),
             context,
         }
     }

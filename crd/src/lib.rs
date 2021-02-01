@@ -16,21 +16,27 @@ use std::hash::Hash;
 )]
 #[kube(status = "SparkClusterStatus")]
 pub struct SparkClusterSpec {
-    pub master: String,
-    //pub master: Vec<SparkClusterSelector>,
+    pub master: SparkNode,
+    pub worker: SparkNode,
+    pub history_server: Option<SparkNode>,
     //pub image: String,
     //pub secret: String,
     //pub log_dir: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-pub struct SparkClusterSelector {
+pub struct SparkNode {
+    pub selectors: Vec<SparkNodeSelector>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct SparkNodeSelector {
     pub node_name: String,
-    pub instances: u32,
-    pub cores: u32,
-    pub memory: String,
-    pub spark_config: Vec<SparkConfigOption>,
-    pub spark_env: Vec<SparkConfigOption>,
+    pub instances: usize,
+    pub cores: Option<String>,
+    pub memory: Option<String>,
+    pub spark_config: Option<Vec<SparkConfigOption>>,
+    pub spark_env: Option<Vec<SparkConfigOption>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -81,9 +87,50 @@ impl CRD for SparkCluster {
                 spec:
                   type: object
                   properties:
-                    # master properties
                     master:
-                      type: string"#;
+                      type: object
+                      properties:
+                        selectors:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              node_name:
+                                type: string
+                              instances:
+                                type: integer
+                              cores:
+                                type: string
+                              memory:
+                                type: string
+                    worker:
+                      type: object
+                      properties:
+                        selectors:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              node_name:
+                                type: string
+                              instances:
+                                type: integer
+                              cores:
+                                type: string
+                              memory:
+                                type: string
+                status:
+                  type: object
+                  properties:
+                    image:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                        version:
+                          type: string
+                        timestamp:
+                          type: string"#;
 }
 
 #[allow(non_camel_case_types)]
