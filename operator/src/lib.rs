@@ -20,13 +20,11 @@ use stackable_operator::reconcile::{
     ReconcileFunctionAction, ReconcileResult, ReconciliationContext,
 };
 use stackable_operator::{create_config_map, finalizer, metadata, podutils, reconcile};
-use std::cell::RefCell;
+use stackable_spark_crd::{SparkCluster, SparkClusterSpec, SparkClusterStatus};
 use std::collections::{BTreeMap, HashMap};
+use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
-use tokio::macros::support::Future;
-
-use stackable_spark_crd::{SparkCluster, SparkClusterSpec, SparkClusterStatus};
 
 const FINALIZER_NAME: &str = "spark.stackable.de/cleanup";
 
@@ -39,8 +37,18 @@ struct SparkState {
 }
 
 impl SparkState {
+    pub async fn update_cluster_status(&self) -> SparkReconcileResult {
+        info!("update_cluster_status: {:?}", &self.status);
+
+        //let cluster_status_version = if self.status.is_some() {
+        //    &self.status.as_ref().unwrap().image.version
+        //};
+
+        Ok(ReconcileFunctionAction::Continue)
+    }
+
     pub async fn read_cluster_status(&self) -> SparkReconcileResult {
-        info!("read_cluster_status: {:?}", &self.spec);
+        info!("read_cluster_status: {:?}", &self.status);
         Ok(ReconcileFunctionAction::Continue)
     }
 
@@ -58,18 +66,14 @@ impl SparkState {
         let (containers, volumes) = self.build_containers(spark_cluster_spec);
 
         Ok(Pod {
-            metadata: metadata::build_metadata(None, &self.context.resource)?,
+            metadata: metadata::build_metadata(
+                self.get_pod_name(spark_cluster_spec),
+                None, //Some(self.build_labels(id)),
+                &self.context.resource,
+            )?,
             spec: Some(PodSpec {
-                node_name: Some(
-                    spark_cluster_spec
-                        .master
-                        .selectors
-                        .get(0)
-                        .unwrap()
-                        .node_name
-                        .clone(),
-                ),
-                tolerations: Some(stackable_operator::create_tolerations()),
+                //node_name: Some(spark_cluster_spec.node_name.clone()),
+                //tolerations: Some(stackable_operator::create_tolerations()),
                 containers,
                 volumes: Some(volumes),
                 ..PodSpec::default()
@@ -108,7 +112,7 @@ impl SparkState {
                 // We need a second mount for the data directory
                 // because we need to write the myid file into the data directory
                 VolumeMount {
-                    mount_path: "/tmp/zookeeper".to_string(), // TODO: Make configurable
+                    mount_path: "/tmp/spark-events".to_string(), // TODO: get log dir from crd
                     name: "data-volume".to_string(),
                     ..VolumeMount::default()
                 },
@@ -141,6 +145,7 @@ impl SparkState {
 
     /// All pod names follow a simple pattern: <name of ZooKeeperCluster object>-<Node name>
     fn get_pod_name(&self, spark_cluster_spec: &SparkClusterSpec) -> String {
+        // TODO: get name
         format!("{}-{}", self.context.name(), "spark-master")
     }
 }
@@ -148,15 +153,18 @@ impl SparkState {
 impl ReconciliationState for SparkState {
     type Error = error::Error;
 
-    fn reconcile_operations(
-        &self,
-    ) -> Vec<Pin<Box<dyn Future<Output = Result<ReconcileFunctionAction, Self::Error>> + '_>>> {
-        let vec: Vec<Pin<Box<dyn Future<Output = SparkReconcileResult> + '_>>> = vec![
-            Box::pin(self.read_cluster_status()),
-            Box::pin(self.reconcile_cluster()),
-        ];
-
-        vec
+    fn reconcile(
+        &mut self,
+    ) -> Pin<Box<dyn Future<Output = Result<ReconcileFunctionAction, Self::Error>> + Send + '_>>
+    {
+        Box::pin(async move {
+            self.update_cluster_status()
+                .await?
+                .then(self.read_cluster_status())
+                .await?
+                .then(self.reconcile_cluster())
+                .await
+        })
     }
 }
 
