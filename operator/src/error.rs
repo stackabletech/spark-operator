@@ -1,5 +1,4 @@
 use std::backtrace::Backtrace;
-use std::num::ParseIntError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -24,10 +23,11 @@ pub enum Error {
         backtrace: Backtrace,
     },
 
-    #[error("Pod contains invalid id: {source}")]
-    InvalidId {
+    #[error("Pod contains invalid node type: {source}")]
+    InvalidNodeType {
         #[from]
-        source: ParseIntError,
+        source: stackable_spark_crd::CrdError,
+        backtrace: Backtrace,
     },
 
     #[error("Error during reconciliation: {0}")]
