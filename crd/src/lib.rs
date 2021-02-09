@@ -5,7 +5,7 @@ use derivative::Derivative;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use stackable_operator::CRD;
+use stackable_operator::Crd;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::fmt;
@@ -51,13 +51,10 @@ impl SparkClusterSpec {
             self.worker.get_hashed_selectors(SparkNodeType::Worker),
         );
 
-        if self.history_server.is_some() {
+        if let Some(history_server) = &self.history_server {
             hashed_selectors.insert(
                 SparkNodeType::HistoryServer,
-                self.history_server
-                    .as_ref()
-                    .unwrap()
-                    .get_hashed_selectors(SparkNodeType::HistoryServer),
+                history_server.get_hashed_selectors(SparkNodeType::HistoryServer),
             );
         }
 
@@ -185,7 +182,7 @@ pub struct SparkClusterImage {
     pub timestamp: String,
 }
 
-impl CRD for SparkCluster {
+impl Crd for SparkCluster {
     const RESOURCE_NAME: &'static str = "sparkclusters.spark.stackable.de";
     const CRD_DEFINITION: &'static str = include_str!("../sparkcluster.crd.yaml");
 }
