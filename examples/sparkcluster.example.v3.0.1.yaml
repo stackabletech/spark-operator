@@ -3,18 +3,25 @@ kind: SparkCluster
 metadata:
   name: spark-cluster
 spec:
-  nodes:
+  master:
     selectors:
-      - node_type: "master"
-        node_name: "mdesktop"
+      - node_name: "mdesktop"
         instances: 1
-        cores: "1"
+  worker:
+    selectors:
+      - node_name: "mdesktop"
+        instances: 2
+        cores: 1
         memory: "1g"
-      - node_type: "worker"
-        node_name: "mdesktop"
+      - node_name: "mdesktop"
         instances: 1
-        cores: "1"
+        cores: 2
         memory: "2g"
+  history_server:
+    selectors:
+      - node_name: "mdesktop"
+        instances: 1
+
   image: "spark:3.0.1"
   secret: "very_secret"
 

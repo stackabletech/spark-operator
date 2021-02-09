@@ -25,7 +25,7 @@ spec:
             spec:
               type: object
               properties:
-                nodes:
+                master:
                   type: object
                   properties:
                     selectors:
@@ -33,20 +33,38 @@ spec:
                       items:
                         type: object
                         properties:
-                          node_type:
-                            enum:
-                              - "master"
-                              - "worker"
-                              - "history-server"
+                          node_name:
                             type: string
+                          instances:
+                            type: integer
+                worker:
+                  type: object
+                  properties:
+                    selectors:
+                      type: array
+                      items:
+                        type: object
+                        properties:
                           node_name:
                             type: string
                           instances:
                             type: integer
                           cores:
-                            type: string
+                            type: integer
                           memory:
                             type: string
+                history_server:
+                  type: object
+                  properties:
+                    selectors:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          node_name:
+                            type: string
+                          instances:
+                            type: integer
                 image:
                   type: string
                 secret:
