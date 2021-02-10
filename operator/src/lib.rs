@@ -21,7 +21,7 @@ use stackable_operator::reconcile::{
 use stackable_operator::{create_config_map, create_tolerations, podutils};
 use stackable_operator::{finalizer, metadata};
 use stackable_spark_crd::{
-    SparkCluster, SparkClusterSpec, SparkClusterStatus, SparkNodeSelector, SparkNodeType,
+    SparkCluster, SparkClusterSpec, SparkClusterStatus, SparkNode, SparkNodeSelector, SparkNodeType,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
@@ -77,6 +77,9 @@ impl NodeInformation {
 }
 
 impl SparkState {
+    /// Read all cluster specific pods. Check for valid labels such as HASH (required to match a certain selector) or TYPE (which indicates master/worker/history-server).
+    /// Remove invalid pods which are lacking (or have outdated) required labels.
+    /// Sort incoming valid pods into corresponding maps (hash -> Vec<Pod>) for later usage for each node type (master/worker/history-server).
     pub async fn read_existing_pod_information(&mut self) -> SparkReconcileResult {
         trace!(
             "Reading existing pod information for {}",
@@ -177,12 +180,17 @@ impl SparkState {
                 .as_ref()
                 .unwrap()
                 .get_pod_count(SparkNodeType::HistoryServer),
-            self.spec.history_server.as_ref().unwrap().get_instances(),
+            match self.spec.history_server.as_ref() {
+                None => 0,
+                Some(hs) => hs.get_instances(),
+            }
         );
 
         Ok(ReconcileFunctionAction::Continue)
     }
 
+    /// Reconcile the cluster according to provided spec. Start with master nodes and continue to worker and history-server nodes.
+    /// Create missing pods or delete excess pods to match the spec.
     pub async fn reconcile_cluster(&self) -> SparkReconcileResult {
         trace!(
             "SparkCluster {}: Starting {} reconciliation",
@@ -354,15 +362,23 @@ impl SparkState {
         // TODO: get version from controller
         let version = "3.0.1".to_string();
         let image_name = format!(
-            "stackable/spark:{}",
-            serde_json::json!(version).as_str().expect("This should not fail as it comes from an enum, if this fails please file a bug report")
+            "{}",
+            "spark:3.0.1",
+            //"stackable/spark:{}",
+            //serde_json::json!(version).as_str().expect("This should not fail as it comes from an enum, if this fails please file a bug report")
         );
+
+        // TODO: improve worker adaptation
+        let mut command = vec![node_type.get_command()];
+        if node_type == &SparkNodeType::Worker {
+            command.push("spark://mdesktop:7077".to_string());
+        }
 
         let containers = vec![Container {
             image: Some(image_name),
             name: "spark".to_string(),
             // TODO: worker -> add master port
-            command: Some(vec![node_type.get_command()]),
+            command: Some(command),
             volume_mounts: Some(vec![
                 // One mount for the config directory, this will be relative to the extracted package
                 VolumeMount {
@@ -407,10 +423,10 @@ impl SparkState {
         let mut options = HashMap::new();
         // TODO: use product-conf for validation
         options.insert("SPARK_NO_DAEMONIZE".to_string(), "true".to_string());
-        //options.insert(
-        //    "SPARK_CONF_DIR".to_string(),
-        //    "{{configroot}}/conf".to_string(),
-        //);
+        options.insert(
+            "SPARK_CONF_DIR".to_string(),
+            "{{configroot}}/conf".to_string(),
+        );
 
         let mut handlebars = Handlebars::new();
         handlebars
@@ -432,6 +448,7 @@ impl SparkState {
         Ok(())
     }
 
+    /// Provide required labels for pods
     fn build_labels(
         &self,
         node_type: &SparkNodeType,
@@ -454,13 +471,13 @@ impl SparkState {
         )
     }
 
-    /// All config map names follow a simple pattern: <name of SparkCluster object>-<NodeType name>-<SelectorHash>
+    /// All config map names follow a simple pattern: <name of SparkCluster object>-<NodeType name>-<SelectorHash>-cm
     /// That means multiple pods of one selector share one and the same config map
     fn create_config_map_name(&self, node_type: &SparkNodeType, hash: &String) -> String {
         format!("{}-{}-{}-cm", self.context.name(), node_type.as_str(), hash)
     }
 
-    /// sort valid pods into their corresponding hashed vector maps
+    /// Sort valid pods into their corresponding hashed vector maps
     fn sort_pod_info(&self, pod: Pod, hashed_pods: &mut HashMap<String, Vec<Pod>>, hash: String) {
         if hashed_pods.contains_key(&hash) {
             hashed_pods.get_mut(hash.as_str()).unwrap().push(pod);
