@@ -16,22 +16,17 @@ use handlebars::Handlebars;
 use stackable_operator::client::Client;
 use stackable_operator::controller::{Controller, ControllerStrategy, ReconciliationState};
 use stackable_operator::reconcile::{
-    create_requeuing_reconcile_function_action, ReconcileFunctionAction, ReconcileResult,
-    ReconciliationContext,
+    ReconcileFunctionAction, ReconcileResult, ReconciliationContext,
 };
 use stackable_operator::{create_config_map, create_tolerations, podutils};
 use stackable_operator::{finalizer, metadata};
 use stackable_spark_crd::{
-    CrdError, SparkCluster, SparkClusterSpec, SparkClusterStatus, SparkNode, SparkNodeSelector,
-    SparkNodeType,
+    SparkCluster, SparkClusterSpec, SparkClusterStatus, SparkNodeSelector, SparkNodeType,
 };
-use std::collections::hash_map::RandomState;
 use std::collections::{BTreeMap, HashMap};
+use std::future::Future;
 use std::pin::Pin;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use tokio::macros::support::Future;
 use uuid::Uuid;
 
 const FINALIZER_NAME: &str = "spark.stackable.de/cleanup";
@@ -61,21 +56,20 @@ impl NodeInformation {
     pub fn get_pod_count(&self, node_type: SparkNodeType) -> usize {
         let mut num_pods = 0;
         match node_type {
-            SparkNodeType::Master => self.count_pods(&self.master),
-            SparkNodeType::Worker => self.count_pods(&self.worker),
+            SparkNodeType::Master => num_pods = self.count_pods(&self.master),
+            SparkNodeType::Worker => num_pods = self.count_pods(&self.worker),
             SparkNodeType::HistoryServer => {
                 if self.history_server.is_some() {
-                    self.count_pods(self.history_server.as_ref().unwrap())
-                } else {
-                    0
+                    num_pods = self.count_pods(self.history_server.as_ref().unwrap())
                 }
             }
         }
+        num_pods
     }
 
     fn count_pods(&self, hashed: &HashMap<String, Vec<Pod>>) -> usize {
         let mut num_pods: usize = 0;
-        for (key, value) in hashed {
+        for value in hashed.values() {
             num_pods += value.len();
         }
         num_pods
@@ -249,8 +243,8 @@ impl SparkState {
                 }
 
                 if current_count < spec_pod_count {
-                    let pod = self.create_pod(hash, node_type).await?;
-                    //let cm = self.create_config_maps(selector).await?;
+                    let pod = self.create_pod(node_type, hash).await?;
+                    self.create_config_maps(selector, node_type, hash).await?;
                     info!(
                         "SparkCluster {}: creating {} pod '{}'",
                         self.context.log_name(),
@@ -303,15 +297,17 @@ impl SparkState {
         return true;
     }
 
-    async fn create_pod(&self, hash: &String, node_type: &SparkNodeType) -> Result<Pod, Error> {
+    async fn create_pod(&self, node_type: &SparkNodeType, hash: &String) -> Result<Pod, Error> {
         let pod = self.build_pod(hash, node_type)?;
         Ok(self.context.client.create(&pod).await?)
     }
 
     fn build_pod(&self, hash: &String, node_type: &SparkNodeType) -> Result<Pod, Error> {
+        let pod_name = self.create_pod_name(node_type, hash);
+
         Ok(Pod {
-            metadata: self.build_pod_metadata(node_type, hash)?,
-            spec: Some(self.build_pod_spec(node_type, hash)),
+            metadata: self.build_pod_metadata(node_type, hash, &pod_name)?,
+            spec: Some(self.build_pod_spec(node_type, hash, &pod_name)),
             ..Pod::default()
         })
     }
@@ -320,10 +316,11 @@ impl SparkState {
         &self,
         node_type: &SparkNodeType,
         hash: &String,
+        pod_name: &String,
     ) -> Result<ObjectMeta, Error> {
         Ok(ObjectMeta {
             labels: Some(self.build_labels(node_type, hash).unwrap()),
-            name: Some(self.create_pod_name(node_type, hash)),
+            name: Some(pod_name.clone()),
             namespace: Some(self.context.namespace()),
             owner_references: Some(vec![metadata::object_to_owner_reference::<SparkCluster>(
                 self.context.metadata(),
@@ -332,11 +329,16 @@ impl SparkState {
         })
     }
 
-    fn build_pod_spec(&self, node_type: &SparkNodeType, hash: &String) -> PodSpec {
+    fn build_pod_spec(
+        &self,
+        node_type: &SparkNodeType,
+        hash: &String,
+        pod_name: &String,
+    ) -> PodSpec {
         let (containers, volumes) = self.build_containers(node_type, hash);
 
         PodSpec {
-            //node_name: Some(self.get_pod_name(selector, false)),
+            node_name: Some(pod_name.clone()),
             tolerations: Some(create_tolerations()),
             containers,
             volumes: Some(volumes),
@@ -353,7 +355,7 @@ impl SparkState {
         let version = "3.0.1".to_string();
         let image_name = format!(
             "stackable/spark:{}",
-            serde_json::json!(version).as_str().unwrap()
+            serde_json::json!(version).as_str().expect("This should not fail as it comes from an enum, if this fails please file a bug report")
         );
 
         let containers = vec![Container {
@@ -368,79 +370,67 @@ impl SparkState {
                     name: "config-volume".to_string(),
                     ..VolumeMount::default()
                 },
-                // We need a second mount for the data directory
-                // because we need to write the myid file into the data directory
                 VolumeMount {
-                    mount_path: "/tmp/spark-events".to_string(), // TODO: get log dir from crd
-                    name: "data-volume".to_string(),
+                    mount_path: "/tmp/spark-events".to_string(), // TODO: Make configurable via crd log dir
+                    name: "event-volume".to_string(),
                     ..VolumeMount::default()
                 },
             ]),
             ..Container::default()
         }];
 
-        let cm_name_prefix = format!("{}", self.create_config_map_name(node_type, hash));
+        let cm_name = self.create_config_map_name(node_type, hash);
         let volumes = vec![
             Volume {
                 name: "config-volume".to_string(),
                 config_map: Some(ConfigMapVolumeSource {
-                    name: Some(format!("{}-config", cm_name_prefix)),
+                    name: Some(cm_name),
                     ..ConfigMapVolumeSource::default()
                 }),
                 ..Volume::default()
             },
             Volume {
-                name: "data-volume".to_string(),
-                config_map: Some(ConfigMapVolumeSource {
-                    name: Some(format!("{}-data", cm_name_prefix)),
-                    ..ConfigMapVolumeSource::default()
-                }),
+                name: "event-volume".to_string(),
                 ..Volume::default()
             },
         ];
 
         (containers, volumes)
     }
-    //
-    // async fn create_config_maps(&self, selector: &NodeSelector) -> Result<(), Error> {
-    //     let mut options = HashMap::new();
-    //     // TODO: use product-conf for validation
-    //     options.insert("SPARK_NO_DAEMONIZE".to_string(), "true".to_string());
-    //     options.insert(
-    //         "SPARK_CONF_DIR".to_string(),
-    //         "{{configroot}}/conf".to_string(),
-    //     );
-    //
-    //     let mut handlebars = Handlebars::new();
-    //     handlebars
-    //         .register_template_string("conf", "{{#each options}}{{@key}}={{this}}\n{{/each}}")
-    //         .expect("template should work");
-    //
-    //     let config = handlebars
-    //         .render("conf", &json!({ "options": options }))
-    //         .unwrap();
-    //
-    //     //let config = spark_env
-    //     //    .iter()
-    //     //    .map(|(key, value)| format!("{}={}\n", key.to_string(), value))
-    //     //    .collect();
-    //
-    //     // Now we need to create two configmaps per server.
-    //     // The names are "zk-<cluster name>-<node name>-config" and "zk-<cluster name>-<node name>-data"
-    //     // One for the configuration directory...
-    //     let mut data = BTreeMap::new();
-    //     data.insert("spark-env.sh".to_string(), config);
-    //
-    //     let cm_name = format!("{}-cm", self.get_pod_name(selector, true));
-    //     let cm = create_config_map(&self.context.resource, &cm_name, data)?;
-    //     info!("{:?}", cm);
-    //     self.context
-    //         .client
-    //         .apply_patch(&cm, serde_json::to_vec(&cm)?)
-    //         .await?;
-    //
-    //     Ok(())
-    // }
+
+    async fn create_config_maps(
+        &self,
+        selector: &SparkNodeSelector,
+        node_type: &SparkNodeType,
+        hash: &String,
+    ) -> Result<(), Error> {
+        let mut options = HashMap::new();
+        // TODO: use product-conf for validation
+        options.insert("SPARK_NO_DAEMONIZE".to_string(), "true".to_string());
+        //options.insert(
+        //    "SPARK_CONF_DIR".to_string(),
+        //    "{{configroot}}/conf".to_string(),
+        //);
+
+        let mut handlebars = Handlebars::new();
+        handlebars
+            .register_template_string("conf", "{{#each options}}{{@key}}={{this}}\n{{/each}}")
+            .expect("template should work");
+
+        let config = handlebars
+            .render("conf", &json!({ "options": options }))
+            .unwrap();
+
+        let mut data = BTreeMap::new();
+        data.insert("spark-env.sh".to_string(), config);
+
+        let cm_name = self.create_config_map_name(node_type, hash);
+        let cm = create_config_map(&self.context.resource, &cm_name, data)?;
+        info!("{:?}", cm);
+        self.context.client.apply_patch(&cm, &cm).await?;
+
+        Ok(())
+    }
 
     fn build_labels(
         &self,
@@ -467,7 +457,7 @@ impl SparkState {
     /// All config map names follow a simple pattern: <name of SparkCluster object>-<NodeType name>-<SelectorHash>
     /// That means multiple pods of one selector share one and the same config map
     fn create_config_map_name(&self, node_type: &SparkNodeType, hash: &String) -> String {
-        format!("{}-{}-{}", self.context.name(), node_type.as_str(), hash,)
+        format!("{}-{}-{}-cm", self.context.name(), node_type.as_str(), hash)
     }
 
     /// sort valid pods into their corresponding hashed vector maps
