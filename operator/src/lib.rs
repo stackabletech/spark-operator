@@ -1,4 +1,5 @@
 #![feature(backtrace)]
+mod config;
 mod error;
 
 use crate::error::Error;
@@ -7,7 +8,7 @@ use kube::Api;
 use tracing::{debug, error, info, trace};
 
 use k8s_openapi::api::core::v1::{
-    ConfigMap, ConfigMapVolumeSource, Container, Pod, PodSpec, Volume, VolumeMount,
+    ConfigMap, ConfigMapVolumeSource, Container, EnvVar, Pod, PodSpec, Volume, VolumeMount,
 };
 use kube::api::{ListParams, Meta, ObjectMeta};
 use serde_json::json;
@@ -251,7 +252,7 @@ impl SparkState {
                 }
 
                 if current_count < spec_pod_count {
-                    let pod = self.create_pod(node_type, hash).await?;
+                    let pod = self.create_pod(selector, node_type, hash).await?;
                     self.create_config_maps(selector, node_type, hash).await?;
                     info!(
                         "SparkCluster {}: creating {} pod '{}'",
@@ -305,17 +306,27 @@ impl SparkState {
         return true;
     }
 
-    async fn create_pod(&self, node_type: &SparkNodeType, hash: &String) -> Result<Pod, Error> {
-        let pod = self.build_pod(hash, node_type)?;
+    async fn create_pod(
+        &self,
+        selector: &SparkNodeSelector,
+        node_type: &SparkNodeType,
+        hash: &String,
+    ) -> Result<Pod, Error> {
+        let pod = self.build_pod(selector, hash, node_type)?;
         Ok(self.context.client.create(&pod).await?)
     }
 
-    fn build_pod(&self, hash: &String, node_type: &SparkNodeType) -> Result<Pod, Error> {
+    fn build_pod(
+        &self,
+        selector: &SparkNodeSelector,
+        hash: &String,
+        node_type: &SparkNodeType,
+    ) -> Result<Pod, Error> {
         let pod_name = self.create_pod_name(node_type, hash);
 
         Ok(Pod {
             metadata: self.build_pod_metadata(node_type, hash, &pod_name)?,
-            spec: Some(self.build_pod_spec(node_type, hash, &pod_name)),
+            spec: Some(self.build_pod_spec(selector, node_type, hash, &pod_name)),
             ..Pod::default()
         })
     }
@@ -339,6 +350,7 @@ impl SparkState {
 
     fn build_pod_spec(
         &self,
+        selector: &SparkNodeSelector,
         node_type: &SparkNodeType,
         hash: &String,
         pod_name: &String,
@@ -346,7 +358,7 @@ impl SparkState {
         let (containers, volumes) = self.build_containers(node_type, hash);
 
         PodSpec {
-            node_name: Some(pod_name.clone()),
+            node_name: Some(selector.node_name.clone()),
             tolerations: Some(create_tolerations()),
             containers,
             volumes: Some(volumes),
@@ -390,6 +402,19 @@ impl SparkState {
                     mount_path: "/tmp/spark-events".to_string(), // TODO: Make configurable via crd log dir
                     name: "event-volume".to_string(),
                     ..VolumeMount::default()
+                },
+            ]),
+            // set no daemonize and configroot via env variables
+            env: Some(vec![
+                EnvVar {
+                    name: "SPARK_NO_DAEMONIZE".to_string(),
+                    value: Some("true".to_string()),
+                    ..EnvVar::default()
+                },
+                EnvVar {
+                    name: "SPARK_CONF_DIR".to_string(),
+                    value: Some("{{configroot}}/conf".to_string()),
+                    ..EnvVar::default()
                 },
             ]),
             ..Container::default()

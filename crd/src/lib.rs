@@ -125,7 +125,7 @@ pub enum SparkNodeType {
 }
 
 const MASTER: &'static str = "master";
-const WORKER: &'static str = "worker";
+const WORKER: &'static str = "slave";
 const HISTORY_SERVER: &'static str = "history-server";
 
 impl SparkNodeType {
@@ -138,7 +138,8 @@ impl SparkNodeType {
     }
 
     pub fn get_command(&self) -> String {
-        format!("sbin/start-{}.sh", self.as_str())
+        // TODO: remove hardcoded and adapt for versioning
+        format!("spark-3.0.1-bin-hadoop2.7/sbin/start-{}.sh", self.as_str())
     }
 }
 
