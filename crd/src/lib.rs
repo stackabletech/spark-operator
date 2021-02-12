@@ -37,24 +37,27 @@ impl SparkClusterSpec {
     /// collect hashed selectors from master, worker and history server
     pub fn get_hashed_selectors(
         &self,
+        cluster_name: &String,
     ) -> HashMap<SparkNodeType, HashMap<String, SparkNodeSelector>> {
         let mut hashed_selectors: HashMap<SparkNodeType, HashMap<String, SparkNodeSelector>> =
             HashMap::new();
 
         hashed_selectors.insert(
             SparkNodeType::Master,
-            self.master.get_hashed_selectors(SparkNodeType::Master),
+            self.master
+                .get_hashed_selectors(SparkNodeType::Master, cluster_name),
         );
 
         hashed_selectors.insert(
             SparkNodeType::Worker,
-            self.worker.get_hashed_selectors(SparkNodeType::Worker),
+            self.worker
+                .get_hashed_selectors(SparkNodeType::Worker, cluster_name),
         );
 
         if let Some(history_server) = &self.history_server {
             hashed_selectors.insert(
                 SparkNodeType::HistoryServer,
-                history_server.get_hashed_selectors(SparkNodeType::HistoryServer),
+                history_server.get_hashed_selectors(SparkNodeType::HistoryServer, cluster_name),
             );
         }
 
@@ -64,7 +67,7 @@ impl SparkClusterSpec {
 
 #[derive(Clone, Debug, Hash, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct SparkNode {
-    selectors: Vec<SparkNodeSelector>,
+    pub selectors: Vec<SparkNodeSelector>,
     // options
     // master -> use Option<T>
 
@@ -82,8 +85,8 @@ pub struct SparkNodeSelector {
     // for the selectors changes and the operator removes all nodes and rebuilds them
     #[derivative(Hash = "ignore")]
     pub instances: usize,
-    pub config: Option<ConfigOption>,
-    pub env: Option<ConfigOption>,
+    pub config: Option<Vec<ConfigOption>>,
+    pub env: Option<Vec<ConfigOption>>,
     // master -> use Option<T>
 
     // worker -> use Option<T>
@@ -96,12 +99,14 @@ impl SparkNode {
     pub fn get_hashed_selectors(
         &self,
         node_type: SparkNodeType,
+        cluster_name: &String,
     ) -> HashMap<String, SparkNodeSelector> {
         let mut hashed_selectors: HashMap<String, SparkNodeSelector> = HashMap::new();
         for selector in &self.selectors {
             let mut hasher = DefaultHasher::new();
             selector.hash(&mut hasher);
             node_type.as_str().hash(&mut hasher);
+            cluster_name.as_str().hash(&mut hasher);
             hashed_selectors.insert(hasher.finish().to_string(), selector.clone());
         }
         hashed_selectors
