@@ -37,7 +37,7 @@ impl SparkClusterSpec {
     /// collect hashed selectors from master, worker and history server
     pub fn get_hashed_selectors(
         &self,
-        cluster_name: &String,
+        cluster_name: &str,
     ) -> HashMap<SparkNodeType, HashMap<String, SparkNodeSelector>> {
         let mut hashed_selectors: HashMap<SparkNodeType, HashMap<String, SparkNodeSelector>> =
             HashMap::new();
@@ -76,14 +76,14 @@ pub struct SparkNode {
     // history_server -> use Option<T>
 }
 
-#[derive(Derivative, Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
-#[derivative(Hash)]
+#[derive(Derivative, Clone, Debug, Deserialize, Eq, JsonSchema, Serialize)]
+#[derivative(Hash, PartialEq)]
 pub struct SparkNodeSelector {
     // common
     pub node_name: String,
     // we need to ignore instances from hashing -> if we scale up or down, the hash
     // for the selectors changes and the operator removes all nodes and rebuilds them
-    #[derivative(Hash = "ignore")]
+    #[derivative(Hash = "ignore", PartialEq = "ignore")]
     pub instances: usize,
     pub config: Option<Vec<ConfigOption>>,
     pub env: Option<Vec<ConfigOption>>,
@@ -99,14 +99,14 @@ impl SparkNode {
     pub fn get_hashed_selectors(
         &self,
         node_type: SparkNodeType,
-        cluster_name: &String,
+        cluster_name: &str,
     ) -> HashMap<String, SparkNodeSelector> {
         let mut hashed_selectors: HashMap<String, SparkNodeSelector> = HashMap::new();
         for selector in &self.selectors {
             let mut hasher = DefaultHasher::new();
             selector.hash(&mut hasher);
             node_type.as_str().hash(&mut hasher);
-            cluster_name.as_str().hash(&mut hasher);
+            cluster_name.hash(&mut hasher);
             hashed_selectors.insert(hasher.finish().to_string(), selector.clone());
         }
         hashed_selectors
@@ -129,9 +129,9 @@ pub enum SparkNodeType {
     HistoryServer,
 }
 
-const MASTER: &'static str = "master";
-const WORKER: &'static str = "slave";
-const HISTORY_SERVER: &'static str = "history-server";
+const MASTER: &str = "master";
+const WORKER: &str = "slave";
+const HISTORY_SERVER: &str = "history-server";
 
 impl SparkNodeType {
     pub fn as_str(&self) -> &'static str {

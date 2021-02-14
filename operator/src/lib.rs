@@ -147,14 +147,10 @@ impl SparkState {
                     }
 
                     match spark_node_type {
-                        SparkNodeType::Master => {
-                            self.sort_pod_info(pod, &mut master, hash.to_string())
-                        }
-                        SparkNodeType::Worker => {
-                            self.sort_pod_info(pod, &mut worker, hash.to_string())
-                        }
+                        SparkNodeType::Master => self.sort_pod_info(pod, &mut master, hash),
+                        SparkNodeType::Worker => self.sort_pod_info(pod, &mut worker, hash),
                         SparkNodeType::HistoryServer => {
-                            self.sort_pod_info(pod, &mut history_server, hash.to_string())
+                            self.sort_pod_info(pod, &mut history_server, hash)
                         }
                     };
                 } else {
@@ -325,7 +321,7 @@ impl SparkState {
         &self,
         selector: &SparkNodeSelector,
         node_type: &SparkNodeType,
-        hash: &String,
+        hash: &str,
     ) -> Result<Pod, Error> {
         let pod = self.build_pod(selector, hash, node_type)?;
         Ok(self.context.client.create(&pod).await?)
@@ -334,7 +330,7 @@ impl SparkState {
     fn build_pod(
         &self,
         selector: &SparkNodeSelector,
-        hash: &String,
+        hash: &str,
         node_type: &SparkNodeType,
     ) -> Result<Pod, Error> {
         Ok(Pod {
@@ -347,10 +343,10 @@ impl SparkState {
     fn build_pod_metadata(
         &self,
         node_type: &SparkNodeType,
-        hash: &String,
+        hash: &str,
     ) -> Result<ObjectMeta, Error> {
         Ok(ObjectMeta {
-            labels: Some(self.build_labels(node_type, hash).unwrap()),
+            labels: Some(self.build_labels(node_type, hash)),
             name: Some(self.create_pod_name(node_type, hash)),
             namespace: Some(self.context.namespace()),
             owner_references: Some(vec![metadata::object_to_owner_reference::<SparkCluster>(
@@ -364,7 +360,7 @@ impl SparkState {
         &self,
         selector: &SparkNodeSelector,
         node_type: &SparkNodeType,
-        hash: &String,
+        hash: &str,
     ) -> PodSpec {
         let (containers, volumes) = self.build_containers(node_type, hash);
 
@@ -380,15 +376,10 @@ impl SparkState {
     fn build_containers(
         &self,
         node_type: &SparkNodeType,
-        hash: &String,
+        hash: &str,
     ) -> (Vec<Container>, Vec<Volume>) {
         // TODO: get version from controller
-        let image_name = format!(
-            "{}",
-            "spark:3.0.1".to_string(),
-            //"stackable/spark:{}",
-            //serde_json::json!(version).as_str().expect("This should not fail as it comes from an enum, if this fails please file a bug report")
-        );
+        let image_name = "spark:3.0.1".to_string();
 
         // adapt worker command with master url(s)
         let mut command = vec![node_type.get_command()];
@@ -455,7 +446,7 @@ impl SparkState {
         &self,
         selector: &SparkNodeSelector,
         node_type: &SparkNodeType,
-        hash: &String,
+        hash: &str,
     ) -> Result<(), Error> {
         // TODO: remove hardcoded and make configurable and distinguish master / worker vs history-server
         let mut config_properties: HashMap<String, String> = HashMap::new();
@@ -505,19 +496,16 @@ impl SparkState {
     /// * `node_type` - SparkNodeType (master/worker/history-server)
     /// * `hash` - NodeSelector hash
     ///
-    fn build_labels(
-        &self,
-        node_type: &SparkNodeType,
-        hash: &String,
-    ) -> Result<BTreeMap<String, String>, error::Error> {
+    fn build_labels(&self, node_type: &SparkNodeType, hash: &str) -> BTreeMap<String, String> {
         let mut labels = BTreeMap::new();
         labels.insert(TYPE.to_string(), node_type.to_string());
         labels.insert(HASH.to_string(), hash.to_string());
-        Ok(labels)
+
+        labels
     }
 
     /// All pod names follow a simple pattern: <name of SparkCluster object>-<NodeType name>-<SelectorHash / UUID>
-    fn create_pod_name(&self, node_type: &SparkNodeType, hash: &String) -> String {
+    fn create_pod_name(&self, node_type: &SparkNodeType, hash: &str) -> String {
         format!(
             "{}-{}-{}-{}",
             self.context.name(),
@@ -534,7 +522,7 @@ impl SparkState {
     /// * `node_type` - SparkNodeType (master/worker/history-server)
     /// * `hash` - NodeSelector hash
     ///
-    fn create_config_map_name(&self, node_type: &SparkNodeType, hash: &String) -> String {
+    fn create_config_map_name(&self, node_type: &SparkNodeType, hash: &str) -> String {
         format!("{}-{}-{}-cm", self.context.name(), node_type.as_str(), hash)
     }
 
@@ -545,11 +533,11 @@ impl SparkState {
     /// * `hashed_pods` - Map with hash as key and list of pods as value
     /// * `hash` - NodeSelector hash
     ///
-    fn sort_pod_info(&self, pod: Pod, hashed_pods: &mut HashMap<String, Vec<Pod>>, hash: String) {
-        if hashed_pods.contains_key(&hash) {
-            hashed_pods.get_mut(hash.as_str()).unwrap().push(pod);
+    fn sort_pod_info(&self, pod: Pod, hashed_pods: &mut HashMap<String, Vec<Pod>>, hash: &str) {
+        if hashed_pods.contains_key(hash) {
+            hashed_pods.get_mut(hash).unwrap().push(pod);
         } else {
-            hashed_pods.insert(hash, vec![pod]);
+            hashed_pods.insert(hash.to_string(), vec![pod]);
         }
     }
 }
