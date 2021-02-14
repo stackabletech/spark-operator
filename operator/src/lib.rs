@@ -13,6 +13,7 @@ use k8s_openapi::api::core::v1::{
 use kube::api::{ListParams, Meta, ObjectMeta};
 use serde_json::json;
 
+use async_trait::async_trait;
 use handlebars::Handlebars;
 use stackable_operator::client::Client;
 use stackable_operator::controller::{Controller, ControllerStrategy, ReconciliationState};
@@ -578,21 +579,26 @@ impl SparkStrategy {
     }
 }
 
+#[async_trait]
 impl ControllerStrategy for SparkStrategy {
     type Item = SparkCluster;
     type State = SparkState;
+    type Error = error::Error;
 
     fn finalizer_name(&self) -> String {
         return FINALIZER_NAME.to_string();
     }
 
-    fn init_reconcile_state(&self, context: ReconciliationContext<Self::Item>) -> Self::State {
-        SparkState {
+    async fn init_reconcile_state(
+        &self,
+        context: ReconciliationContext<Self::Item>,
+    ) -> Result<Self::State, Error> {
+        Ok(SparkState {
             spec: context.resource.spec.clone(),
             status: context.resource.status.clone(),
             context,
             node_information: None,
-        }
+        })
     }
 }
 
