@@ -1,35 +1,5 @@
 use stackable_spark_crd::{SparkNode, SparkNodeType};
 
-/// Create all required configuration options for a SparkNodeSelector
-/// Including common settings from the corresponding SparkNode
-/// Including settings from spec root
-// pub fn create_config_options(
-//     spec: &SparkClusterSpec,
-//     node: &SparkNode,
-//     selector: &SparkNodeSelector,
-// ) -> HashMap<String, String> {
-//     let mut options: HashMap<String, String> = HashMap::new();
-//     // collect options
-//     // validate and add
-//
-//     return options;
-// }
-//
-// fn collect_config_options(spec: &SparkClusterSpec, node: &SparkNode, selector: &SparkNodeSelector) {
-//     //-> Vec<Result<HashMap<String, String>>> {
-//     // 1) all options set in selector
-//
-//     // 2) all options set in node
-//
-//     // 3) all options in spec root
-//
-//     // 4) all options set in env variables for "spark-env.sh" -> may overwrite, no validation?
-//
-//     // 5) all options set in config properties for "spark-defaults.conf" -> may overwrite, no validation?
-// }
-//
-// pub fn add_and_validate(options: &mut HashMap<String, String>, key: String, value: String) {}
-
 const SPARK_URL_START: &str = "spark://";
 
 /// The worker start command needs to be extended with all known master nodes and ports.

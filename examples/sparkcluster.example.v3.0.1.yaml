@@ -1,4 +1,4 @@
-apiVersion: spark.stackable.de/v1
+apiVersion: spark.stackable.tech/v1
 kind: SparkCluster
 metadata:
   name: spark-cluster

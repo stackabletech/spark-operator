@@ -14,6 +14,7 @@ use kube::api::{ListParams, Meta, ObjectMeta};
 use serde_json::json;
 
 use async_trait::async_trait;
+use futures::FutureExt;
 use handlebars::Handlebars;
 use stackable_operator::client::Client;
 use stackable_operator::controller::{Controller, ControllerStrategy, ReconciliationState};
@@ -31,10 +32,12 @@ use std::pin::Pin;
 use std::str::FromStr;
 use uuid::Uuid;
 
-const FINALIZER_NAME: &str = "spark.stackable.de/cleanup";
+const FINALIZER_NAME: &str = "spark.stackable.tech/cleanup";
 
-const HASH: &str = "spark.stackable.de/hash";
-const TYPE: &str = "spark.stackable.de/type";
+/// label which holds the selector hash in the pods to identify which selector they belong to
+const HASH_LABEL: &str = "spark.stackable.tech/hash";
+/// label which holds node role / type (master, worker, history-server) in the pods
+const TYPE_LABEL: &str = "spark.stackable.tech/type";
 
 type SparkReconcileResult = ReconcileResult<error::Error>;
 
@@ -42,19 +45,22 @@ struct SparkState {
     context: ReconciliationContext<SparkCluster>,
     spec: SparkClusterSpec,
     status: Option<SparkClusterStatus>,
-    node_information: Option<NodeInformation>,
+    pod_information: Option<PodInformation>,
 }
 
-/// This will be filled in the beginning of the reconcile
-/// Nodes are sorted according to their cluster role / node type and their corresponding selector hash
-struct NodeInformation {
+/// This will be filled in the beginning of the reconcile method.
+/// Nodes are sorted according to their cluster role / node type and their corresponding selector hash.
+/// The selector hash identifies a provided selector which shares properties for one or multiple pods.
+/// In order to reconcile properly, we need the pods to identify themselves via a hash belonging to a certain selector.
+/// This is currently the only way to match a pod to a certain selector and compare current vs desired state.
+struct PodInformation {
     // hash for selector -> corresponding pods
     pub master: HashMap<String, Vec<Pod>>,
     pub worker: HashMap<String, Vec<Pod>>,
     pub history_server: Option<HashMap<String, Vec<Pod>>>,
 }
 
-impl NodeInformation {
+impl PodInformation {
     /// Count the pods according to their node type
     ///
     /// # Arguments
@@ -64,30 +70,30 @@ impl NodeInformation {
     pub fn get_pod_count(&self, node_type: SparkNodeType) -> usize {
         let mut num_pods = 0;
         match node_type {
-            SparkNodeType::Master => num_pods = self.count_pods(&self.master),
-            SparkNodeType::Worker => num_pods = self.count_pods(&self.worker),
+            SparkNodeType::Master => num_pods = count_pods(&self.master),
+            SparkNodeType::Worker => num_pods = count_pods(&self.worker),
             SparkNodeType::HistoryServer => {
                 if self.history_server.is_some() {
-                    num_pods = self.count_pods(self.history_server.as_ref().unwrap())
+                    num_pods = count_pods(self.history_server.as_ref().unwrap())
                 }
             }
         }
         num_pods
     }
+}
 
-    /// Count the pods stored in each (hashed) selector
-    ///
-    /// # Arguments
-    ///
-    /// * `hashed` - Map where the key is a selector hash and list of pods owned by that selector
-    ///
-    fn count_pods(&self, hashed: &HashMap<String, Vec<Pod>>) -> usize {
-        let mut num_pods: usize = 0;
-        for value in hashed.values() {
-            num_pods += value.len();
-        }
-        num_pods
+/// Count the pods stored in each (hashed) selector
+///
+/// # Arguments
+///
+/// * `hashed` - Map where the key is a selector hash and list of pods owned by that selector
+///
+fn count_pods(hashed: &HashMap<String, Vec<Pod>>) -> usize {
+    let mut num_pods = 0;
+    for value in hashed.values() {
+        num_pods += value.len();
     }
+    num_pods
 }
 
 impl SparkState {
@@ -118,14 +124,16 @@ impl SparkState {
         while let Some(pod) = existing_pods.pop() {
             if let Some(labels) = pod.metadata.labels.clone() {
                 // we require HASH and TYPE label to identify and sort the pods into the NodeInformation
-                if let (Some(hash), Some(node_type)) = (labels.get(HASH), labels.get(TYPE)) {
+                if let (Some(hash), Some(node_type)) =
+                    (labels.get(HASH_LABEL), labels.get(TYPE_LABEL))
+                {
                     let spark_node_type = match SparkNodeType::from_str(node_type) {
                         Ok(nt) => nt,
                         Err(_) => {
                             error!(
                                 "Pod [{}] has an invalid type '{}' [{}], deleting it.",
                                 Meta::name(&pod),
-                                TYPE,
+                                TYPE_LABEL,
                                 node_type
                             );
                             self.context.client.delete(&pod).await?;
@@ -138,7 +146,7 @@ impl SparkState {
                             error!(
                                 "Pod [{}] has an outdated '{}' [{}], deleting it.",
                                 Meta::name(&pod),
-                                HASH,
+                                HASH_LABEL,
                                 hash
                             );
                             self.context.client.delete(&pod).await?;
@@ -147,16 +155,21 @@ impl SparkState {
                     }
 
                     match spark_node_type {
-                        SparkNodeType::Master => self.sort_pod_info(pod, &mut master, hash),
-                        SparkNodeType::Worker => self.sort_pod_info(pod, &mut worker, hash),
-                        SparkNodeType::HistoryServer => {
-                            self.sort_pod_info(pod, &mut history_server, hash)
+                        SparkNodeType::Master => {
+                            master.entry(hash.to_string()).or_default().push(pod)
                         }
+                        SparkNodeType::Worker => {
+                            worker.entry(hash.to_string()).or_default().push(pod)
+                        }
+                        SparkNodeType::HistoryServer => history_server
+                            .entry(hash.to_string())
+                            .or_default()
+                            .push(pod),
                     };
                 } else {
                     // some labels missing
                     error!("Pod [{}] is missing one or more required '{:?}' labels, this is illegal, deleting it.",
-                         Meta::name(&pod), vec![HASH, TYPE]);
+                         Meta::name(&pod), vec![HASH_LABEL, TYPE_LABEL]);
                     self.context.client.delete(&pod).await?;
                     continue;
                 }
@@ -171,7 +184,7 @@ impl SparkState {
             }
         }
 
-        self.node_information = Some(NodeInformation {
+        self.pod_information = Some(PodInformation {
             master,
             worker,
             history_server: Some(history_server),
@@ -180,19 +193,19 @@ impl SparkState {
         info!(
             "Status[current/spec] - {} [{}/{}] | {} [{}/{}] | {} [{}/{}]",
             SparkNodeType::Master.as_str(),
-            self.node_information
+            self.pod_information
                 .as_ref()
                 .unwrap()
                 .get_pod_count(SparkNodeType::Master),
             self.spec.master.get_instances(),
             SparkNodeType::Worker.as_str(),
-            self.node_information
+            self.pod_information
                 .as_ref()
                 .unwrap()
                 .get_pod_count(SparkNodeType::Worker),
             self.spec.worker.get_instances(),
             SparkNodeType::HistoryServer.as_str(),
-            self.node_information
+            self.pod_information
                 .as_ref()
                 .unwrap()
                 .get_pod_count(SparkNodeType::HistoryServer),
@@ -207,23 +220,23 @@ impl SparkState {
 
     /// Reconcile the cluster according to provided spec. Start with master nodes and continue to worker and history-server nodes.
     /// Create missing pods or delete excess pods to match the spec.
-    pub async fn reconcile_cluster(&self) -> SparkReconcileResult {
-        trace!("Starting {} reconciliation", SparkNodeType::Master.as_str());
+    pub async fn reconcile_cluster(&self, node_type: &SparkNodeType) -> SparkReconcileResult {
+        trace!("Starting {} reconciliation", node_type.as_str());
 
-        if let Some(node_info) = &self.node_information {
-            self.reconcile_node(&SparkNodeType::Master, &node_info.master)
-                .await?;
-            self.reconcile_node(&SparkNodeType::Worker, &node_info.worker)
-                .await?;
-
-            if let Some(history_server) = &node_info.history_server {
-                self.reconcile_node(&SparkNodeType::HistoryServer, history_server)
-                    .await?;
-            } else {
-                return Ok(ReconcileFunctionAction::Continue);
+        if let Some(pod_info) = &self.pod_information {
+            match node_type {
+                SparkNodeType::Master => {
+                    return self.reconcile_node(node_type, &pod_info.master).await
+                }
+                SparkNodeType::Worker => {
+                    return self.reconcile_node(node_type, &pod_info.worker).await
+                }
+                SparkNodeType::HistoryServer => {
+                    if let Some(history_server) = &pod_info.history_server {
+                        return self.reconcile_node(node_type, history_server).await;
+                    }
+                }
             }
-        } else {
-            return Ok(ReconcileFunctionAction::Done);
         }
 
         Ok(ReconcileFunctionAction::Continue)
@@ -241,11 +254,6 @@ impl SparkState {
         nodes: &HashMap<String, Vec<Pod>>,
     ) -> SparkReconcileResult {
         // TODO: check if nodes terminated / check if nodes up and running
-        //if !self.check_pods_ready(nodes) {
-        //    return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(
-        //        REQUEUE_SECONDS,
-        //    )));
-        //}
         // TODO: if no master available, reboot workers
 
         if let Some(hashed_pods) = self
@@ -278,45 +286,6 @@ impl SparkState {
         Ok(ReconcileFunctionAction::Continue)
     }
 
-    // fn check_pods_ready(&self, hashed_pods: &HashMap<String, Vec<Pod>>) -> bool {
-    //     for pods in hashed_pods.values() {
-    //         for pod in pods {
-    //             // terminating
-    //             if self.has_deletion_stamp(pod) {
-    //                 return false;
-    //             }
-    //             if self.is_pod_running_and_ready(pod) {
-    //                 return false;
-    //             }
-    //         }
-    //     }
-    //     return true;
-    // }
-    //
-    // fn has_deletion_stamp(&self, pod: &Pod) -> bool {
-    //     if finalizer::has_deletion_stamp(pod) {
-    //         info!(
-    //             "SparkCluster {} is waiting for Pod [{}] to terminate",
-    //             self.context.log_name(),
-    //             Meta::name(pod)
-    //         );
-    //         return true;
-    //     }
-    //     return false;
-    // }
-    //
-    // fn is_pod_running_and_ready(&self, pod: &Pod) -> bool {
-    //     if !podutils::is_pod_running_and_ready(pod) {
-    //         info!(
-    //             "SparkCluster {} is waiting for Pod [{}] to be running and ready",
-    //             self.context.log_name(),
-    //             Meta::name(pod)
-    //         );
-    //         return false;
-    //     }
-    //     return true;
-    // }
-
     async fn create_pod(
         &self,
         selector: &SparkNodeSelector,
@@ -333,44 +302,23 @@ impl SparkState {
         hash: &str,
         node_type: &SparkNodeType,
     ) -> Result<Pod, Error> {
-        Ok(Pod {
-            metadata: self.build_pod_metadata(node_type, hash)?,
-            spec: Some(self.build_pod_spec(selector, node_type, hash)),
-            ..Pod::default()
-        })
-    }
-
-    fn build_pod_metadata(
-        &self,
-        node_type: &SparkNodeType,
-        hash: &str,
-    ) -> Result<ObjectMeta, Error> {
-        Ok(ObjectMeta {
-            labels: Some(self.build_labels(node_type, hash)),
-            name: Some(self.create_pod_name(node_type, hash)),
-            namespace: Some(self.context.namespace()),
-            owner_references: Some(vec![metadata::object_to_owner_reference::<SparkCluster>(
-                self.context.metadata(),
-            )?]),
-            ..ObjectMeta::default()
-        })
-    }
-
-    fn build_pod_spec(
-        &self,
-        selector: &SparkNodeSelector,
-        node_type: &SparkNodeType,
-        hash: &str,
-    ) -> PodSpec {
         let (containers, volumes) = self.build_containers(node_type, hash);
 
-        PodSpec {
-            node_name: Some(selector.node_name.clone()),
-            tolerations: Some(create_tolerations()),
-            containers,
-            volumes: Some(volumes),
-            ..PodSpec::default()
-        }
+        Ok(Pod {
+            metadata: metadata::build_metadata(
+                self.create_pod_name(node_type, hash),
+                Some(self.build_labels(node_type, hash)),
+                &self.context.resource,
+            )?,
+            spec: Some(PodSpec {
+                node_name: Some(selector.node_name.clone()),
+                tolerations: Some(create_tolerations()),
+                containers,
+                volumes: Some(volumes),
+                ..PodSpec::default()
+            }),
+            ..Pod::default()
+        })
     }
 
     fn build_containers(
@@ -407,7 +355,9 @@ impl SparkState {
                 },
             ]),
             // set no daemonize and configroot via env variables:
-            // if loaded via spark-default.conf or spark-env.sh the variables are set too late!
+            // if loaded via spark-default.conf or spark-env.sh the variables are set too late! Must be available before startup!
+            // SPARK_NO_DAEMONIZE stops the processes to be started in the background
+            // if not set, the agent will lose track of the processes and try to restart (the lost / failed etc. process)
             env: Some(vec![
                 EnvVar {
                     name: "SPARK_NO_DAEMONIZE".to_string(),
@@ -498,8 +448,8 @@ impl SparkState {
     ///
     fn build_labels(&self, node_type: &SparkNodeType, hash: &str) -> BTreeMap<String, String> {
         let mut labels = BTreeMap::new();
-        labels.insert(TYPE.to_string(), node_type.to_string());
-        labels.insert(HASH.to_string(), hash.to_string());
+        labels.insert(TYPE_LABEL.to_string(), node_type.to_string());
+        labels.insert(HASH_LABEL.to_string(), hash.to_string());
 
         labels
     }
@@ -525,21 +475,6 @@ impl SparkState {
     fn create_config_map_name(&self, node_type: &SparkNodeType, hash: &str) -> String {
         format!("{}-{}-{}-cm", self.context.name(), node_type.as_str(), hash)
     }
-
-    /// Sort valid pods into their corresponding hashed vector maps
-    ///
-    /// # Arguments
-    /// * `pod` - SparkNodeType (master/worker/history-server)
-    /// * `hashed_pods` - Map with hash as key and list of pods as value
-    /// * `hash` - NodeSelector hash
-    ///
-    fn sort_pod_info(&self, pod: Pod, hashed_pods: &mut HashMap<String, Vec<Pod>>, hash: &str) {
-        if hashed_pods.contains_key(hash) {
-            hashed_pods.get_mut(hash).unwrap().push(pod);
-        } else {
-            hashed_pods.insert(hash.to_string(), vec![pod]);
-        }
-    }
 }
 
 impl ReconciliationState for SparkState {
@@ -552,7 +487,11 @@ impl ReconciliationState for SparkState {
         Box::pin(async move {
             self.read_existing_pod_information()
                 .await?
-                .then(self.reconcile_cluster())
+                .then(self.reconcile_cluster(&SparkNodeType::Master))
+                .await?
+                .then(self.reconcile_cluster(&SparkNodeType::Worker))
+                .await?
+                .then(self.reconcile_cluster(&SparkNodeType::HistoryServer))
                 .await
         })
     }
@@ -585,7 +524,7 @@ impl ControllerStrategy for SparkStrategy {
             spec: context.resource.spec.clone(),
             status: context.resource.status.clone(),
             context,
-            node_information: None,
+            pod_information: None,
         })
     }
 }

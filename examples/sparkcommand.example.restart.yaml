@@ -1,8 +1,0 @@
-apiVersion: spark.stackable.de/v1
-kind: SparkCommand
-metadata:
-  name: spark-restart
-spec:
-  sparkClusterReference: "spark-cluster"
-  # RESTART, START, STOP (case sensitive)
-  action: "RESTART"

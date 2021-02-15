@@ -17,7 +17,7 @@ use std::str::FromStr;
 
 #[derive(Clone, CustomResource, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[kube(
-    group = "spark.stackable.de",
+    group = "spark.stackable.tech",
     version = "v1",
     kind = "SparkCluster",
     shortname = "sc",
@@ -68,12 +68,10 @@ impl SparkClusterSpec {
 #[derive(Clone, Debug, Hash, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct SparkNode {
     pub selectors: Vec<SparkNodeSelector>,
-    // options
-    // master -> use Option<T>
-
-    // worker -> use Option<T>
-
-    // history_server -> use Option<T>
+    // TODO: options
+    // TODO: master -> use Option<T>
+    // TODO: worker -> use Option<T>
+    // TODO: history_server -> use Option<T>
 }
 
 #[derive(Derivative, Clone, Debug, Deserialize, Eq, JsonSchema, Serialize)]
@@ -87,15 +85,20 @@ pub struct SparkNodeSelector {
     pub instances: usize,
     pub config: Option<Vec<ConfigOption>>,
     pub env: Option<Vec<ConfigOption>>,
-    // master -> use Option<T>
-
+    // TODO: master -> use Option<T>
     // worker -> use Option<T>
     pub cores: Option<usize>,
     pub memory: Option<String>,
-    // history_server -> use Option<T>
+    // TODO: history_server -> use Option<T>
 }
 
 impl SparkNode {
+    /// Collects all selectors provided in a node (master, worker, history-server) and hashes them
+    ///
+    /// # Arguments
+    /// * `node_type` - SparkNodeType (master/worker/history-server)
+    /// * `cluster_name` - Name of the cluster they belong to (otherwise different named clusters can have identical selector hashes)
+    ///
     pub fn get_hashed_selectors(
         &self,
         node_type: SparkNodeType,
@@ -112,6 +115,7 @@ impl SparkNode {
         hashed_selectors
     }
 
+    /// Returns the sum of all instances per selector provided
     pub fn get_instances(&self) -> usize {
         let mut instances: usize = 0;
         for selector in &self.selectors {
@@ -142,6 +146,7 @@ impl SparkNodeType {
         }
     }
 
+    /// Returns the container start command for a spark node
     pub fn get_command(&self) -> String {
         // TODO: remove hardcoded and adapt for versioning
         format!("spark-3.0.1-bin-hadoop2.7/sbin/start-{}.sh", self.as_str())
@@ -189,7 +194,7 @@ pub struct SparkClusterImage {
 }
 
 impl Crd for SparkCluster {
-    const RESOURCE_NAME: &'static str = "sparkclusters.spark.stackable.de";
+    const RESOURCE_NAME: &'static str = "sparkclusters.spark.stackable.tech";
     const CRD_DEFINITION: &'static str = include_str!("../sparkcluster.crd.yaml");
 }
 
