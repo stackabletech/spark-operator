@@ -5,16 +5,15 @@ mod error;
 use crate::error::Error;
 
 use kube::Api;
-use tracing::{debug, error, info, trace};
+use tracing::{error, info, trace};
 
 use k8s_openapi::api::core::v1::{
     ConfigMap, ConfigMapVolumeSource, Container, EnvVar, Pod, PodSpec, Volume, VolumeMount,
 };
-use kube::api::{ListParams, Meta, ObjectMeta};
+use kube::api::{ListParams, Meta};
 use serde_json::json;
 
 use async_trait::async_trait;
-use futures::FutureExt;
 use handlebars::Handlebars;
 use stackable_operator::client::Client;
 use stackable_operator::controller::{Controller, ControllerStrategy, ReconciliationState};
@@ -223,23 +222,22 @@ impl SparkState {
     pub async fn reconcile_cluster(&self, node_type: &SparkNodeType) -> SparkReconcileResult {
         trace!("Starting {} reconciliation", node_type.as_str());
 
-        if let Some(pod_info) = &self.pod_information {
-            match node_type {
-                SparkNodeType::Master => {
-                    return self.reconcile_node(node_type, &pod_info.master).await
-                }
-                SparkNodeType::Worker => {
-                    return self.reconcile_node(node_type, &pod_info.worker).await
-                }
-                SparkNodeType::HistoryServer => {
-                    if let Some(history_server) = &pod_info.history_server {
-                        return self.reconcile_node(node_type, history_server).await;
-                    }
-                }
+        match (node_type, &self.pod_information) {
+            (SparkNodeType::Master, Some(pod_info)) => {
+                self.reconcile_node(node_type, &pod_info.master).await
             }
+            (SparkNodeType::Worker, Some(pod_info)) => {
+                self.reconcile_node(node_type, &pod_info.worker).await
+            }
+            (
+                SparkNodeType::HistoryServer,
+                Some(PodInformation {
+                    history_server: Some(history_server),
+                    ..
+                }),
+            ) => self.reconcile_node(node_type, history_server).await,
+            _ => Ok(ReconcileFunctionAction::Continue),
         }
-
-        Ok(ReconcileFunctionAction::Continue)
     }
 
     /// Reconcile a SparkNode (master/worker/history-server)
@@ -513,7 +511,7 @@ impl ControllerStrategy for SparkStrategy {
     type Error = error::Error;
 
     fn finalizer_name(&self) -> String {
-        return FINALIZER_NAME.to_string();
+        FINALIZER_NAME.to_string()
     }
 
     async fn init_reconcile_state(

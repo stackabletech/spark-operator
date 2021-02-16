@@ -12,16 +12,14 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
-// TODO: We need to validate the name of the cluster because it is used in pod and configmap names, it can't bee too long
-// This probably also means we shouldn't use the node_names in the pod_name...
-
 #[derive(Clone, CustomResource, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[kube(
     group = "spark.stackable.tech",
     version = "v1",
     kind = "SparkCluster",
     shortname = "sc",
-    namespaced
+    namespaced,
+    status = "SparkClusterStatus"
 )]
 #[kube(status = "SparkClusterStatus")]
 pub struct SparkClusterSpec {
@@ -115,7 +113,7 @@ impl SparkNode {
         hashed_selectors
     }
 
-    /// Returns the sum of all instances per selector provided
+    /// Returns the sum of all requested instance counts across all selectors.
     pub fn get_instances(&self) -> usize {
         let mut instances: usize = 0;
         for selector in &self.selectors {
