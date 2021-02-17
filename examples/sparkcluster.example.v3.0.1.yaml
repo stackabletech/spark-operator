@@ -21,8 +21,9 @@ spec:
     selectors:
       - node_name: "mdesktop"
         instances: 1
-
-  image: "spark:3.0.1"
+  image:
+    name: "spark"
+    version: "3.0.1"
 #  secret: "very_secret"
 
 

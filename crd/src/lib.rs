@@ -18,15 +18,14 @@ use std::str::FromStr;
     version = "v1",
     kind = "SparkCluster",
     shortname = "sc",
-    namespaced,
-    status = "SparkClusterStatus"
+    namespaced
 )]
 #[kube(status = "SparkClusterStatus")]
 pub struct SparkClusterSpec {
     pub master: SparkNode,
     pub worker: SparkNode,
     pub history_server: Option<SparkNode>,
-    pub image: String,
+    pub image: SparkClusterImage,
     pub secret: Option<String>,
     pub log_dir: Option<String>,
 }
@@ -188,7 +187,13 @@ pub struct SparkClusterStatus {
 pub struct SparkClusterImage {
     pub name: String,
     pub version: String,
-    pub timestamp: String,
+    pub timestamp: Option<String>,
+}
+
+impl fmt::Display for SparkClusterImage {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}:{}", self.name, self.version)
+    }
 }
 
 impl Crd for SparkCluster {

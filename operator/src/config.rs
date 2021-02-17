@@ -1,3 +1,4 @@
+use k8s_openapi::api::core::v1::{ConfigMapVolumeSource, EnvVar, Volume, VolumeMount};
 use stackable_spark_crd::{SparkNode, SparkNodeType};
 
 const SPARK_URL_START: &str = "spark://";
@@ -65,4 +66,73 @@ pub fn adapt_container_command(node_type: &SparkNodeType, master: &SparkNode) ->
     }
 
     master_url
+}
+
+const CONFIG_VOLUME: &str = "config-volume";
+const EVENT_VOLUME: &str = "event-volume";
+
+/// Create volume mounts for the spark config files and optional an event dir for spark logs
+///
+/// # Arguments
+/// * `log_dir` - Event/Log dir for SparkNodes. History Server reads these logs to offer metrics
+///
+pub fn create_volume_mounts(log_dir: &Option<String>) -> Vec<VolumeMount> {
+    let mut volume_mounts = vec![VolumeMount {
+        mount_path: "conf".to_string(),
+        name: CONFIG_VOLUME.to_string(),
+        ..VolumeMount::default()
+    }];
+    // if log dir is provided, create another folder for logDir
+    if let Some(dir) = log_dir {
+        volume_mounts.push(VolumeMount {
+            mount_path: dir.clone(),
+            name: EVENT_VOLUME.to_string(),
+            ..VolumeMount::default()
+        });
+    }
+
+    volume_mounts
+}
+
+/// Create a volume to store the spark config files and optional an event volume for spark logs
+///
+/// # Arguments
+/// * `configmap_name` - ConfigMap name where the required spark configuration files (spark-defaults.conf and spark-env.sh) are located
+///
+pub fn create_volumes(configmap_name: &str) -> Vec<Volume> {
+    let volumes = vec![
+        Volume {
+            name: CONFIG_VOLUME.to_string(),
+            config_map: Some(ConfigMapVolumeSource {
+                name: Some(configmap_name.to_string()),
+                ..ConfigMapVolumeSource::default()
+            }),
+            ..Volume::default()
+        },
+        Volume {
+            name: EVENT_VOLUME.to_string(),
+            ..Volume::default()
+        },
+    ];
+
+    volumes
+}
+
+/// The SPARK_CONFIG_DIR and SPARK_NO_DAEMONIZE must be provided as env variable in the container.
+/// SPARK_CONFIG_DIR must be available before the start up of the nodes (master, worker, history-server) to point to our custom configuration.
+/// SPARK_NO_DAEMONIZE stops the node processes to be started in the background, which causes the agent to lose track of the processes.
+/// The Agent then assumes the processes stopped or died and recreates them over and over again.
+pub fn create_required_startup_env() -> Vec<EnvVar> {
+    vec![
+        EnvVar {
+            name: "SPARK_NO_DAEMONIZE".to_string(),
+            value: Some("true".to_string()),
+            ..EnvVar::default()
+        },
+        EnvVar {
+            name: "SPARK_CONF_DIR".to_string(),
+            value: Some("{{configroot}}/conf".to_string()),
+            ..EnvVar::default()
+        },
+    ]
 }

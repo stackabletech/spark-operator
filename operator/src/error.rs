@@ -29,7 +29,4 @@ pub enum Error {
         source: stackable_spark_crd::CrdError,
         backtrace: Backtrace,
     },
-
-    #[error("Error during reconciliation: {0}")]
-    ReconcileError(String),
 }

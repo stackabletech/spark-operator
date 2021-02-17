@@ -7,9 +7,7 @@ use crate::error::Error;
 use kube::Api;
 use tracing::{error, info, trace};
 
-use k8s_openapi::api::core::v1::{
-    ConfigMap, ConfigMapVolumeSource, Container, EnvVar, Pod, PodSpec, Volume, VolumeMount,
-};
+use k8s_openapi::api::core::v1::{ConfigMap, Container, Pod, PodSpec, Volume};
 use kube::api::{ListParams, Meta};
 use serde_json::json;
 
@@ -22,9 +20,7 @@ use stackable_operator::reconcile::{
     ReconcileFunctionAction, ReconcileResult, ReconciliationContext,
 };
 use stackable_operator::{create_config_map, create_tolerations};
-use stackable_spark_crd::{
-    SparkCluster, SparkClusterSpec, SparkClusterStatus, SparkNodeSelector, SparkNodeType,
-};
+use stackable_spark_crd::{SparkCluster, SparkClusterSpec, SparkNodeSelector, SparkNodeType};
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::pin::Pin;
@@ -43,7 +39,6 @@ type SparkReconcileResult = ReconcileResult<error::Error>;
 struct SparkState {
     context: ReconciliationContext<SparkCluster>,
     spec: SparkClusterSpec,
-    status: Option<SparkClusterStatus>,
     pod_information: Option<PodInformation>,
 }
 
@@ -275,7 +270,7 @@ impl SparkState {
 
                 if current_count < spec_pod_count {
                     let pod = self.create_pod(selector, node_type, hash).await?;
-                    self.create_config_maps(selector, node_type, hash).await?;
+                    self.create_config_maps(node_type, hash).await?;
                     info!("Creating {} pod '{}'", node_type.as_str(), Meta::name(&pod));
                 }
             }
@@ -325,7 +320,7 @@ impl SparkState {
         hash: &str,
     ) -> (Vec<Container>, Vec<Volume>) {
         // TODO: get version from controller
-        let image_name = "spark:3.0.1".to_string();
+        let image_name = self.spec.image.to_string();
 
         // adapt worker command with master url(s)
         let mut command = vec![node_type.get_command()];
@@ -339,63 +334,18 @@ impl SparkState {
             name: "spark".to_string(),
             // TODO: worker -> add master port
             command: Some(command),
-            volume_mounts: Some(vec![
-                // One mount for the config directory, this will be relative to the extracted package
-                VolumeMount {
-                    mount_path: "conf".to_string(),
-                    name: "config-volume".to_string(),
-                    ..VolumeMount::default()
-                },
-                VolumeMount {
-                    mount_path: "/tmp".to_string(), // TODO: Make configurable via crd log dir
-                    name: "event-volume".to_string(),
-                    ..VolumeMount::default()
-                },
-            ]),
-            // set no daemonize and configroot via env variables:
-            // if loaded via spark-default.conf or spark-env.sh the variables are set too late! Must be available before startup!
-            // SPARK_NO_DAEMONIZE stops the processes to be started in the background
-            // if not set, the agent will lose track of the processes and try to restart (the lost / failed etc. process)
-            env: Some(vec![
-                EnvVar {
-                    name: "SPARK_NO_DAEMONIZE".to_string(),
-                    value: Some("true".to_string()),
-                    ..EnvVar::default()
-                },
-                EnvVar {
-                    name: "SPARK_CONF_DIR".to_string(),
-                    value: Some("{{configroot}}/conf".to_string()),
-                    ..EnvVar::default()
-                },
-            ]),
+            volume_mounts: Some(config::create_volume_mounts(&self.spec.log_dir)),
+            env: Some(config::create_required_startup_env()),
             ..Container::default()
         }];
 
         let cm_name = self.create_config_map_name(node_type, hash);
-        let volumes = vec![
-            Volume {
-                name: "config-volume".to_string(),
-                config_map: Some(ConfigMapVolumeSource {
-                    name: Some(cm_name),
-                    ..ConfigMapVolumeSource::default()
-                }),
-                ..Volume::default()
-            },
-            Volume {
-                name: "event-volume".to_string(),
-                ..Volume::default()
-            },
-        ];
+        let volumes = config::create_volumes(&cm_name);
 
         (containers, volumes)
     }
 
-    async fn create_config_maps(
-        &self,
-        selector: &SparkNodeSelector,
-        node_type: &SparkNodeType,
-        hash: &str,
-    ) -> Result<(), Error> {
+    async fn create_config_maps(&self, node_type: &SparkNodeType, hash: &str) -> Result<(), Error> {
         // TODO: remove hardcoded and make configurable and distinguish master / worker vs history-server
         let mut config_properties: HashMap<String, String> = HashMap::new();
         config_properties.insert(
@@ -406,7 +356,7 @@ impl SparkState {
         config_properties.insert("spark.eventLog.enabled".to_string(), "true".to_string());
 
         config_properties.insert("spark.eventLog.dir".to_string(), "/tmp".to_string());
-        let mut env_vars: HashMap<String, String> = HashMap::new();
+        let env_vars: HashMap<String, String> = HashMap::new();
         // TODO: use product-conf for validation
 
         let mut handlebars_config = Handlebars::new();
@@ -520,7 +470,6 @@ impl ControllerStrategy for SparkStrategy {
     ) -> Result<Self::State, Error> {
         Ok(SparkState {
             spec: context.resource.spec.clone(),
-            status: context.resource.status.clone(),
             context,
             pod_information: None,
         })
