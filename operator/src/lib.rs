@@ -320,7 +320,7 @@ impl SparkState {
         hash: &str,
     ) -> (Vec<Container>, Vec<Volume>) {
         // TODO: get version from controller
-        let image_name = self.spec.image.to_string();
+        let image_name = format!("spark:{}", &self.spec.version);
 
         // adapt worker command with master url(s)
         let mut command = vec![node_type.get_command()];
@@ -350,12 +350,12 @@ impl SparkState {
         let mut config_properties: HashMap<String, String> = HashMap::new();
         config_properties.insert(
             "spark.history.fs.logDirectory".to_string(),
-            "/tmp".to_string(),
+            "file:///tmp".to_string(),
         );
 
         config_properties.insert("spark.eventLog.enabled".to_string(), "true".to_string());
 
-        config_properties.insert("spark.eventLog.dir".to_string(), "/tmp".to_string());
+        config_properties.insert("spark.eventLog.dir".to_string(), "file:///tmp".to_string());
         let env_vars: HashMap<String, String> = HashMap::new();
         // TODO: use product-conf for validation
 

@@ -65,15 +65,8 @@ spec:
                             type: string
                           instances:
                             type: integer
-                image:
-                  type: object
-                  properties:
-                    name:
-                      type: string
-                    version:
-                      type: string
-                    timestamp:
-                      type: string
+                version:
+                  type: string
                 secret:
                   type: string
                 log_dir:
@@ -81,12 +74,5 @@ spec:
             status:
               type: object
               properties:
-                image:
-                  type: object
-                  properties:
-                    name:
-                      type: string
-                    version:
-                      type: string
-                    timestamp:
-                      type: string
+                version:
+                  type: string

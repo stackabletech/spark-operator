@@ -25,7 +25,7 @@ pub struct SparkClusterSpec {
     pub master: SparkNode,
     pub worker: SparkNode,
     pub history_server: Option<SparkNode>,
-    pub image: SparkClusterImage,
+    pub version: SparkVersion,
     pub secret: Option<String>,
     pub log_dir: Option<String>,
 }
@@ -177,23 +177,9 @@ pub struct ConfigOption {
     pub value: String,
 }
 
-/// status
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct SparkClusterStatus {
-    pub image: SparkClusterImage,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
-pub struct SparkClusterImage {
-    pub name: String,
-    pub version: String,
-    pub timestamp: Option<String>,
-}
-
-impl fmt::Display for SparkClusterImage {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}:{}", self.name, self.version)
-    }
+    pub version: SparkVersion,
 }
 
 impl Crd for SparkCluster {
@@ -209,4 +195,25 @@ pub enum SparkVersion {
 
     #[serde(rename = "3.0.1")]
     v3_0_1,
+}
+
+impl SparkVersion {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SparkVersion::v2_4_7 => "2.4.7",
+            SparkVersion::v3_0_1 => "3.0.1",
+        }
+    }
+}
+
+impl fmt::Display for SparkVersion {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl Default for SparkVersion {
+    fn default() -> Self {
+        SparkVersion::v3_0_1
+    }
 }
