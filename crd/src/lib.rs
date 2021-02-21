@@ -144,9 +144,17 @@ impl SparkNodeType {
     }
 
     /// Returns the container start command for a spark node
-    pub fn get_command(&self) -> String {
+    /// Right now works only for images using hadoop2.7
+    /// # Arguments
+    /// * `version` - current specified SparkVersion
+    ///
+    pub fn get_command(&self, version: &SparkVersion) -> String {
         // TODO: remove hardcoded and adapt for versioning
-        format!("spark-3.0.1-bin-hadoop2.7/sbin/start-{}.sh", self.as_str())
+        format!(
+            "spark-{}-bin-hadoop2.7/sbin/start-{}.sh",
+            version.as_str(),
+            self.as_str()
+        )
     }
 }
 

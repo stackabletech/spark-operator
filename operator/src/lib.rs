@@ -20,7 +20,9 @@ use stackable_operator::reconcile::{
 };
 use stackable_operator::{create_config_map, create_tolerations};
 use stackable_operator::{finalizer, metadata, podutils};
-use stackable_spark_crd::{SparkCluster, SparkClusterSpec, SparkNodeSelector, SparkNodeType};
+use stackable_spark_crd::{
+    SparkCluster, SparkClusterSpec, SparkClusterStatus, SparkNodeSelector, SparkNodeType,
+};
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::pin::Pin;
@@ -40,6 +42,7 @@ type SparkReconcileResult = ReconcileResult<error::Error>;
 struct SparkState {
     context: ReconciliationContext<SparkCluster>,
     spec: SparkClusterSpec,
+    status: Option<SparkClusterStatus>,
     pod_information: Option<PodInformation>,
 }
 
@@ -92,6 +95,52 @@ fn count_pods(hashed: &HashMap<String, Vec<Pod>>) -> usize {
 }
 
 impl SparkState {
+    /// Process the cluster status:
+    /// If no status is set, write image, version and timestamp to status
+    /// Check for restart, start, stop commands
+    pub async fn process_cluster_status(&mut self) -> SparkReconcileResult {
+        if let Some(status) = &self.status {
+            if status.version != self.spec.version {
+                info!(
+                    "Current version [{}] - required version [{}] -> updating cluster...",
+                    status.version, &self.spec.version
+                );
+
+                for pod in &self.context.list_pods().await? {
+                    info!("Deleting pod [{}]", Meta::name(pod));
+                    self.context.client.delete(pod).await?;
+                }
+
+                &self
+                    .context
+                    .client
+                    .merge_patch_status(&self.context.resource, &self.create_status())
+                    .await?;
+
+                return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
+            }
+        } else {
+            info!(
+                "Write current version to status: [{}]",
+                &self.spec.version.to_string()
+            );
+
+            &self
+                .context
+                .client
+                .merge_patch_status(&self.context.resource, &self.create_status())
+                .await?;
+        }
+
+        Ok(ReconcileFunctionAction::Continue)
+    }
+
+    fn create_status(&self) -> SparkClusterStatus {
+        SparkClusterStatus {
+            version: self.spec.version.clone(),
+        }
+    }
+
     /// Read all cluster specific pods. Check for valid labels such as HASH (required to match a certain selector) or TYPE (which indicates master/worker/history-server).
     /// Remove invalid pods which are lacking (or have outdated) required labels.
     /// Sort incoming valid pods into corresponding maps (hash -> Vec<Pod>) for later usage for each node type (master/worker/history-server).
@@ -348,7 +397,7 @@ impl SparkState {
         let image_name = format!("spark:{}", &self.spec.version);
 
         // adapt worker command with master url(s)
-        let mut command = vec![node_type.get_command()];
+        let mut command = vec![node_type.get_command(&self.spec.version)];
         let adapted_command = config::adapt_container_command(node_type, &self.spec.master);
         if !adapted_command.is_empty() {
             command.push(adapted_command);
@@ -458,7 +507,9 @@ impl ReconciliationState for SparkState {
     ) -> Pin<Box<dyn Future<Output = Result<ReconcileFunctionAction, Self::Error>> + Send + '_>>
     {
         Box::pin(async move {
-            self.read_existing_pod_information()
+            self.process_cluster_status()
+                .await?
+                .then(self.read_existing_pod_information())
                 .await?
                 .then(self.reconcile_cluster(&SparkNodeType::Master))
                 .await?
@@ -495,6 +546,7 @@ impl ControllerStrategy for SparkStrategy {
     ) -> Result<Self::State, Error> {
         Ok(SparkState {
             spec: context.resource.spec.clone(),
+            status: context.resource.status.clone(),
             context,
             pod_information: None,
         })
