@@ -1,5 +1,6 @@
 use k8s_openapi::api::core::v1::{ConfigMapVolumeSource, EnvVar, Volume, VolumeMount};
-use stackable_spark_crd::{SparkNode, SparkNodeType};
+use stackable_spark_crd::{SparkClusterSpec, SparkNode, SparkNodeSelector, SparkNodeType};
+use std::collections::HashMap;
 
 const SPARK_URL_START: &str = "spark://";
 
@@ -135,4 +136,64 @@ pub fn create_required_startup_env() -> Vec<EnvVar> {
             ..EnvVar::default()
         },
     ]
+}
+
+/// Get all required configuration options
+/// 1) all options set in selector
+/// 2) all options set in node
+/// 3) all options in root
+/// 4) all options set in env variables for "spark-env.sh" -> may overwrite, no validation?
+/// 5) all options set in config properties for "spark-defaults.conf" -> may overwrite, no validation?
+///
+pub fn get_config_properties(
+    spec: &SparkClusterSpec,
+    selector: &SparkNodeSelector,
+) -> HashMap<String, String> {
+    let mut config: HashMap<String, String> = HashMap::new();
+
+    let log_dir = &spec.log_dir.clone().unwrap_or_else(|| "/tmp".to_string());
+
+    // TODO: replace hardcoded
+    config.insert("spark.eventLog.enabled".to_string(), "true".to_string());
+    config.insert("spark.eventLog.dir".to_string(), log_dir.to_string());
+    config.insert(
+        "spark.history.fs.logDirectory".to_string(),
+        log_dir.to_string(),
+    );
+
+    if let Some(secret) = &spec.secret {
+        config.insert("spark.authenticate".to_string(), "true".to_string());
+        config.insert("spark.authenticate.secret".to_string(), secret.to_string());
+    }
+
+    // TODO: validate and add
+
+    return config;
+}
+
+pub fn get_env_variables(
+    spec: &SparkClusterSpec,
+    selector: &SparkNodeSelector,
+) -> HashMap<String, String> {
+    let mut config: HashMap<String, String> = HashMap::new();
+
+    // TODO: replace hardcoded
+    if let Some(cores) = &selector.cores {
+        config.insert("SPARK_WORKER_CORES".to_string(), cores.to_string());
+    }
+    if let Some(memory) = &selector.memory {
+        config.insert("SPARK_WORKER_MEMORY".to_string(), memory.to_string());
+    }
+
+    // TODO: validate and add
+
+    return config;
+}
+
+pub fn convert_map_to_string(map: &HashMap<String, String>, separator: &str) -> String {
+    let mut data = String::new();
+    for (key, value) in map {
+        data.push_str(format!("{}{}{}\n", key, separator, value).as_str());
+    }
+    data
 }

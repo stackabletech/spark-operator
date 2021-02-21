@@ -9,10 +9,8 @@ use tracing::{error, info, trace};
 
 use k8s_openapi::api::core::v1::{ConfigMap, Container, Pod, PodSpec, Volume};
 use kube::api::{ListParams, Meta};
-use serde_json::json;
 
 use async_trait::async_trait;
-use handlebars::Handlebars;
 use stackable_operator::client::Client;
 use stackable_operator::controller::{Controller, ControllerStrategy, ReconciliationState};
 use stackable_operator::reconcile::{
@@ -343,7 +341,7 @@ impl SparkState {
 
                 if current_count < spec_pod_count {
                     let pod = self.create_pod(selector, node_type, hash).await?;
-                    self.create_config_maps(node_type, hash).await?;
+                    self.create_config_maps(node_type, selector, hash).await?;
                     info!("Creating {} pod '{}'", node_type.as_str(), Meta::name(&pod));
                     return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
                 }
@@ -419,37 +417,17 @@ impl SparkState {
         (containers, volumes)
     }
 
-    async fn create_config_maps(&self, node_type: &SparkNodeType, hash: &str) -> Result<(), Error> {
-        // TODO: remove hardcoded and make configurable and distinguish master / worker vs history-server
-        let mut config_properties: HashMap<String, String> = HashMap::new();
-        config_properties.insert(
-            "spark.history.fs.logDirectory".to_string(),
-            "file:///tmp".to_string(),
-        );
+    async fn create_config_maps(
+        &self,
+        node_type: &SparkNodeType,
+        selector: &SparkNodeSelector,
+        hash: &str,
+    ) -> Result<(), Error> {
+        let config_properties = config::get_config_properties(&self.spec, selector);
+        let env_vars = config::get_env_variables(&self.spec, selector);
 
-        config_properties.insert("spark.eventLog.enabled".to_string(), "true".to_string());
-
-        config_properties.insert("spark.eventLog.dir".to_string(), "file:///tmp".to_string());
-        let env_vars: HashMap<String, String> = HashMap::new();
-        // TODO: use product-conf for validation
-
-        let mut handlebars_config = Handlebars::new();
-        handlebars_config
-            .register_template_string("conf", "{{#each options}}{{@key}} {{this}}\n{{/each}}")
-            .expect("conf template should work");
-
-        let mut handlebars_env = Handlebars::new();
-        handlebars_env
-            .register_template_string("env", "{{#each options}}{{@key}}={{this}}\n{{/each}}")
-            .expect("env template should work");
-
-        let conf = handlebars_config
-            .render("conf", &json!({ "options": config_properties }))
-            .unwrap();
-
-        let env = handlebars_env
-            .render("env", &json!({ "options": env_vars }))
-            .unwrap();
+        let conf = config::convert_map_to_string(&config_properties, " ");
+        let env = config::convert_map_to_string(&env_vars, "=");
 
         let mut data = BTreeMap::new();
         data.insert("spark-env.sh".to_string(), env);
