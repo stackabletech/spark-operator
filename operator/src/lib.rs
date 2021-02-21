@@ -391,20 +391,18 @@ impl SparkState {
         node_type: &SparkNodeType,
         hash: &str,
     ) -> (Vec<Container>, Vec<Volume>) {
-        // TODO: get version from controller
         let image_name = format!("spark:{}", &self.spec.version);
 
         // adapt worker command with master url(s)
         let mut command = vec![node_type.get_command(&self.spec.version)];
-        let adapted_command = config::adapt_container_command(node_type, &self.spec.master);
-        if !adapted_command.is_empty() {
+        if let Some(adapted_command) = config::adapt_container_command(node_type, &self.spec.master)
+        {
             command.push(adapted_command);
         }
 
         let containers = vec![Container {
             image: Some(image_name),
             name: "spark".to_string(),
-            // TODO: worker -> add master port
             command: Some(command),
             volume_mounts: Some(config::create_volume_mounts(&self.spec.log_dir)),
             env: Some(config::create_required_startup_env()),
@@ -424,7 +422,7 @@ impl SparkState {
         hash: &str,
     ) -> Result<(), Error> {
         let config_properties = config::get_config_properties(&self.spec, selector);
-        let env_vars = config::get_env_variables(&self.spec, selector);
+        let env_vars = config::get_env_variables(selector);
 
         let conf = config::convert_map_to_string(&config_properties, " ");
         let env = config::convert_map_to_string(&env_vars, "=");

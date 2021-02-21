@@ -37,6 +37,10 @@ spec:
                             type: string
                           instances:
                             type: integer
+                          port:
+                            type: integer
+                          web_ui_port:
+                            type: integer
                 worker:
                   type: object
                   properties:

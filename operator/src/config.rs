@@ -1,8 +1,27 @@
 use k8s_openapi::api::core::v1::{ConfigMapVolumeSource, EnvVar, Volume, VolumeMount};
-use stackable_spark_crd::{SparkClusterSpec, SparkNode, SparkNodeSelector, SparkNodeType};
+use stackable_spark_crd::{
+    ConfigOption, SparkClusterSpec, SparkNode, SparkNodeSelector, SparkNodeType,
+};
 use std::collections::HashMap;
 
 const SPARK_URL_START: &str = "spark://";
+
+const SPARK_NO_DAEMONIZE: &str = "SPARK_NO_DAEMONIZE";
+const SPARK_CONF_DIR: &str = "SPARK_CONF_DIR";
+
+const SPARK_EVENT_LOG_ENABLED: &str = "spark.eventLog.enabled";
+const SPARK_EVENT_LOG_DIR: &str = "spark.eventLog.dir";
+const SPARK_HISTORY_FS_LOG_DIRECTORY: &str = "spark.history.fs.logDirectory";
+
+const SPARK_AUTHENTICATE: &str = "spark.authenticate";
+const SPARK_AUTHENTICATE_SECRET: &str = "spark.authenticate.secret";
+
+const SPARK_MASTER_PORT_ENV: &str = "SPARK_MASTER_PORT";
+const SPARK_MASTER_PORT_CONF: &str = "spark.master.port";
+const SPARK_MASTER_WEBUI_PORT: &str = "SPARK_MASTER_WEBUI_PORT";
+
+const SPARK_WORKER_CORES: &str = "SPARK_WORKER_CORES";
+const SPARK_WORKER_MEMORY: &str = "SPARK_WORKER_MEMORY";
 
 /// The worker start command needs to be extended with all known master nodes and ports.
 /// The required URLs are in format: 'spark://<master-node-name>:<master-port'
@@ -14,59 +33,65 @@ const SPARK_URL_START: &str = "spark://";
 /// * `node_type` - SparkNodeType (master/worker/history-server)
 /// * `master` - Master SparkNode containing the required settings
 ///
-pub fn adapt_container_command(node_type: &SparkNodeType, master: &SparkNode) -> String {
+pub fn adapt_container_command(node_type: &SparkNodeType, master: &SparkNode) -> Option<String> {
     let mut master_url: String = String::new();
     // only for workers
     if node_type != &SparkNodeType::Worker {
-        return master_url;
+        return None;
     }
     // get all available master selectors
-    'selectors: for selector in &master.selectors {
+    for selector in &master.selectors {
         // check in conf properties and env variables for port
         // conf properties have higher priority than env variables
-        // TODO: add direct spec property for port from crd here
-        // if Some(port) = selector.port { .. continue} else if {...}
-
-        // use config over env
         if let Some(conf) = &selector.config {
-            for config_option in conf {
-                if config_option.name == "spark.master.port" {
-                    master_url.push_str(
-                        format!(
-                            "{}{}:{},",
-                            SPARK_URL_START, selector.node_name, config_option.value
-                        )
-                        .as_str(),
-                    );
-                    // found
-                    continue 'selectors;
-                }
+            if let Some(master) =
+                search_master_port(&selector.node_name, SPARK_MASTER_PORT_CONF, conf)
+            {
+                master_url.push_str(master.as_str());
+                continue;
             }
-        }
-
-        if let Some(env) = &selector.env {
-            for config_option in env {
-                if config_option.name == "SPARK_MASTER_PORT" {
-                    master_url.push_str(
-                        format!(
-                            "{}{}:{},",
-                            SPARK_URL_START, selector.node_name, config_option.value
-                        )
-                        .as_str(),
-                    );
-                    // found
-                    continue 'selectors;
-                }
+        } else if let Some(env) = &selector.env {
+            if let Some(master) =
+                search_master_port(&selector.node_name, SPARK_MASTER_PORT_ENV, env)
+            {
+                master_url.push_str(master.as_str());
+                continue;
             }
+        } else if let Some(port) = selector.port {
+            master_url
+                .push_str(format!("{}{}:{},", SPARK_URL_START, selector.node_name, port).as_str());
+            continue;
         }
 
         // TODO: default to default value in product conf
-        // nothing found: default
         master_url
             .push_str(format!("{}{}:{},", SPARK_URL_START, selector.node_name, "7077").as_str());
     }
 
-    master_url
+    Some(master_url)
+}
+
+/// Search for a master port in config properties or env variables
+///
+/// # Arguments
+/// * `node_name` - Node IP / DNS address
+/// * `option_name` - Name of the option to look for e.g. "SPARK_MASTER_PORT"
+/// * `options` - Vec of config properties or env variables
+///
+fn search_master_port(
+    node_name: &String,
+    option_name: &str,
+    options: &Vec<ConfigOption>,
+) -> Option<String> {
+    for option in options {
+        if option.name == option_name {
+            return Some(format!(
+                "{}{}:{},",
+                SPARK_URL_START, node_name, option.value
+            ));
+        }
+    }
+    None
 }
 
 const CONFIG_VOLUME: &str = "config-volume";
@@ -126,12 +151,12 @@ pub fn create_volumes(configmap_name: &str) -> Vec<Volume> {
 pub fn create_required_startup_env() -> Vec<EnvVar> {
     vec![
         EnvVar {
-            name: "SPARK_NO_DAEMONIZE".to_string(),
+            name: SPARK_NO_DAEMONIZE.to_string(),
             value: Some("true".to_string()),
             ..EnvVar::default()
         },
         EnvVar {
-            name: "SPARK_CONF_DIR".to_string(),
+            name: SPARK_CONF_DIR.to_string(),
             value: Some("{{configroot}}/conf".to_string()),
             ..EnvVar::default()
         },
@@ -139,11 +164,13 @@ pub fn create_required_startup_env() -> Vec<EnvVar> {
 }
 
 /// Get all required configuration options
-/// 1) all options set in selector
-/// 2) all options set in node
-/// 3) all options in root
-/// 4) all options set in env variables for "spark-env.sh" -> may overwrite, no validation?
-/// 5) all options set in config properties for "spark-defaults.conf" -> may overwrite, no validation?
+/// 1) from spec
+/// 2) from node
+/// 3) from selector
+/// 4) from config properties
+/// # Arguments
+/// * `spec` - SparkCluster spec for common properties
+/// * `selector` - SparkClusterSelector containing desired config properties
 ///
 pub fn get_config_properties(
     spec: &SparkClusterSpec,
@@ -154,16 +181,23 @@ pub fn get_config_properties(
     let log_dir = &spec.log_dir.clone().unwrap_or_else(|| "/tmp".to_string());
 
     // TODO: replace hardcoded
-    config.insert("spark.eventLog.enabled".to_string(), "true".to_string());
-    config.insert("spark.eventLog.dir".to_string(), log_dir.to_string());
+    config.insert(SPARK_EVENT_LOG_ENABLED.to_string(), "true".to_string());
+    config.insert(SPARK_EVENT_LOG_DIR.to_string(), log_dir.to_string());
     config.insert(
-        "spark.history.fs.logDirectory".to_string(),
+        SPARK_HISTORY_FS_LOG_DIRECTORY.to_string(),
         log_dir.to_string(),
     );
 
     if let Some(secret) = &spec.secret {
-        config.insert("spark.authenticate".to_string(), "true".to_string());
-        config.insert("spark.authenticate.secret".to_string(), secret.to_string());
+        config.insert(SPARK_AUTHENTICATE.to_string(), "true".to_string());
+        config.insert(SPARK_AUTHENTICATE_SECRET.to_string(), secret.to_string());
+    }
+
+    // add config options -> may override previous settings which is what we want
+    if let Some(configuration) = &selector.config {
+        for config_option in configuration {
+            config.insert(config_option.name.clone(), config_option.value.clone());
+        }
     }
 
     // TODO: validate and add
@@ -171,18 +205,38 @@ pub fn get_config_properties(
     return config;
 }
 
-pub fn get_env_variables(
-    spec: &SparkClusterSpec,
-    selector: &SparkNodeSelector,
-) -> HashMap<String, String> {
+/// Get all required env variables
+/// 1) from spec
+/// 2) from node
+/// 3) from selector
+/// 4) from config properties
+/// # Arguments
+/// * `selector` - SparkClusterSelector containing desired env variables
+///
+pub fn get_env_variables(selector: &SparkNodeSelector) -> HashMap<String, String> {
     let mut config: HashMap<String, String> = HashMap::new();
 
     // TODO: replace hardcoded
     if let Some(cores) = &selector.cores {
-        config.insert("SPARK_WORKER_CORES".to_string(), cores.to_string());
+        config.insert(SPARK_WORKER_CORES.to_string(), cores.to_string());
     }
     if let Some(memory) = &selector.memory {
-        config.insert("SPARK_WORKER_MEMORY".to_string(), memory.to_string());
+        config.insert(SPARK_WORKER_MEMORY.to_string(), memory.to_string());
+    }
+
+    if let Some(port) = &selector.port {
+        config.insert(SPARK_MASTER_PORT_ENV.to_string(), port.to_string());
+    }
+
+    if let Some(web_ui_port) = &selector.web_ui_port {
+        config.insert(SPARK_MASTER_WEBUI_PORT.to_string(), web_ui_port.to_string());
+    }
+
+    // add env variables -> may override previous settings which is what we want
+    if let Some(env_variables) = &selector.env {
+        for config_option in env_variables {
+            config.insert(config_option.name.clone(), config_option.value.clone());
+        }
     }
 
     // TODO: validate and add
@@ -190,10 +244,15 @@ pub fn get_env_variables(
     return config;
 }
 
-pub fn convert_map_to_string(map: &HashMap<String, String>, separator: &str) -> String {
+/// Unroll a map into a String using a given assignment character (for writing config maps)
+/// # Arguments
+/// * `map` - Map containing option_name:option_value pairs
+/// * `assignment` - Used character to assign option_value to option_name (e.g. "=", " ", ":" ...)
+///
+pub fn convert_map_to_string(map: &HashMap<String, String>, assignment: &str) -> String {
     let mut data = String::new();
     for (key, value) in map {
-        data.push_str(format!("{}{}{}\n", key, separator, value).as_str());
+        data.push_str(format!("{}{}{}\n", key, assignment, value).as_str());
     }
     data
 }

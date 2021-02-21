@@ -7,6 +7,8 @@ spec:
     selectors:
       - node_name: "mdesktop"
         instances: 1
+        port: 9999
+        web_ui_port: 11111
   worker:
     selectors:
       - node_name: "mdesktop"

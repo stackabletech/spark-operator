@@ -74,7 +74,7 @@ pub struct SparkNode {
 #[derive(Derivative, Clone, Debug, Deserialize, Eq, JsonSchema, Serialize)]
 #[derivative(Hash, PartialEq)]
 pub struct SparkNodeSelector {
-    // common
+    // common options
     pub node_name: String,
     // we need to ignore instances from hashing -> if we scale up or down, the hash
     // for the selectors changes and the operator removes all nodes and rebuilds them
@@ -82,11 +82,15 @@ pub struct SparkNodeSelector {
     pub instances: usize,
     pub config: Option<Vec<ConfigOption>>,
     pub env: Option<Vec<ConfigOption>>,
-    // TODO: master -> use Option<T>
-    // worker -> use Option<T>
+
+    // master options
+    pub port: Option<usize>,
+    pub web_ui_port: Option<usize>,
+
+    // worker options
     pub cores: Option<usize>,
     pub memory: Option<String>,
-    // TODO: history_server -> use Option<T>
+    // history-server options
 }
 
 impl SparkNode {
