@@ -15,16 +15,17 @@ use async_trait::async_trait;
 use handlebars::Handlebars;
 use stackable_operator::client::Client;
 use stackable_operator::controller::{Controller, ControllerStrategy, ReconciliationState};
-use stackable_operator::metadata;
 use stackable_operator::reconcile::{
     ReconcileFunctionAction, ReconcileResult, ReconciliationContext,
 };
 use stackable_operator::{create_config_map, create_tolerations};
+use stackable_operator::{finalizer, metadata, podutils};
 use stackable_spark_crd::{SparkCluster, SparkClusterSpec, SparkNodeSelector, SparkNodeType};
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::pin::Pin;
 use std::str::FromStr;
+use std::time::Duration;
 use uuid::Uuid;
 
 const FINALIZER_NAME: &str = "spark.stackable.tech/cleanup";
@@ -148,6 +149,28 @@ impl SparkState {
                         }
                     }
 
+                    // If the pod for this server is currently terminating (this could be for restarts or
+                    // upgrades) wait until it's done terminating.
+                    if finalizer::has_deletion_stamp(&pod) {
+                        info!(
+                            "SparkCluster {} is waiting for Pod [{}] to terminate",
+                            self.context.log_name(),
+                            Meta::name(&pod)
+                        );
+                        return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
+                    }
+
+                    // At the moment we'll wait for all pods to be available and ready before we might enact any changes to existing ones.
+                    // TODO: Only do this next check if we want "rolling" functionality
+                    if !podutils::is_pod_running_and_ready(&pod) {
+                        info!(
+                            "SparkCluster {} is waiting for Pod [{}] to be running and ready",
+                            self.context.log_name(),
+                            Meta::name(&pod)
+                        );
+                        return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
+                    }
+
                     match spark_node_type {
                         SparkNodeType::Master => {
                             master.entry(hash.to_string()).or_default().push(pod)
@@ -265,6 +288,7 @@ impl SparkState {
                         let pod = pods.get(0).unwrap();
                         self.context.client.delete(pod).await?;
                         info!("deleting {} pod '{}'", node_type.as_str(), Meta::name(pod));
+                        return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
                     }
                 }
 
@@ -272,6 +296,7 @@ impl SparkState {
                     let pod = self.create_pod(selector, node_type, hash).await?;
                     self.create_config_maps(node_type, hash).await?;
                     info!("Creating {} pod '{}'", node_type.as_str(), Meta::name(&pod));
+                    return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
                 }
             }
         }
