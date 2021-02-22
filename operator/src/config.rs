@@ -12,6 +12,7 @@ const SPARK_CONF_DIR: &str = "SPARK_CONF_DIR";
 const SPARK_EVENT_LOG_ENABLED: &str = "spark.eventLog.enabled";
 const SPARK_EVENT_LOG_DIR: &str = "spark.eventLog.dir";
 const SPARK_HISTORY_FS_LOG_DIRECTORY: &str = "spark.history.fs.logDirectory";
+const SPARK_HISTORY_STORE_PATH: &str = "spark.history.store.path";
 
 const SPARK_AUTHENTICATE: &str = "spark.authenticate";
 const SPARK_AUTHENTICATE_SECRET: &str = "spark.authenticate.secret";
@@ -187,6 +188,10 @@ pub fn get_config_properties(
         SPARK_HISTORY_FS_LOG_DIRECTORY.to_string(),
         log_dir.to_string(),
     );
+
+    if let Some(store_path) = &selector.store_path {
+        config.insert(SPARK_HISTORY_STORE_PATH.to_string(), store_path.to_string());
+    }
 
     if let Some(secret) = &spec.secret {
         config.insert(SPARK_AUTHENTICATE.to_string(), "true".to_string());

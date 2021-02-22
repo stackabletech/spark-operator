@@ -91,6 +91,7 @@ pub struct SparkNodeSelector {
     pub cores: Option<usize>,
     pub memory: Option<String>,
     // history-server options
+    pub store_path: Option<String>,
 }
 
 impl SparkNode {

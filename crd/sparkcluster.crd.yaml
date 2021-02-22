@@ -69,6 +69,8 @@ spec:
                             type: string
                           instances:
                             type: integer
+                          store_path:
+                            type: string
                 version:
                   type: string
                 secret:
