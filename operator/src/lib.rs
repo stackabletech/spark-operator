@@ -302,6 +302,7 @@ impl SparkState {
                 self.create_pod_name(node_type, hash),
                 Some(self.build_labels(node_type, hash)),
                 &self.context.resource,
+                true,
             )?,
             spec: Some(PodSpec {
                 node_name: Some(selector.node_name.clone()),
