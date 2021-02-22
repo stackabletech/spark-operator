@@ -180,6 +180,7 @@ impl SparkState {
                             continue;
                         }
                     };
+
                     if let Some(hashed) = hashed_selectors.get(&spark_node_type) {
                         // valid hash found? -> do we have a matching selector hash?
                         if !hashed.contains_key(hash) {
@@ -314,7 +315,6 @@ impl SparkState {
         node_type: &SparkNodeType,
         nodes: &HashMap<String, Vec<Pod>>,
     ) -> SparkReconcileResult {
-        // TODO: check if nodes terminated / check if nodes up and running
         // TODO: if no master available, reboot workers
 
         if let Some(hashed_pods) = self
