@@ -1,0 +1,20 @@
+apiVersion: spark.stackable.tech/v1
+kind: SparkCluster
+metadata:
+  name: spark-cluster
+spec:
+  master:
+    selectors:
+      - node_name: "mdesktop"
+        instances: 1
+  worker:
+    selectors:
+      - node_name: "mdesktop"
+        instances: 1
+        cores: 1
+        memory: "1g"
+  history_server:
+    selectors:
+      - node_name: "mdesktop"
+        instances: 1
+  version: "3.0.1"
