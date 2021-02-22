@@ -79,9 +79,9 @@ pub fn adapt_container_command(node_type: &SparkNodeType, master: &SparkNode) ->
 /// * `options` - Vec of config properties or env variables
 ///
 fn search_master_port(
-    node_name: &String,
+    node_name: &str,
     option_name: &str,
-    options: &Vec<ConfigOption>,
+    options: &[ConfigOption],
 ) -> Option<String> {
     for option in options {
         if option.name == option_name {
@@ -202,7 +202,7 @@ pub fn get_config_properties(
 
     // TODO: validate and add
 
-    return config;
+    config
 }
 
 /// Get all required env variables
@@ -241,7 +241,7 @@ pub fn get_env_variables(selector: &SparkNodeSelector) -> HashMap<String, String
 
     // TODO: validate and add
 
-    return config;
+    config
 }
 
 /// Unroll a map into a String using a given assignment character (for writing config maps)

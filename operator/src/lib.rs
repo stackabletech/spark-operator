@@ -109,8 +109,7 @@ impl SparkState {
                     self.context.client.delete(pod).await?;
                 }
 
-                &self
-                    .context
+                self.context
                     .client
                     .merge_patch_status(&self.context.resource, &self.create_status())
                     .await?;
@@ -123,8 +122,7 @@ impl SparkState {
                 &self.spec.version.to_string()
             );
 
-            &self
-                .context
+            self.context
                 .client
                 .merge_patch_status(&self.context.resource, &self.create_status())
                 .await?;
@@ -374,6 +372,7 @@ impl SparkState {
                 self.create_pod_name(node_type, hash),
                 Some(self.build_labels(node_type, hash)),
                 &self.context.resource,
+                true,
             )?,
             spec: Some(PodSpec {
                 node_name: Some(selector.node_name.clone()),
