@@ -156,13 +156,6 @@ impl SparkState {
         let mut history_server: HashMap<String, Vec<Pod>> = HashMap::new();
 
         while let Some(pod) = existing_pods.pop() {
-            // If the pod is currently terminating, wait until it's done terminating.
-            // (this could be for restarts or upgrades)
-            if finalizer::has_deletion_stamp(&pod) {
-                info!("Waiting for Pod [{}] to terminate", Meta::name(&pod));
-                return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
-            }
-
             if let Some(labels) = pod.metadata.labels.clone() {
                 // we require HASH and TYPE label to identify and sort the pods into the NodeInformation
                 if let (Some(hash), Some(node_type)) =
@@ -258,21 +251,107 @@ impl SparkState {
         Ok(ReconcileFunctionAction::Continue)
     }
 
+    /// Write new status if not existing yet
+    /// Should only happen once after cluster creation
+    pub async fn check_status(&self) -> SparkReconcileResult {
+        if self.status.is_none() {
+            // no status set yet -> create new
+            let new_status = SparkClusterStatus {
+                current_version: self.spec.version.clone(),
+                target_version: self.spec.version.clone(),
+            };
+
+            self.context
+                .client
+                .merge_patch_status(&self.context.resource, &new_status)
+                .await?;
+
+            return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
+        }
+
+        Ok(ReconcileFunctionAction::Continue)
+    }
+
+    /// Checks if all pods that currently belong to the cluster are up and running.
+    /// That means not "terminating" and "ready"
+    /// We always make sure that all masters are running before any workers / history-servers
+    async fn check_pods_up_and_running(&self) -> SparkReconcileResult {
+        trace!("Reconciliation: Checking if all pods are up and running");
+
+        if let Some(pod_info) = &self.pod_information {
+            // master nodes have priority
+            if !self.pods_up_and_running(pod_info.get_all_pods(Some(SparkNodeType::Master))) {
+                return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
+            }
+
+            // worker / history-server are treated equally
+            if !self.pods_up_and_running(pod_info.get_all_pods(Some(SparkNodeType::Worker)))
+                || !self
+                    .pods_up_and_running(pod_info.get_all_pods(Some(SparkNodeType::HistoryServer)))
+            {
+                return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
+            }
+        }
+
+        Ok(ReconcileFunctionAction::Continue)
+    }
+    /// Returns true only if any pod status is neither "terminating" or anything other than "ready"
+    fn pods_up_and_running(&self, pods: Vec<Pod>) -> bool {
+        let mut terminated_pods = vec![];
+        let mut started_pods = vec![];
+        for pod in &pods {
+            if finalizer::has_deletion_stamp(pod) {
+                terminated_pods.push(Meta::name(pod));
+            }
+
+            if !podutils::is_pod_running_and_ready(pod) {
+                started_pods.push(Meta::name(pod));
+            }
+        }
+
+        // If pods are currently terminating, wait until they are done terminating.
+        // (this could be for restarts or upgrades)
+        if !terminated_pods.is_empty() {
+            info!("Waiting for Pod(s) to be terminated: {:?}", terminated_pods);
+            return false;
+        }
+
+        // At the moment we'll wait for all pods of a certain type (especially master),
+        // to be available and ready before we might enact any changes to existing ones.
+        if !started_pods.is_empty() {
+            info!(
+                "Waiting for Pod(s) to be running and ready: {:?}",
+                started_pods
+            );
+            return false;
+        }
+
+        true
+    }
+
     /// Process the cluster status version for upgrades/downgrades
     /// When creating the status for the first time, current_version equals target_version
     /// If we need to upgrade/downgrade the version we set the target version to the required upgrade/downgrade
     /// Once all pods are running with the upgraded/downgraded version we will set current_version to the new version
-    pub async fn process_version_change_request(&mut self) -> SparkReconcileResult {
+    pub async fn process_version_update(&mut self) -> SparkReconcileResult {
         if let (Some(status), Some(pod_info)) = (&self.status, &self.pod_information) {
-            // 1) check if current version in status differs from spec version && target version differs from spec version
-            // 2) if so set target version to spec version
-            // 3) delete all pods
-            // TODO: graceful (check if any jobs are running)
-            if status.current_version != self.spec.version
+            // We have 3 cases to cover
+            // 1) current_version == target_version && target_version != spec.version
+            //  -> we need to set target_version to spec.version and start updating
+            //  -> TODO: wait for jobs to finish (graceful)
+            //  -> delete all pods
+            // 2) current_version != target_version
+            //  -> we are currently updating
+            //  -> wait for all pods to be deleted
+            // 3) current_version != target_version && target_version != spec.version
+            //  -> we are currently updating and a new update request arrived -> just log
+            //  -> finish update for safety and then continue
+
+            if status.current_version == status.target_version
                 && status.target_version != self.spec.version
             {
                 info!(
-                    "Current version [{}] - required version [{}] -> updating cluster...",
+                    "Current version [{}] - required version [{}] -> start updating cluster...",
                     status.current_version, &self.spec.version
                 );
 
@@ -294,11 +373,7 @@ impl SparkState {
                 }
 
                 return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
-            }
-            // if current_version differs from target_version we are currently updating.
-            // all pods should have been terminated correctly (check in read_existing_pod_information)
-            // TODO: create own check here
-            else if status.current_version != status.target_version {
+            } else if status.current_version != status.target_version {
                 let new_status = SparkClusterStatus {
                     current_version: self.spec.version.clone(),
                     target_version: self.spec.version.clone(),
@@ -313,17 +388,15 @@ impl SparkState {
                     .client
                     .merge_patch_status(&self.context.resource, &new_status)
                     .await?;
+                return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
             }
-        } else {
-            let new_status = SparkClusterStatus {
-                current_version: self.spec.version.clone(),
-                target_version: self.spec.version.clone(),
-            };
-
-            self.context
-                .client
-                .merge_patch_status(&self.context.resource, &new_status)
-                .await?;
+            // new version during update arrived; skip -> just log
+            if status.current_version != status.target_version
+                && status.target_version != self.spec.version
+            {
+                info!("New update request [{}] arrived while updating from [{}] to [{}]... waiting to finish current update...", 
+                      self.spec.version, status.current_version, status.target_version);
+            }
         }
 
         Ok(ReconcileFunctionAction::Continue)
@@ -385,18 +458,21 @@ impl SparkState {
                 // create pod when 1) no hash found or 2) hash found but current pod count < spec pod count
                 if let Some(pods) = nodes.get(hash) {
                     current_count = pods.len();
-                    if current_count > spec_pod_count {
+                    while current_count > spec_pod_count {
                         let pod = pods.get(0).unwrap();
                         self.context.client.delete(pod).await?;
+                        // TODO: delete configmaps?
                         info!("deleting {} pod '{}'", node_type.as_str(), Meta::name(pod));
+                        current_count -= 1;
                         applied_changes = true;
                     }
                 }
 
-                if current_count < spec_pod_count {
+                while current_count < spec_pod_count {
                     let pod = self.create_pod(selector, node_type, hash).await?;
                     self.create_config_maps(node_type, hash).await?;
                     info!("Creating {} pod '{}'", node_type.as_str(), Meta::name(&pod));
+                    current_count += 1;
                     applied_changes = true;
                 }
             }
@@ -407,60 +483,6 @@ impl SparkState {
         }
 
         Ok(ReconcileFunctionAction::Continue)
-    }
-
-    /// Checks if all pods that currently belong to this SparkNodeType are up and running
-    ///
-    /// # Arguments
-    /// * `node_type` - SparkNodeType (master/worker/history-server)
-    ///
-    async fn check_pods_up_and_running(
-        &mut self,
-        node_type: &SparkNodeType,
-    ) -> SparkReconcileResult {
-        trace!("Reconciliation: Checking if all pods are up and running");
-
-        match (node_type, &self.pod_information) {
-            (SparkNodeType::Master, Some(pod_info)) => {
-                Ok(self.pods_up_and_running(&pod_info.master))
-            }
-            (SparkNodeType::Worker, Some(pod_info)) => {
-                Ok(self.pods_up_and_running(&pod_info.worker))
-            }
-            (
-                SparkNodeType::HistoryServer,
-                Some(PodInformation {
-                    history_server: Some(history_server),
-                    ..
-                }),
-            ) => Ok(self.pods_up_and_running(history_server)),
-            _ => Ok(ReconcileFunctionAction::Continue),
-        }
-    }
-
-    fn pods_up_and_running(
-        &self,
-        hashed_pods: &HashMap<String, Vec<Pod>>,
-    ) -> ReconcileFunctionAction {
-        let mut started_pods = vec![];
-        for pods in hashed_pods.values() {
-            for pod in pods {
-                // At the moment we'll wait for all pods to be available and ready before we might enact any changes to existing ones.
-                if !podutils::is_pod_running_and_ready(pod) {
-                    started_pods.push(Meta::name(pod));
-                }
-            }
-        }
-
-        if !started_pods.is_empty() {
-            info!(
-                "Waiting for Pod(s) to be running and ready: {:?}",
-                started_pods
-            );
-            return ReconcileFunctionAction::Requeue(Duration::from_secs(10));
-        }
-
-        ReconcileFunctionAction::Continue
     }
 
     async fn create_pod(
@@ -613,19 +635,17 @@ impl ReconciliationState for SparkState {
         Box::pin(async move {
             self.read_existing_pod_information()
                 .await?
-                .then(self.process_version_change_request())
+                .then(self.check_status())
+                .await?
+                .then(self.check_pods_up_and_running())
+                .await?
+                .then(self.process_version_update())
                 .await?
                 .then(self.reconcile_cluster(&SparkNodeType::Master))
-                .await?
-                .then(self.check_pods_up_and_running(&SparkNodeType::Master))
                 .await?
                 .then(self.reconcile_cluster(&SparkNodeType::Worker))
                 .await?
                 .then(self.reconcile_cluster(&SparkNodeType::HistoryServer))
-                .await?
-                .then(self.check_pods_up_and_running(&SparkNodeType::Worker))
-                .await?
-                .then(self.check_pods_up_and_running(&SparkNodeType::HistoryServer))
                 .await
         })
     }
