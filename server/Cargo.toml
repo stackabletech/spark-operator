@@ -1,6 +1,6 @@
 [package]
 name = "stackable-spark-operator-server"
-version = "0.1.0"
+version = "0.1.0-nightly"
 authors = ["Malte Sander <malte.sander.it@gmail.com>"]
 edition = "2018"
 
@@ -10,3 +10,10 @@ stackable-spark-crd = { path = "../crd" }
 stackable-spark-operator = { path = "../operator" }
 
 tokio = { version = "1.2", features = ["macros", "rt-multi-thread"] }
+
+[package.metadata.deb]
+maintainer-scripts = "debian/"
+systemd-units = { enable = false }
+assets = [
+    ["../target/release/stackable-spark-operator-server", "opt/stackable/spark-operator/", "755"],
+]

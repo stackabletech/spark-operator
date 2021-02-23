@@ -1,0 +1,13 @@
+[Unit]
+Description=Stackable Spark Operator
+Before=
+After=network.target
+[Service]
+User=root
+ExecStart=/opt/stackable/spark-operator/stackable-spark-operator-server
+Restart=on-abort
+StandardOutput=journal
+StandardError=journal
+Environment="SPARK_OPERATOR_LOG=info"
+[Install]
+WantedBy=multi-user.target
