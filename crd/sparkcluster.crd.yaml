@@ -80,5 +80,7 @@ spec:
             status:
               type: object
               properties:
-                version:
+                current_version:
                   type: string
+                target_version:
+                    type: string

@@ -192,7 +192,8 @@ pub struct ConfigOption {
 
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct SparkClusterStatus {
-    pub version: SparkVersion,
+    pub current_version: SparkVersion,
+    pub target_version: SparkVersion,
 }
 
 impl Crd for SparkCluster {
