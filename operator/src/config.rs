@@ -6,23 +6,27 @@ use std::collections::HashMap;
 
 const SPARK_URL_START: &str = "spark://";
 
+// basic for startup
 const SPARK_NO_DAEMONIZE: &str = "SPARK_NO_DAEMONIZE";
 const SPARK_CONF_DIR: &str = "SPARK_CONF_DIR";
-
+// common
 const SPARK_EVENT_LOG_ENABLED: &str = "spark.eventLog.enabled";
 const SPARK_EVENT_LOG_DIR: &str = "spark.eventLog.dir";
-const SPARK_HISTORY_FS_LOG_DIRECTORY: &str = "spark.history.fs.logDirectory";
-const SPARK_HISTORY_STORE_PATH: &str = "spark.history.store.path";
-
 const SPARK_AUTHENTICATE: &str = "spark.authenticate";
 const SPARK_AUTHENTICATE_SECRET: &str = "spark.authenticate.secret";
-
+// master
 const SPARK_MASTER_PORT_ENV: &str = "SPARK_MASTER_PORT";
 const SPARK_MASTER_PORT_CONF: &str = "spark.master.port";
 const SPARK_MASTER_WEBUI_PORT: &str = "SPARK_MASTER_WEBUI_PORT";
-
+// worker
 const SPARK_WORKER_CORES: &str = "SPARK_WORKER_CORES";
 const SPARK_WORKER_MEMORY: &str = "SPARK_WORKER_MEMORY";
+const SPARK_WORKER_PORT: &str = "SPARK_WORKER_PORT";
+const SPARK_WORKER_WEBUI_PORT: &str = "SPARK_MASTER_WEBUI_PORT";
+// history server
+const SPARK_HISTORY_FS_LOG_DIRECTORY: &str = "spark.history.fs.logDirectory";
+const SPARK_HISTORY_STORE_PATH: &str = "spark.history.store.path";
+const SPARK_HISTORY_UI_PORT: &str = "spark.history.ui.port";
 
 /// The worker start command needs to be extended with all known master nodes and ports.
 /// The required URLs are in format: 'spark://<master-node-name>:<master-port'
@@ -181,21 +185,22 @@ pub fn get_config_properties(
 
     let log_dir = &spec.log_dir.clone().unwrap_or_else(|| "/tmp".to_string());
 
-    // TODO: replace hardcoded
+    // common
     config.insert(SPARK_EVENT_LOG_ENABLED.to_string(), "true".to_string());
     config.insert(SPARK_EVENT_LOG_DIR.to_string(), log_dir.to_string());
-    config.insert(
-        SPARK_HISTORY_FS_LOG_DIRECTORY.to_string(),
-        log_dir.to_string(),
-    );
-
-    if let Some(store_path) = &selector.store_path {
-        config.insert(SPARK_HISTORY_STORE_PATH.to_string(), store_path.to_string());
-    }
 
     if let Some(secret) = &spec.secret {
         config.insert(SPARK_AUTHENTICATE.to_string(), "true".to_string());
         config.insert(SPARK_AUTHENTICATE_SECRET.to_string(), secret.to_string());
+    }
+
+    // history server
+    config.insert(
+        SPARK_HISTORY_FS_LOG_DIRECTORY.to_string(),
+        log_dir.to_string(),
+    );
+    if let Some(store_path) = &selector.store_path {
+        config.insert(SPARK_HISTORY_STORE_PATH.to_string(), store_path.to_string());
     }
 
     // add config options -> may override previous settings which is what we want
@@ -221,20 +226,26 @@ pub fn get_config_properties(
 pub fn get_env_variables(selector: &SparkNodeSelector) -> HashMap<String, String> {
     let mut config: HashMap<String, String> = HashMap::new();
 
-    // TODO: replace hardcoded
+    // master
+    if let Some(port) = &selector.master_port {
+        config.insert(SPARK_MASTER_PORT_ENV.to_string(), port.to_string());
+    }
+    if let Some(web_ui_port) = &selector.master_web_ui_port {
+        config.insert(SPARK_MASTER_WEBUI_PORT.to_string(), web_ui_port.to_string());
+    }
+
+    // worker
     if let Some(cores) = &selector.cores {
         config.insert(SPARK_WORKER_CORES.to_string(), cores.to_string());
     }
     if let Some(memory) = &selector.memory {
         config.insert(SPARK_WORKER_MEMORY.to_string(), memory.to_string());
     }
-
-    if let Some(port) = &selector.port {
-        config.insert(SPARK_MASTER_PORT_ENV.to_string(), port.to_string());
+    if let Some(port) = &selector.worker_port {
+        config.insert(SPARK_WORKER_PORT.to_string(), port.to_string());
     }
-
-    if let Some(web_ui_port) = &selector.web_ui_port {
-        config.insert(SPARK_MASTER_WEBUI_PORT.to_string(), web_ui_port.to_string());
+    if let Some(web_ui_port) = &selector.worker_web_ui_port {
+        config.insert(SPARK_WORKER_WEBUI_PORT.to_string(), web_ui_port.to_string());
     }
 
     // add env variables -> may override previous settings which is what we want

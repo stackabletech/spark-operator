@@ -37,9 +37,9 @@ spec:
                             type: string
                           instances:
                             type: integer
-                          port:
+                          master_port:
                             type: integer
-                          web_ui_port:
+                          master_web_ui_port:
                             type: integer
                 worker:
                   type: object
@@ -56,7 +56,10 @@ spec:
                           cores:
                             type: integer
                           memory:
-                            type: string
+                          worker_port:
+                            type: integer
+                          worker_web_ui_port:
+                            type: integer
                 history_server:
                   type: object
                   properties:
@@ -70,6 +73,8 @@ spec:
                           instances:
                             type: integer
                           store_path:
+                            type: string
+                          history_ui_port:
                             type: string
                 version:
                   type: string

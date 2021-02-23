@@ -84,14 +84,16 @@ pub struct SparkNodeSelector {
     pub env: Option<Vec<ConfigOption>>,
 
     // master options
-    pub port: Option<usize>,
-    pub web_ui_port: Option<usize>,
-
+    pub master_port: Option<usize>,
+    pub master_web_ui_port: Option<usize>,
     // worker options
     pub cores: Option<usize>,
     pub memory: Option<String>,
+    pub worker_port: Option<usize>,
+    pub worker_web_ui_port: Option<usize>,
     // history-server options
     pub store_path: Option<String>,
+    pub history_ui_port: Option<usize>,
 }
 
 impl SparkNode {
