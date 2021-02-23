@@ -62,7 +62,7 @@ pub fn adapt_container_command(node_type: &SparkNodeType, master: &SparkNode) ->
                 master_url.push_str(master.as_str());
                 continue;
             }
-        } else if let Some(port) = selector.port {
+        } else if let Some(port) = selector.master_port {
             master_url
                 .push_str(format!("{}{}:{},", SPARK_URL_START, selector.node_name, port).as_str());
             continue;
@@ -201,6 +201,9 @@ pub fn get_config_properties(
     );
     if let Some(store_path) = &selector.store_path {
         config.insert(SPARK_HISTORY_STORE_PATH.to_string(), store_path.to_string());
+    }
+    if let Some(port) = &selector.history_ui_port {
+        config.insert(SPARK_HISTORY_UI_PORT.to_string(), port.to_string());
     }
 
     // add config options -> may override previous settings which is what we want
