@@ -367,6 +367,7 @@ impl SparkState {
     /// +----+------------------------+------------------+------------------+---------------+------------------------+
     ///
     pub async fn process_version_update(&mut self) -> SparkReconcileResult {
+        // TODO: reuse received status and only adapt current_version and target_version for merge, or use apply?
         if let (Some(status), Some(pod_info)) = (&self.status, &self.pod_information) {
             // if no current do not match specified pods continue to reconcile
             if pod_info.get_all_pods(None).len() != self.spec.get_all_instances() {
@@ -449,6 +450,7 @@ impl SparkState {
                     }
 
                     // id 4 -> update while update, ignore...
+                    // TODO: currently this message is only shown when the cluster finished updating
                     if current_version != target_version && target_version != &self.spec.version {
                         error!("Received new update request [{}] while updating from [{}] to [{}] ... please wait until the cluster is updated!",
                            self.spec.version, current_version, target_version);
@@ -544,6 +546,13 @@ impl SparkState {
         Ok(ReconcileFunctionAction::Continue)
     }
 
+    /// Build a pod and create it
+    ///
+    /// # Arguments
+    /// * `selector` - SparkNodeSelector which contains specific pod information
+    /// * `node_type` - SparkNodeType (master/worker/history-server)
+    /// * `hash` - NodeSelector hash
+    ///
     async fn create_pod(
         &self,
         selector: &SparkNodeSelector,
@@ -554,6 +563,13 @@ impl SparkState {
         Ok(self.context.client.create(&pod).await?)
     }
 
+    /// Build a pod using its selector and node_type
+    ///
+    /// # Arguments
+    /// * `selector` - SparkNodeSelector which contains specific pod information
+    /// * `node_type` - SparkNodeType (master/worker/history-server)
+    /// * `hash` - NodeSelector hash
+    ///
     fn build_pod(
         &self,
         selector: &SparkNodeSelector,
@@ -580,6 +596,12 @@ impl SparkState {
         })
     }
 
+    /// Build required pod containers
+    ///
+    /// # Arguments
+    /// * `node_type` - SparkNodeType (master/worker/history-server)
+    /// * `hash` - NodeSelector hash
+    ///
     fn build_containers(
         &self,
         node_type: &SparkNodeType,
@@ -611,6 +633,12 @@ impl SparkState {
         (containers, volumes)
     }
 
+    /// Create required config maps for the cluster
+    ///
+    /// # Arguments
+    /// * `node_type` - SparkNodeType (master/worker/history-server)
+    /// * `hash` - NodeSelector hash
+    ///
     async fn create_config_maps(&self, node_type: &SparkNodeType, hash: &str) -> Result<(), Error> {
         // TODO: remove hardcoded and make configurable and distinguish master / worker vs history-server
         let mut config_properties: HashMap<String, String> = HashMap::new();
