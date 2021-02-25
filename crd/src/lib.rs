@@ -31,7 +31,11 @@ pub struct SparkClusterSpec {
 }
 
 impl SparkClusterSpec {
-    /// collect hashed selectors from master, worker and history server
+    /// Collect hashed selectors from master, worker and history server
+    ///
+    /// # Arguments
+    /// * `cluster_name` - unique cluster identifier to avoid hashing collisions of selectors
+    ///
     pub fn get_hashed_selectors(
         &self,
         cluster_name: &str,
@@ -59,6 +63,18 @@ impl SparkClusterSpec {
         }
 
         hashed_selectors
+    }
+
+    /// Get count of all specified instances in all nodes (master, worker, history-server)
+    pub fn get_all_instances(&self) -> usize {
+        let mut instances = 0;
+        instances += self.master.get_instances();
+        instances += self.worker.get_instances();
+        if let Some(history_server) = &self.history_server {
+            instances += history_server.get_instances();
+        }
+
+        instances
     }
 }
 
@@ -194,8 +210,8 @@ pub struct ConfigOption {
 
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct SparkClusterStatus {
-    pub current_version: SparkVersion,
-    pub target_version: SparkVersion,
+    pub current_version: Option<SparkVersion>,
+    pub target_version: Option<SparkVersion>,
 }
 
 impl Crd for SparkCluster {

@@ -56,6 +56,7 @@ spec:
                           cores:
                             type: integer
                           memory:
+                            type: string
                           worker_port:
                             type: integer
                           worker_web_ui_port:
