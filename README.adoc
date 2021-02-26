@@ -68,9 +68,9 @@ There are three levels of configuration:
 |Description
 |Related Spark properties
 
-|image
+|version
 |string
-|The spark image used in the format: spark:x.y.z
+|The spark version used in the format: x.y.z
 |
 
 |log_dir
@@ -145,7 +145,7 @@ T.b.d.
 
 |store_path
 |string
-|Local directory where to cache application history data. If set, the history server will store application data on disk instead of keeping it in memory. The data written to disk will be re-used in the event of a history server restart.
+|A local directory where to cache application history data. If set, the history server will store application data on disk instead of keeping it in memory. The data written to disk will be re-used in the event of a history server restart.
 |spark.history.store.path
 
 |history_ui_port
