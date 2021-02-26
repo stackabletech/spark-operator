@@ -12,3 +12,151 @@ It is developed against the latest Rust release (1.50.0-nightly at the time of w
 NOTE: This requires Rust nightly due to the use of the `backtrace` feature.
 
     cargo build
+
+== Configuration Options
+
+The cluster can be configured via a yaml file.
+Each node type (Master, Worker, History-Server) can have multiple instances within multiple selectors.
+Multiple instances in the same selector can lead to port duplicates which results in the affected node
+to increase the port one by one. Keep that in mind when e.g. running multiple masters without specified ports
+on the same node.
+
+    apiVersion: spark.stackable.tech/v1
+    kind: SparkCluster
+    metadata:
+    name: spark-cluster
+      spec:
+        master:
+          selectors:
+            - node_name: "some_master_node"
+              instances: 1
+        worker:
+          selectors:
+            - node_name: "some_worker_node"
+              instances: 1
+              cores: 2
+              memory: "2g"
+        history_server:
+          selectors:
+            - node_name: "some_history_server_node"
+              instances: 1
+      version: "3.0.1"
+      secret: "my_secret"
+      log_dir: "/tmp/spark-events"
+
+=== Structure
+
+There are three levels of configuration:
+
+[cols="1,1"]
+|===
+|Common shared options
+|Contains configuration that is shared within the whole cluster. E.g. the spark image, secrets, encryption or logging options.
+
+|Node type options
+|This configuration is shared for all nodes of a certain type (Master, Worker, History-Server)
+
+|Selector specific options
+|Options provided in the selector are limited to one certain node of a node type (Master, Worker, History-Server) and apply to one physical machine.
+|===
+
+=== Common shared options
+[cols="1,1,1,1"]
+|===
+|Name
+|Type
+|Description
+|Related Spark properties
+
+|image
+|string
+|The spark image used in the format: spark:x.y.z
+|
+
+|log_dir
+|string
+|The log folder for spark applications
+|spark.history.fs.logDirectory=log_dir, spark.eventLog.enabled=true, spark.eventLog.dir=log_dir;
+
+|secret
+|string
+|A secret shared between nodes and required to submit applications via spark-submit
+|spark.authenticate=true, spark.authenticate.secret=secret;
+|===
+
+=== Node type options
+T.b.d.
+
+=== Selector specific options
+==== Master
+[cols="1,1,1,1"]
+|===
+|Name
+|Type
+|Description
+|Related Spark properties
+
+|master_port
+|integer
+|Start the master on a different port (default: 7077).
+|SPARK_MASTER_PORT
+
+|master_web_ui_port
+|integer
+|Port for the master web UI (default: 8080).
+|SPARK_MASTER_WEBUI_PORT
+|===
+==== Worker
+[cols="1,1,1,1"]
+|===
+|Name
+|Type
+|Description
+|Related Spark properties
+
+|worker_port
+|integer
+|Start the Spark worker on a specific port (default: random).
+|SPARK_WORKER_PORT
+
+|worker_web_ui_port
+|integer
+|Port for the worker web UI (default: 8081).
+|SPARK_WORKER_WEBUI_PORT
+
+|cores
+|integer
+|Total number of cores to allow Spark jobs to use on the machine (default: all available cores).
+|SPARK_WORKER_CORES
+
+|memory
+|string
+|Total amount of memory to allow Spark jobs to use on the machine, e.g. 1000M, 2G (default: total memory minus 1 GB).
+|SPARK_WORKER_MEMORY
+|===
+
+==== History Server
+[cols="1,1,1,1"]
+|===
+|Name
+|Type
+|Description
+|Related Spark properties
+
+|store_path
+|string
+|Local directory where to cache application history data. If set, the history server will store application data on disk instead of keeping it in memory. The data written to disk will be re-used in the event of a history server restart.
+|spark.history.store.path
+
+|history_ui_port
+|integer
+|The port to which the web interface of the history server binds (default: 18080).
+|spark.history.ui.port
+
+
+
+|===
+
+
+
+
