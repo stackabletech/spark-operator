@@ -13,8 +13,11 @@ use serde_json::json;
 
 use async_trait::async_trait;
 use handlebars::Handlebars;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use stackable_operator::client::Client;
+use stackable_operator::conditions::ConditionStatus;
 use stackable_operator::controller::{Controller, ControllerStrategy, ReconciliationState};
+use stackable_operator::error::OperatorResult;
 use stackable_operator::reconcile::{
     ReconcileFunctionAction, ReconcileResult, ReconciliationContext,
 };
@@ -22,6 +25,7 @@ use stackable_operator::{create_config_map, create_tolerations};
 use stackable_operator::{finalizer, metadata, podutils};
 use stackable_spark_crd::{
     SparkCluster, SparkClusterSpec, SparkClusterStatus, SparkNodeSelector, SparkNodeType,
+    SparkVersion,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
@@ -32,12 +36,12 @@ use uuid::Uuid;
 
 const FINALIZER_NAME: &str = "spark.stackable.tech/cleanup";
 
-/// Label which holds the selector hash in the pods to identify which selector they belong to
+/// Pod label which holds the selector hash in the pods to identify which selector they belong to
 const HASH_LABEL: &str = "spark.stackable.tech/hash";
-/// Label which holds node role / type (master, worker, history-server) in the pods
+/// Pod label which holds node role / type (master, worker, history-server) in the pods
 const TYPE_LABEL: &str = "spark.stackable.tech/type";
-/// Label which indicates the current cluster version it was created for
-const CURRENT_VERSION_LABEL: &str = "spark.stackable.tech/currentVersion";
+/// Pod label which indicates the cluster version it was created for
+const VERSION_LABEL: &str = "spark.stackable.tech/currentVersion";
 
 type SparkReconcileResult = ReconcileResult<error::Error>;
 
@@ -131,6 +135,187 @@ fn get_pods_for_node(hashed: &HashMap<String, Vec<Pod>>) -> Vec<Pod> {
 }
 
 impl SparkState {
+    async fn set_upgrading_condition(
+        &self,
+        conditions: &[Condition],
+        message: &str,
+        reason: &str,
+        status: ConditionStatus,
+    ) -> OperatorResult<SparkCluster> {
+        let resource = self
+            .context
+            .build_and_set_condition(
+                Some(conditions),
+                message.to_string(),
+                reason.to_string(),
+                status,
+                "Upgrading".to_string(),
+            )
+            .await?;
+
+        Ok(resource)
+    }
+
+    async fn set_current_version(
+        &self,
+        version: Option<&SparkVersion>,
+    ) -> OperatorResult<SparkCluster> {
+        let resource = self
+            .context
+            .client
+            .merge_patch_status(
+                &self.context.resource,
+                &json!({ "currentVersion": version }),
+            )
+            .await?;
+
+        Ok(resource)
+    }
+
+    async fn set_target_version(
+        &self,
+        version: Option<&SparkVersion>,
+    ) -> OperatorResult<SparkCluster> {
+        let resource = self
+            .context
+            .client
+            .merge_patch_status(&self.context.resource, &json!({ "targetVersion": version }))
+            .await?;
+
+        Ok(resource)
+    }
+
+    /// Will initialize the status object if it's never been set.
+    pub async fn init_status(&mut self) -> SparkReconcileResult {
+        // We'll begin by setting an empty status here because later in this method we might
+        // update its conditions. To avoid any issues we'll just create it once here.
+        if self.status.is_none() {
+            let status = SparkClusterStatus::default();
+            self.context
+                .client
+                .merge_patch_status(&self.context.resource, &status)
+                .await?;
+            self.status = Some(status);
+        }
+
+        // This should always return either the existing one or the one we just created above.
+        let status = self.status.take().unwrap_or_default();
+        let spec_version = self.spec.version.clone();
+
+        // TODO: This is not ideal: We pass in status.conditions to `set_upgrading_conditions` which
+        // potentially adds a new condition but we don't update `status.conditions`....
+        match (&status.current_version, &status.target_version) {
+            (None, None) => {
+                // No current_version and no target_version must be initial installation.
+                // We'll set the Upgrading condition and the target_version to the version from spec.
+                info!(
+                    "Initial installation, now moving towards version [{}]",
+                    spec_version
+                );
+                self.status = self
+                    .set_upgrading_condition(
+                        &status.conditions,
+                        &format!("Initial installation to version [{:?}]", spec_version),
+                        "InitialInstallation",
+                        ConditionStatus::True,
+                    )
+                    .await?
+                    .status;
+                self.status = self.set_target_version(Some(&spec_version)).await?.status;
+            }
+            (None, Some(target_version)) => {
+                // No current_version but a target_version means we're still doing the initial
+                // installation. Will continue working towards that goal even if another version
+                // was set in the meantime.
+                info!(
+                    "Initial installation, still moving towards version [{}]",
+                    target_version
+                );
+                if &spec_version != target_version {
+                    info!("A new target version ([{}]) was requested while we still do the initial installation to [{}], finishing running upgrade first", spec_version, target_version)
+                }
+                // We do this here to update the observedGeneration if needed
+                self.status = self
+                    .set_upgrading_condition(
+                        &status.conditions,
+                        &format!("Initial installation to version [{:?}]", spec_version),
+                        "InitialInstallation",
+                        ConditionStatus::True,
+                    )
+                    .await?
+                    .status;
+            }
+            (Some(current_version), None) => {
+                // We are at a stable version but have no target_version set. This will be the normal state.
+                // We'll check if there is a different version in spec and if it is will set it in target_version.
+                // TODO: check valid up/downgrades
+                let message;
+                let reason;
+                if current_version.is_upgrade(&spec_version).unwrap() {
+                    message = format!(
+                        "Upgrading from [{:?}] to [{:?}]",
+                        current_version, &spec_version
+                    );
+                    reason = "Upgrading";
+                    self.status = self.set_target_version(Some(&spec_version)).await?.status;
+                } else if current_version.is_downgrade(&spec_version).unwrap() {
+                    message = format!(
+                        "Downgrading from [{:?}] to [{:?}]",
+                        current_version, &spec_version
+                    );
+                    reason = "Downgrading";
+                    self.status = self.set_target_version(Some(&spec_version)).await?.status;
+                } else {
+                    message = format!(
+                        "No upgrade/downgrade required [{:?}] is still the current_version",
+                        current_version
+                    );
+                    reason = "";
+                }
+
+                info!("{}", message);
+
+                self.status = self
+                    .set_upgrading_condition(
+                        &status.conditions,
+                        &message,
+                        &reason,
+                        ConditionStatus::True,
+                    )
+                    .await?
+                    .status;
+            }
+            (Some(current_version), Some(target_version)) => {
+                // current_version and target_version are set means we're still in the process
+                // of upgrading. We'll only do some logging and checks and will update
+                // the condition so observedGeneration can be updated.
+                info!(
+                    "Still changing version from [{}] to [{}]",
+                    current_version, target_version
+                );
+                if &self.spec.version != target_version {
+                    info!("A new target version was requested while we still upgrade from [{}] to [{}], finishing running upgrade first", current_version, target_version)
+                }
+                let message = format!(
+                    "Changing version from [{:?}] to [{:?}]",
+                    current_version, target_version
+                );
+
+                self.status = self
+                    .set_upgrading_condition(
+                        &status.conditions,
+                        &message,
+                        "",
+                        ConditionStatus::False,
+                    )
+                    .await?
+                    .status;
+            }
+        }
+
+        Ok(ReconcileFunctionAction::Continue)
+    }
+
     /// Read all cluster specific pods. Check for valid labels such as HASH (required to match a certain selector) or TYPE (which indicates master/worker/history-server).
     /// Remove invalid pods which are lacking (or have outdated) required labels or are terminating.
     /// Sort incoming valid pods into corresponding maps (hash -> Vec<Pod>) for later usage for each node type (master/worker/history-server).
@@ -155,12 +340,18 @@ impl SparkState {
         let mut worker: HashMap<String, Vec<Pod>> = HashMap::new();
         let mut history_server: HashMap<String, Vec<Pod>> = HashMap::new();
 
+        let status = self.status.as_ref().ok_or_else(|| error::Error::ReconcileError(
+        "Spark cluster status missing, this is a programming error and should never happen. Please report in our issue tracker.".to_string(),
+      ))?;
+
         while let Some(pod) = existing_pods.pop() {
             if let Some(labels) = pod.metadata.labels.clone() {
                 // we require HASH and TYPE label to identify and sort the pods into the NodeInformation
-                if let (Some(hash), Some(node_type)) =
-                    (labels.get(HASH_LABEL), labels.get(TYPE_LABEL))
-                {
+                if let (Some(hash), Some(node_type), Some(version)) = (
+                    labels.get(HASH_LABEL),
+                    labels.get(TYPE_LABEL),
+                    labels.get(VERSION_LABEL),
+                ) {
                     let spark_node_type = match SparkNodeType::from_str(node_type) {
                         Ok(node_type) => node_type,
                         Err(_) => {
@@ -183,6 +374,23 @@ impl SparkState {
                                 Meta::name(&pod),
                                 HASH_LABEL,
                                 hash
+                            );
+                            self.context.client.delete(&pod).await?;
+                            continue;
+                        }
+                    }
+
+                    // check version:
+                    // if there is a target version we are updating
+                    // if pod version matches spec version
+                    if let Some(target_version) = &status.target_version {
+                        if &SparkVersion::from_str(version).unwrap() != target_version {
+                            info!(
+                                "Pod [{}] has an outdated '{}' [{}] - required is [{}], deleting it",
+                                Meta::name(&pod),
+                                VERSION_LABEL,
+                                version,
+                                target_version
                             );
                             self.context.client.delete(&pod).await?;
                             continue;
@@ -251,32 +459,6 @@ impl SparkState {
         Ok(ReconcileFunctionAction::Continue)
     }
 
-    /// Write new status if not existing yet
-    /// Should only happen once after cluster creation
-    pub async fn init_status(&self) -> SparkReconcileResult {
-        if self.status.is_none() {
-            let new_status = SparkClusterStatus {
-                current_version: None,
-                target_version: Some(self.spec.version.clone()),
-            };
-
-            self.context
-                .client
-                .merge_patch_status(&self.context.resource, &new_status)
-                .await?;
-
-            info!(
-                "Start initial installation of {} with version [{}]",
-                &self.context.log_name(),
-                &self.spec.version
-            );
-
-            return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
-        }
-
-        Ok(ReconcileFunctionAction::Continue)
-    }
-
     /// Checks if all pods that currently belong to the cluster are up and running.
     /// That means not "terminating" and "ready"
     /// We always make sure that all masters are running before any workers / history-servers
@@ -341,122 +523,29 @@ impl SparkState {
     }
 
     /// Process the cluster status version for upgrades/downgrades.
-    /// If id(s) are marked with "##", the process is automatically covered due to the
-    /// conditions or the position in the reconcile loop. E.g. for "updating":
-    /// "check_pods_up_and_running" ensures we waited for pods to be ready before we reach here.
-    ///
-    /// +----+------------------------+------------------+------------------+---------------+------------------------+
-    /// | id | description            | current_version  | target_version   | spec.version  | action                 |
-    /// +----+------------------------+------------------+------------------+---------------+------------------------+
-    /// | 1  | initial (check_status) | None             | Some(a.b.c)      | a.b.c         | set current_version    |
-    /// |    |                        |                  |                  |               | remove target_version  |
-    /// |    |                        |                  |                  |               | done                   |
-    /// +----+------------------------+------------------+------------------+---------------+------------------------+
-    /// | 2  | update                 | Some(a.b.c)      | None             | x.y.z         | delete pods            |
-    /// |    |                        |                  |                  |               | set target_version     |
-    /// |    |                        |                  |                  |               | requeue                |
-    /// +----+------------------------+------------------+------------------+---------------+------------------------+
-    /// | ## | updating               | Some(a.b.c)      | Some(x.y.z)      | x.y.z         | wait for pods ready    |
-    /// +----+------------------------+------------------+------------------+---------------+------------------------+
-    /// | 3  | finished update        | Some(x.y.z)      | Some(x.y.z)      | x.y.z         | remove target_version  |
-    /// |    |                        |                  |                  |               | set current_version    |
-    /// +----+------------------------+------------------+------------------+---------------+------------------------+
-    /// | ## | up to date             | Some(x.y.z)      | None             | x.y.z         | continue               |
-    /// +----+------------------------+------------------+------------------+---------------+------------------------+
-    /// | 4  | update while update    | Some(a.b.c)      | Some(k.l.m)      | x.y.z         | ignore, log, requeue   |
-    /// +----+------------------------+------------------+------------------+---------------+------------------------+
-    ///
-    pub async fn process_version_update(&mut self) -> SparkReconcileResult {
-        // TODO: reuse received status and only adapt current_version and target_version for merge, or use apply?
-        if let (Some(status), Some(pod_info)) = (&self.status, &self.pod_information) {
-            // if no current do not match specified pods continue to reconcile
-            if pod_info.get_all_pods(None).len() != self.spec.get_all_instances() {
-                return Ok(ReconcileFunctionAction::Continue);
-            }
-
-            // id 1 -> initial
+    pub async fn process_version(&mut self) -> SparkReconcileResult {
+        // If we reach here it means all pods must be running on target_version.
+        // We can now set current_version to target_version (if target_version was set) and
+        // target_version to None
+        if let Some(status) = &self.status.clone() {
             if let Some(target_version) = &status.target_version {
-                // if we reach here, the initial cluster is already created
-                if status.current_version.is_none() && target_version == &self.spec.version {
-                    let new_status = &SparkClusterStatus {
-                        current_version: Some(self.spec.version.clone()),
-                        target_version: None,
-                    };
-
-                    self.context
-                        .client
-                        .merge_patch_status(&self.context.resource, &new_status)
-                        .await?;
-
-                    info!(
-                        "Initial installation of {} with version [{}] finished!",
-                        &self.context.log_name(),
-                        &self.spec.version
-                    );
-
-                    return Ok(ReconcileFunctionAction::Done);
-                }
-            }
-
-            if let Some(current_version) = &status.current_version {
-                // id 2 -> update
-                // TODO: graceful -> wait for all spark jobs to be finished
-                if current_version != &self.spec.version && status.target_version.is_none() {
-                    let new_status = &SparkClusterStatus {
-                        current_version: Some(current_version.clone()),
-                        target_version: Some(self.spec.version.clone()),
-                    };
-
-                    self.context
-                        .client
-                        .merge_patch_status(&self.context.resource, &new_status)
-                        .await?;
-
-                    info!(
-                        "Current version [{}] - required version [{}] -> start updating cluster...",
-                        current_version, &self.spec.version
-                    );
-
-                    let pods = pod_info.get_all_pods(None);
-
-                    for pod in pods {
-                        info!("Deleting pod [{}] for cluster update", Meta::name(&pod));
-                        self.context.client.delete(&pod).await?;
-                    }
-
-                    return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
-                }
-
-                if let Some(target_version) = &status.target_version {
-                    // id 3 -> finished update
-                    if current_version != target_version {
-                        let new_status = &SparkClusterStatus {
-                            current_version: Some(target_version.clone()),
-                            target_version: None,
-                        };
-
-                        self.context
-                            .client
-                            .merge_patch_status(&self.context.resource, &new_status)
-                            .await?;
-
-                        info!(
-                            "Version update from [{}] to [{}] finished. {} ready!",
-                            current_version,
-                            target_version,
-                            &self.context.log_name(),
-                        );
-                        return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
-                    }
-
-                    // id 4 -> update while update, ignore...
-                    // TODO: currently this message is only shown when the cluster finished updating
-                    if current_version != target_version && target_version != &self.spec.version {
-                        error!("Received new update request [{}] while updating from [{}] to [{}] ... please wait until the cluster is updated!",
-                           self.spec.version, current_version, target_version);
-                        return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
-                    }
-                }
+                self.status = self.set_target_version(None).await?.status;
+                self.status = self
+                    .set_current_version(Some(&target_version))
+                    .await?
+                    .status;
+                self.status = self
+                    .set_upgrading_condition(
+                        &status.conditions,
+                        &format!(
+                            "No change required [{:?}] is still the current_version",
+                            target_version
+                        ),
+                        "",
+                        ConditionStatus::False,
+                    )
+                    .await?
+                    .status;
             }
         }
 
@@ -681,10 +770,7 @@ impl SparkState {
         let mut labels = BTreeMap::new();
         labels.insert(TYPE_LABEL.to_string(), node_type.to_string());
         labels.insert(HASH_LABEL.to_string(), hash.to_string());
-        labels.insert(
-            CURRENT_VERSION_LABEL.to_string(),
-            self.spec.version.to_string(),
-        );
+        labels.insert(VERSION_LABEL.to_string(), self.spec.version.to_string());
 
         labels
     }
@@ -725,19 +811,19 @@ impl ReconciliationState for SparkState {
     ) -> Pin<Box<dyn Future<Output = Result<ReconcileFunctionAction, Self::Error>> + Send + '_>>
     {
         Box::pin(async move {
-            self.read_existing_pod_information()
+            self.init_status()
                 .await?
-                .then(self.init_status())
+                .then(self.read_existing_pod_information())
                 .await?
                 .then(self.check_pods_up_and_running())
-                .await?
-                .then(self.process_version_update())
                 .await?
                 .then(self.reconcile_cluster(&SparkNodeType::Master))
                 .await?
                 .then(self.reconcile_cluster(&SparkNodeType::Worker))
                 .await?
                 .then(self.reconcile_cluster(&SparkNodeType::HistoryServer))
+                .await?
+                .then(self.process_version())
                 .await
         })
     }
