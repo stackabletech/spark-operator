@@ -249,6 +249,14 @@ pub enum SparkVersion {
     #[serde(rename = "3.0.1")]
     #[strum(serialize = "3.0.1")]
     v3_0_1,
+
+    #[serde(rename = "3.0.2")]
+    #[strum(serialize = "3.0.2")]
+    v3_0_2,
+
+    #[serde(rename = "3.1.1")]
+    #[strum(serialize = "3.1.1")]
+    v3_1_1,
 }
 
 impl SparkVersion {
