@@ -2,8 +2,10 @@ mod error;
 
 pub use crate::error::CrdError;
 use derivative::Derivative;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::CustomResource;
 use schemars::JsonSchema;
+use semver::{SemVerError, Version};
 use serde::{Deserialize, Serialize};
 use stackable_operator::Crd;
 use std::collections::hash_map::DefaultHasher;
@@ -21,6 +23,7 @@ use std::str::FromStr;
     namespaced
 )]
 #[kube(status = "SparkClusterStatus")]
+#[serde(rename_all = "camelCase")]
 pub struct SparkClusterSpec {
     pub master: SparkNode,
     pub worker: SparkNode,
@@ -31,7 +34,11 @@ pub struct SparkClusterSpec {
 }
 
 impl SparkClusterSpec {
-    /// collect hashed selectors from master, worker and history server
+    /// Collect hashed selectors from master, worker and history server
+    ///
+    /// # Arguments
+    /// * `cluster_name` - unique cluster identifier to avoid hashing collisions of selectors
+    ///
     pub fn get_hashed_selectors(
         &self,
         cluster_name: &str,
@@ -60,8 +67,21 @@ impl SparkClusterSpec {
 
         hashed_selectors
     }
+
+    /// Get count of all specified instances in all nodes (master, worker, history-server)
+    pub fn get_all_instances(&self) -> usize {
+        let mut instances = 0;
+        instances += self.master.get_instances();
+        instances += self.worker.get_instances();
+        if let Some(history_server) = &self.history_server {
+            instances += history_server.get_instances();
+        }
+
+        instances
+    }
 }
 
+/// A spark node consists of a list of selectors and optional common properties that is shared for every node
 #[derive(Clone, Debug, Hash, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct SparkNode {
     pub selectors: Vec<SparkNodeSelector>,
@@ -73,6 +93,7 @@ pub struct SparkNode {
 
 #[derive(Derivative, Clone, Debug, Deserialize, Eq, JsonSchema, Serialize)]
 #[derivative(Hash, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct SparkNodeSelector {
     // common
     pub node_name: String,
@@ -122,7 +143,6 @@ impl SparkNode {
     }
 }
 
-/// A spark node consists of a list of selectors and optional common properties that is shared for every node
 #[derive(Clone, Debug, Hash, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub enum SparkNodeType {
     Master,
@@ -144,9 +164,17 @@ impl SparkNodeType {
     }
 
     /// Returns the container start command for a spark node
-    pub fn get_command(&self) -> String {
+    /// Right now works only for images using hadoop2.7
+    /// # Arguments
+    /// * `version` - current specified SparkVersion
+    ///
+    pub fn get_command(&self, version: &SparkVersion) -> String {
         // TODO: remove hardcoded and adapt for versioning
-        format!("spark-3.0.1-bin-hadoop2.7/sbin/start-{}.sh", self.as_str())
+        format!(
+            "spark-{}-bin-hadoop2.7/sbin/start-{}.sh",
+            version,
+            self.as_str()
+        )
     }
 }
 
@@ -177,9 +205,16 @@ pub struct ConfigOption {
     pub value: String,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, JsonSchema, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SparkClusterStatus {
-    pub version: SparkVersion,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_version: Option<SparkVersion>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_version: Option<SparkVersion>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(schema_with = "stackable_operator::conditions::schema")]
+    pub conditions: Vec<Condition>,
 }
 
 impl Crd for SparkCluster {
@@ -188,32 +223,39 @@ impl Crd for SparkCluster {
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    JsonSchema,
+    PartialEq,
+    Serialize,
+    strum_macros::Display,
+    strum_macros::EnumString,
+)]
 pub enum SparkVersion {
     #[serde(rename = "2.4.7")]
+    #[strum(serialize = "2.4.7")]
     v2_4_7,
 
     #[serde(rename = "3.0.1")]
+    #[strum(serialize = "3.0.1")]
     v3_0_1,
 }
 
 impl SparkVersion {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            SparkVersion::v2_4_7 => "2.4.7",
-            SparkVersion::v3_0_1 => "3.0.1",
-        }
-    }
-}
+    pub fn is_upgrade(&self, to: &Self) -> Result<bool, SemVerError> {
+        let from_version = Version::parse(&self.to_string())?;
+        let to_version = Version::parse(&to.to_string())?;
 
-impl fmt::Display for SparkVersion {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.as_str())
+        Ok(to_version > from_version)
     }
-}
 
-impl Default for SparkVersion {
-    fn default() -> Self {
-        SparkVersion::v3_0_1
+    pub fn is_downgrade(&self, to: &Self) -> Result<bool, SemVerError> {
+        let from_version = Version::parse(&self.to_string())?;
+        let to_version = Version::parse(&to.to_string())?;
+
+        Ok(to_version < from_version)
     }
 }
