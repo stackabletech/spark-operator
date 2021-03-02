@@ -15,7 +15,7 @@ NOTE: This requires Rust nightly due to the use of the `backtrace` feature.
 
 == Configuration Options
 
-The cluster can be configured via a yaml file.
+The cluster can be configured via a YAML file.
 Each node type (Master, Worker, History-Server) can have multiple instances within multiple selectors.
 Multiple instances in the same selector can lead to port duplicates which results in the affected node
 to increase the port one by one. Keep that in mind when e.g. running multiple masters without specified ports
@@ -57,7 +57,7 @@ There are three levels of configuration:
 |This configuration is shared for all nodes of a certain type (Master, Worker, History-Server)
 
 |Selector specific options
-|Options provided in the selector are limited to one certain node of a node type (Master, Worker, History-Server) and apply to one physical machine.
+|Options provided in the selector are limited to one specific node of a node type (Master, Worker, History-Server) and apply to one physical machine.
 |===
 
 === Common shared options

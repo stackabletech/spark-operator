@@ -119,7 +119,7 @@ impl PodInformation {
     }
 }
 
-/// Retrieve all pods encapsulated for a spark node in selector/hash -> Vec<Pod>
+/// Retrieve all pods from a hashed selector (like PodInformation: Master, Worker, HistoryServer)
 ///
 /// # Arguments
 ///

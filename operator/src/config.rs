@@ -206,7 +206,10 @@ pub fn get_config_properties(
         config.insert(SPARK_HISTORY_UI_PORT.to_string(), port.to_string());
     }
 
-    // add config options -> may override previous settings which is what we want
+    // Add config options -> may override previous settings which is what we want
+    // These options refer to the CRD "selector.config" field and allow the user to adapt
+    // the cluster with options not offered by the operator.
+    // E.g. config.name: "spark.authenticate", config.value = "true"
     if let Some(configuration) = &selector.config {
         for config_option in configuration {
             config.insert(config_option.name.clone(), config_option.value.clone());
@@ -218,11 +221,11 @@ pub fn get_config_properties(
     config
 }
 
-/// Get all required env variables
+/// Get all required environment variables
 /// 1) from spec
 /// 2) from node
 /// 3) from selector
-/// 4) from env variables
+/// 4) from environment variables
 /// # Arguments
 /// * `selector` - SparkClusterSelector containing desired env variables
 ///
@@ -251,7 +254,10 @@ pub fn get_env_variables(selector: &SparkNodeSelector) -> HashMap<String, String
         config.insert(SPARK_WORKER_WEBUI_PORT.to_string(), web_ui_port.to_string());
     }
 
-    // add env variables -> may override previous settings which is what we want
+    // Add environment variables -> may override previous settings which is what we want
+    // These options refer to the CRD "selector.env" field and allow the user to adapt
+    // the cluster with options not offered by the operator.
+    // E.g. env.name: "SPARK_MASTER_PORT", env.value: "12345"
     if let Some(env_variables) = &selector.env {
         for config_option in env_variables {
             config.insert(config_option.name.clone(), config_option.value.clone());
