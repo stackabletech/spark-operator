@@ -28,21 +28,21 @@ on the same node.
       spec:
         master:
           selectors:
-            - node_name: "some_master_node"
+            - nodeName: "some_master_node"
               instances: 1
         worker:
           selectors:
-            - node_name: "some_worker_node"
+            - nodeName: "some_worker_node"
               instances: 1
               cores: 2
               memory: "2g"
-        history_server:
+        historyServer:
           selectors:
-            - node_name: "some_history_server_node"
+            - nodeName: "some_history_server_node"
               instances: 1
       version: "3.0.1"
       secret: "my_secret"
-      log_dir: "/tmp/spark-events"
+      logDir: "/tmp/spark-events"
 
 === Structure
 
@@ -73,10 +73,10 @@ There are three levels of configuration:
 |The spark version used in the format: x.y.z
 |
 
-|log_dir
+|logDir
 |string
 |The log folder for spark applications
-|spark.history.fs.logDirectory=log_dir, spark.eventLog.enabled=true, spark.eventLog.dir=log_dir;
+|spark.history.fs.logDirectory=logDir, spark.eventLog.enabled=true, spark.eventLog.dir=logDir;
 
 |secret
 |string
@@ -96,12 +96,12 @@ T.b.d.
 |Description
 |Related Spark properties
 
-|master_port
+|masterPort
 |integer
 |Start the master on a different port (default: 7077).
 |SPARK_MASTER_PORT
 
-|master_web_ui_port
+|masterWebUiPort
 |integer
 |Port for the master web UI (default: 8080).
 |SPARK_MASTER_WEBUI_PORT
@@ -114,12 +114,12 @@ T.b.d.
 |Description
 |Related Spark properties
 
-|worker_port
+|workerPort
 |integer
 |Start the Spark worker on a specific port (default: random).
 |SPARK_WORKER_PORT
 
-|worker_web_ui_port
+|workerWebUiPort
 |integer
 |Port for the worker web UI (default: 8081).
 |SPARK_WORKER_WEBUI_PORT
@@ -143,20 +143,13 @@ T.b.d.
 |Description
 |Related Spark properties
 
-|store_path
+|storePath
 |string
 |A local directory where to cache application history data. If set, the history server will store application data on disk instead of keeping it in memory. The data written to disk will be re-used in the event of a history server restart.
 |spark.history.store.path
 
-|history_ui_port
+|historyUiPort
 |integer
 |The port to which the web interface of the history server binds (default: 18080).
 |spark.history.ui.port
-
-
-
 |===
-
-
-
-
