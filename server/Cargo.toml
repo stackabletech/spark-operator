@@ -1,6 +1,6 @@
 [package]
 name = "stackable-spark-operator-server"
-description = "Stackable Zookeeper Operator"
+description = "Stackable Spark Operator"
 version = "0.1.0-nightly"
 authors = ["Malte Sander <malte.sander.it@gmail.com>"]
 edition = "2018"
