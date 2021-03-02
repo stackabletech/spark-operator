@@ -1,8 +1,10 @@
 [package]
 name = "stackable-spark-operator-server"
-version = "0.1.0"
+description = "Stackable Spark Operator"
+version = "0.1.0-nightly"
 authors = ["Malte Sander <malte.sander.it@gmail.com>"]
 edition = "2018"
+license = "Apache-2.0"
 
 [dependencies]
 stackable-operator = { git = "https://github.com/stackabletech/operator-rs.git", branch = "main" }
@@ -10,3 +12,10 @@ stackable-spark-crd = { path = "../crd" }
 stackable-spark-operator = { path = "../operator" }
 
 tokio = { version = "1.2", features = ["macros", "rt-multi-thread"] }
+
+[package.metadata.deb]
+maintainer-scripts = "packaging/debian/"
+systemd-units = { enable = false }
+assets = [
+    ["../target/release/stackable-spark-operator-server", "opt/stackable/spark-operator/", "755"],
+]
