@@ -5,18 +5,18 @@ metadata:
 spec:
   master:
     selectors:
-      - node_name: "mdesktop"
+      - nodeName: "mdesktop"
         instances: 1
-        master_port: 9999
-        master_web_ui_port: 11111
+        masterPort: 9999
+        masterWebUiPort: 11111
   worker:
     selectors:
-      - node_name: "mdesktop"
+      - nodeName: "mdesktop"
         instances: 1
         cores: 1
         memory: "1g"
-  history_server:
+  historyServer:
     selectors:
-      - node_name: "mdesktop"
+      - nodeName: "mdesktop"
         instances: 1
   version: "3.0.1"

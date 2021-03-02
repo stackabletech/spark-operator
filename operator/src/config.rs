@@ -222,7 +222,7 @@ pub fn get_config_properties(
 /// 1) from spec
 /// 2) from node
 /// 3) from selector
-/// 4) from config properties
+/// 4) from env variables
 /// # Arguments
 /// * `selector` - SparkClusterSelector containing desired env variables
 ///
