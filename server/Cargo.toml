@@ -1,8 +1,10 @@
 [package]
 name = "stackable-spark-operator-server"
+description = "Stackable Zookeeper Operator"
 version = "0.1.0-nightly"
 authors = ["Malte Sander <malte.sander.it@gmail.com>"]
 edition = "2018"
+license = "Apache-2.0"
 
 [dependencies]
 stackable-operator = { git = "https://github.com/stackabletech/operator-rs.git", branch = "main" }

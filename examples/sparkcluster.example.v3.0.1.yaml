@@ -5,8 +5,32 @@ metadata:
 spec:
   master:
     selectors:
-      - node_name: "mdesktop"
-        instances: 1
+      default:
+        selector:
+          matchLabels:
+            component: spark
+          matchExpressions:
+            - { key: tier, operator: In, values: [ cache ] }
+            - { key: environment, operator: NotIn, values: [ dev ] }
+        config:
+          cores: 1
+          memory: "1g"
+        instances: 3
+        instancesPerNode: 1
+      20core:
+        selector:
+          matchLabels:
+            component: spark
+            cores: 20
+          matchExpressions:
+            - { key: tier, operator: In, values: [ cache ] }
+            - { key: environment, operator: NotIn, values: [ dev ] }
+          config:
+            cores: 10
+            memory: "1g"
+          instances: 3
+          instancesPerNode: 2
+    config:
   worker:
     selectors:
       - node_name: "mdesktop"
