@@ -23,6 +23,13 @@ pub enum Error {
         backtrace: Backtrace,
     },
 
+    #[error("Error from semver: {source}")]
+    SemVerError {
+        #[from]
+        source: semver::SemVerError,
+        backtrace: Backtrace,
+    },
+
     #[error("Error during reconciliation: {0}")]
     ReconcileError(String),
 

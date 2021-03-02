@@ -202,11 +202,9 @@ impl SparkState {
         let status = self.status.take().unwrap_or_default();
         let spec_version = self.spec.version.clone();
 
-        // TODO: This is not ideal: We pass in status.conditions to `set_upgrading_conditions` which
-        // potentially adds a new condition but we don't update `status.conditions`....
         match (&status.current_version, &status.target_version) {
             (None, None) => {
-                // No current_version and no target_version must be initial installation.
+                // No current_version and no target_version: Must be initial installation.
                 // We'll set the Upgrading condition and the target_version to the version from spec.
                 info!(
                     "Initial installation, now moving towards version [{}]",
@@ -227,7 +225,7 @@ impl SparkState {
                 // No current_version but a target_version means we're still doing the initial
                 // installation. Will continue working towards that goal even if another version
                 // was set in the meantime.
-                info!(
+                debug!(
                     "Initial installation, still moving towards version [{}]",
                     target_version
                 );
@@ -251,14 +249,14 @@ impl SparkState {
                 // TODO: check valid up/downgrades
                 let message;
                 let reason;
-                if current_version.is_upgrade(&spec_version).unwrap() {
+                if current_version.is_upgrade(&spec_version)? {
                     message = format!(
                         "Upgrading from [{:?}] to [{:?}]",
                         current_version, &spec_version
                     );
                     reason = "Upgrading";
                     self.status = self.set_target_version(Some(&spec_version)).await?.status;
-                } else if current_version.is_downgrade(&spec_version).unwrap() {
+                } else if current_version.is_downgrade(&spec_version)? {
                     message = format!(
                         "Downgrading from [{:?}] to [{:?}]",
                         current_version, &spec_version
@@ -273,7 +271,7 @@ impl SparkState {
                     reason = "";
                 }
 
-                info!("{}", message);
+                trace!("{}", message);
 
                 self.status = self
                     .set_upgrading_condition(
@@ -289,12 +287,12 @@ impl SparkState {
                 // current_version and target_version are set means we're still in the process
                 // of upgrading. We'll only do some logging and checks and will update
                 // the condition so observedGeneration can be updated.
-                info!(
+                debug!(
                     "Still changing version from [{}] to [{}]",
                     current_version, target_version
                 );
                 if &self.spec.version != target_version {
-                    info!("A new target version was requested while we still upgrade from [{}] to [{}], finishing running upgrade first", current_version, target_version)
+                    info!("A new target version was requested while we still upgrade from [{}] to [{}], finishing running upgrade/downgrade first", current_version, target_version)
                 }
                 let message = format!(
                     "Changing version from [{:?}] to [{:?}]",
@@ -341,8 +339,8 @@ impl SparkState {
         let mut history_server: HashMap<String, Vec<Pod>> = HashMap::new();
 
         let status = self.status.as_ref().ok_or_else(|| error::Error::ReconcileError(
-        "Spark cluster status missing, this is a programming error and should never happen. Please report in our issue tracker.".to_string(),
-      ))?;
+            "Spark cluster status missing, this is a programming error and should never happen. Please report in our issue tracker.".to_string(),
+        ))?;
 
         while let Some(pod) = existing_pods.pop() {
             if let Some(labels) = pod.metadata.labels.clone() {
@@ -529,6 +527,11 @@ impl SparkState {
         // target_version to None
         if let Some(status) = &self.status.clone() {
             if let Some(target_version) = &status.target_version {
+                info!(
+                    "Finished upgrade/downgrade to [{}]. Cluster ready!",
+                    &target_version
+                );
+
                 self.status = self.set_target_version(None).await?.status;
                 self.status = self
                     .set_current_version(Some(&target_version))
