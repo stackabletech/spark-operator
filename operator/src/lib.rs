@@ -12,7 +12,6 @@ use kube::api::{ListParams, Meta};
 use serde_json::json;
 
 use async_trait::async_trait;
-use handlebars::Handlebars;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use stackable_operator::client::Client;
 use stackable_operator::conditions::ConditionStatus;
@@ -120,7 +119,7 @@ impl PodInformation {
     }
 }
 
-/// Count the pods stored in each (hashed) selector
+/// Retrieve all pods from a hashed selector (like PodInformation: Master, Worker, HistoryServer)
 ///
 /// # Arguments
 ///
@@ -315,7 +314,7 @@ impl SparkState {
     }
 
     /// Read all cluster specific pods. Check for valid labels such as HASH (required to match a certain selector) or TYPE (which indicates master/worker/history-server).
-    /// Remove invalid pods which are lacking (or have outdated) required labels or are terminating.
+    /// Remove invalid pods which are lacking (or have outdated) required labels.
     /// Sort incoming valid pods into corresponding maps (hash -> Vec<Pod>) for later usage for each node type (master/worker/history-server).
     pub async fn read_existing_pod_information(&mut self) -> SparkReconcileResult {
         trace!(
@@ -351,7 +350,7 @@ impl SparkState {
                     labels.get(VERSION_LABEL),
                 ) {
                     let spark_node_type = match SparkNodeType::from_str(node_type) {
-                        Ok(node_type) => node_type,
+                        Ok(nt) => nt,
                         Err(_) => {
                             error!(
                                 "Pod [{}] has an invalid type '{}' [{}], deleting it.",
@@ -586,7 +585,7 @@ impl SparkState {
     /// Create or delete pods if the instances do not match the specification
     /// We want to create all pods for each node (master/worker/history-server) immediately.
     /// If we created or deleted anything, we need a requeue to update the pod information for
-    /// succeeding methods. Checks for pod terminated / running need to be used after this method
+    /// succeeding methods.
     ///
     /// # Arguments
     /// * `node_type` - SparkNodeType (master/worker/history-server)
@@ -623,8 +622,8 @@ impl SparkState {
 
                 while current_count < spec_pod_count {
                     let pod = self.create_pod(selector, node_type, hash).await?;
-                    self.create_config_maps(node_type, hash).await?;
-                    debug!("Creating {} pod '{}'", node_type.as_str(), Meta::name(&pod));
+                    self.create_config_maps(node_type, selector, hash).await?;
+                    info!("Creating {} pod '{}'", node_type.as_str(), Meta::name(&pod));
                     current_count += 1;
                     applied_changes = true;
                 }
@@ -699,20 +698,19 @@ impl SparkState {
         node_type: &SparkNodeType,
         hash: &str,
     ) -> (Vec<Container>, Vec<Volume>) {
-        // TODO: get version from controller
         let image_name = format!("spark:{}", &self.spec.version);
 
         // adapt worker command with master url(s)
         let mut command = vec![node_type.get_command(&self.spec.version)];
-        let adapted_command = config::adapt_container_command(node_type, &self.spec.master);
-        if !adapted_command.is_empty() {
+
+        if let Some(adapted_command) = config::adapt_container_command(node_type, &self.spec.master)
+        {
             command.push(adapted_command);
         }
 
         let containers = vec![Container {
             image: Some(image_name),
             name: "spark".to_string(),
-            // TODO: worker -> add master port
             command: Some(command),
             volume_mounts: Some(config::create_volume_mounts(&self.spec.log_dir)),
             env: Some(config::create_required_startup_env()),
@@ -731,30 +729,21 @@ impl SparkState {
     /// * `node_type` - SparkNodeType (master/worker/history-server)
     /// * `hash` - NodeSelector hash
     ///
-    async fn create_config_maps(&self, node_type: &SparkNodeType, hash: &str) -> Result<(), Error> {
-        // TODO: remove hardcoded and make configurable and distinguish master / worker vs history-server
-        let mut config_properties: HashMap<String, String> = HashMap::new();
-        config_properties.insert(
-            "spark.history.fs.logDirectory".to_string(),
-            "file:///tmp".to_string(),
-        );
+    async fn create_config_maps(
+        &self,
+        node_type: &SparkNodeType,
+        selector: &SparkNodeSelector,
+        hash: &str,
+    ) -> Result<(), Error> {
+        let config_properties = config::get_config_properties(&self.spec, selector);
+        let env_vars = config::get_env_variables(selector);
 
-        config_properties.insert("spark.eventLog.enabled".to_string(), "true".to_string());
-
-        config_properties.insert("spark.eventLog.dir".to_string(), "file:///tmp".to_string());
-        // TODO: use product-conf for validation
-
-        let mut handlebars_config = Handlebars::new();
-        handlebars_config
-            .register_template_string("conf", "{{#each options}}{{@key}} {{this}}\n{{/each}}")
-            .expect("conf template should work");
-
-        let conf = handlebars_config
-            .render("conf", &json!({ "options": config_properties }))
-            .unwrap();
+        let conf = config::convert_map_to_string(&config_properties, " ");
+        let env = config::convert_map_to_string(&env_vars, "=");
 
         let mut data = BTreeMap::new();
         data.insert("spark-defaults.conf".to_string(), conf);
+        data.insert("spark-env.sh".to_string(), env);
 
         let cm_name = self.create_config_map_name(node_type, hash);
         let cm = create_config_map(&self.context.resource, &cm_name, data)?;

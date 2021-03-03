@@ -95,7 +95,7 @@ pub struct SparkNode {
 #[derivative(Hash, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SparkNodeSelector {
-    // common
+    // common options
     pub node_name: String,
     // we need to ignore instances from hashing -> if we scale up or down, the hash
     // for the selectors changes and the operator removes all nodes and rebuilds them
@@ -103,11 +103,18 @@ pub struct SparkNodeSelector {
     pub instances: usize,
     pub config: Option<Vec<ConfigOption>>,
     pub env: Option<Vec<ConfigOption>>,
-    // TODO: master -> use Option<T>
-    // worker -> use Option<T>
+
+    // master options
+    pub master_port: Option<usize>,
+    pub master_web_ui_port: Option<usize>,
+    // worker options
     pub cores: Option<usize>,
     pub memory: Option<String>,
-    // TODO: history_server -> use Option<T>
+    pub worker_port: Option<usize>,
+    pub worker_web_ui_port: Option<usize>,
+    // history-server options
+    pub store_path: Option<String>,
+    pub history_ui_port: Option<usize>,
 }
 
 impl SparkNode {
@@ -242,6 +249,14 @@ pub enum SparkVersion {
     #[serde(rename = "3.0.1")]
     #[strum(serialize = "3.0.1")]
     v3_0_1,
+
+    #[serde(rename = "3.0.2")]
+    #[strum(serialize = "3.0.2")]
+    v3_0_2,
+
+    #[serde(rename = "3.1.1")]
+    #[strum(serialize = "3.1.1")]
+    v3_1_1,
 }
 
 impl SparkVersion {

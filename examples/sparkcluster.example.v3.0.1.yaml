@@ -7,6 +7,8 @@ spec:
     selectors:
       - nodeName: "mdesktop"
         instances: 1
+        masterPort: 9999
+        masterWebUiPort: 11111
   worker:
     selectors:
       - nodeName: "mdesktop"
