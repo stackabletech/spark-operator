@@ -173,9 +173,9 @@ impl SparkNodeType {
     /// Returns the container start command for a spark node
     /// Right now works only for images using hadoop2.7
     /// # Arguments
-    /// * `version` - current specified SparkVersion
+    /// * `version` - Current specified cluster version
     ///
-    pub fn get_command(&self, version: &SparkVersion) -> String {
+    pub fn get_command(&self, version: &str) -> String {
         // TODO: remove hardcoded and adapt for versioning
         format!(
             "spark-{}-bin-hadoop2.7/sbin/start-{}.sh",
@@ -263,14 +263,12 @@ impl SparkVersion {
     pub fn is_upgrade(&self, to: &Self) -> Result<bool, SemVerError> {
         let from_version = Version::parse(&self.to_string())?;
         let to_version = Version::parse(&to.to_string())?;
-
         Ok(to_version > from_version)
     }
 
     pub fn is_downgrade(&self, to: &Self) -> Result<bool, SemVerError> {
         let from_version = Version::parse(&self.to_string())?;
         let to_version = Version::parse(&to.to_string())?;
-
         Ok(to_version < from_version)
     }
 }

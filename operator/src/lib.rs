@@ -1,13 +1,14 @@
 #![feature(backtrace)]
 mod config;
 mod error;
+mod pod_utils;
 
 use crate::error::Error;
 
 use kube::Api;
 use tracing::{debug, error, info, trace};
 
-use k8s_openapi::api::core::v1::{ConfigMap, Container, Pod, PodSpec, Volume};
+use k8s_openapi::api::core::v1::{ConfigMap, Pod};
 use kube::api::{ListParams, Meta};
 use serde_json::json;
 
@@ -18,11 +19,10 @@ use stackable_operator::conditions::ConditionStatus;
 use stackable_operator::config_map::create_config_map;
 use stackable_operator::controller::{Controller, ControllerStrategy, ReconciliationState};
 use stackable_operator::error::OperatorResult;
-use stackable_operator::krustlet::create_tolerations;
 use stackable_operator::reconcile::{
     ReconcileFunctionAction, ReconcileResult, ReconciliationContext,
 };
-use stackable_operator::{finalizer, metadata, podutils};
+use stackable_operator::{finalizer, podutils};
 use stackable_spark_crd::{
     SparkCluster, SparkClusterSpec, SparkClusterStatus, SparkNodeSelector, SparkNodeType,
     SparkVersion,
@@ -32,16 +32,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::time::Duration;
-use uuid::Uuid;
 
 const FINALIZER_NAME: &str = "spark.stackable.tech/cleanup";
-
-/// Pod label which holds the selector hash in the pods to identify which selector they belong to
-const HASH_LABEL: &str = "spark.stackable.tech/hash";
-/// Pod label which holds node role / type (master, worker, history-server) in the pods
-const TYPE_LABEL: &str = "spark.stackable.tech/type";
-/// Pod label which indicates the cluster version it was created for
-const VERSION_LABEL: &str = "spark.stackable.tech/currentVersion";
 
 type SparkReconcileResult = ReconcileResult<error::Error>;
 
@@ -346,9 +338,9 @@ impl SparkState {
             if let Some(labels) = pod.metadata.labels.clone() {
                 // we require HASH and TYPE label to identify and sort the pods into the NodeInformation
                 if let (Some(hash), Some(node_type), Some(version)) = (
-                    labels.get(HASH_LABEL),
-                    labels.get(TYPE_LABEL),
-                    labels.get(VERSION_LABEL),
+                    labels.get(pod_utils::HASH_LABEL),
+                    labels.get(pod_utils::TYPE_LABEL),
+                    labels.get(pod_utils::VERSION_LABEL),
                 ) {
                     let spark_node_type = match SparkNodeType::from_str(node_type) {
                         Ok(nt) => nt,
@@ -356,7 +348,7 @@ impl SparkState {
                             error!(
                                 "Pod [{}] has an invalid type '{}' [{}], deleting it.",
                                 Meta::name(&pod),
-                                TYPE_LABEL,
+                                pod_utils::TYPE_LABEL,
                                 node_type
                             );
                             self.context.client.delete(&pod).await?;
@@ -370,7 +362,7 @@ impl SparkState {
                             error!(
                                 "Pod [{}] has an outdated '{}' [{}], deleting it.",
                                 Meta::name(&pod),
-                                HASH_LABEL,
+                                pod_utils::HASH_LABEL,
                                 hash
                             );
                             self.context.client.delete(&pod).await?;
@@ -386,7 +378,7 @@ impl SparkState {
                             info!(
                                 "Pod [{}] has an outdated '{}' [{}] - required is [{}], deleting it",
                                 Meta::name(&pod),
-                                VERSION_LABEL,
+                                pod_utils::VERSION_LABEL,
                                 version,
                                 target_version
                             );
@@ -410,7 +402,7 @@ impl SparkState {
                 } else {
                     // some labels missing
                     error!("Pod [{}] is missing one or more required '{:?}' labels, this is illegal, deleting it.",
-                         Meta::name(&pod), vec![HASH_LABEL, TYPE_LABEL]);
+                         Meta::name(&pod), vec![pod_utils::HASH_LABEL, pod_utils::TYPE_LABEL, pod_utils::VERSION_LABEL]);
                     self.context.client.delete(&pod).await?;
                 }
             } else {
@@ -651,77 +643,16 @@ impl SparkState {
         node_type: &SparkNodeType,
         hash: &str,
     ) -> Result<Pod, Error> {
-        let pod = self.build_pod(selector, hash, node_type)?;
+        let pod = pod_utils::build_pod(
+            &self.context,
+            node_type,
+            selector,
+            &self.spec.master,
+            hash,
+            &self.spec.version.to_string(),
+            &self.spec.log_dir,
+        )?;
         Ok(self.context.client.create(&pod).await?)
-    }
-
-    /// Build a pod using its selector and node_type
-    ///
-    /// # Arguments
-    /// * `selector` - SparkNodeSelector which contains specific pod information
-    /// * `node_type` - SparkNodeType (master/worker/history-server)
-    /// * `hash` - NodeSelector hash
-    ///
-    fn build_pod(
-        &self,
-        selector: &SparkNodeSelector,
-        hash: &str,
-        node_type: &SparkNodeType,
-    ) -> Result<Pod, Error> {
-        let (containers, volumes) = self.build_containers(node_type, hash);
-
-        Ok(Pod {
-            metadata: metadata::build_metadata(
-                self.create_pod_name(node_type, hash),
-                Some(self.build_labels(node_type, hash)),
-                &self.context.resource,
-                true,
-            )?,
-            spec: Some(PodSpec {
-                node_name: Some(selector.node_name.clone()),
-                tolerations: Some(create_tolerations()),
-                containers,
-                volumes: Some(volumes),
-                ..PodSpec::default()
-            }),
-            ..Pod::default()
-        })
-    }
-
-    /// Build required pod containers
-    ///
-    /// # Arguments
-    /// * `node_type` - SparkNodeType (master/worker/history-server)
-    /// * `hash` - NodeSelector hash
-    ///
-    fn build_containers(
-        &self,
-        node_type: &SparkNodeType,
-        hash: &str,
-    ) -> (Vec<Container>, Vec<Volume>) {
-        let image_name = format!("spark:{}", &self.spec.version);
-
-        // adapt worker command with master url(s)
-        let mut command = vec![node_type.get_command(&self.spec.version)];
-
-        if let Some(adapted_command) = config::adapt_container_command(node_type, &self.spec.master)
-        {
-            command.push(adapted_command);
-        }
-
-        let containers = vec![Container {
-            image: Some(image_name),
-            name: "spark".to_string(),
-            command: Some(command),
-            volume_mounts: Some(config::create_volume_mounts(&self.spec.log_dir)),
-            env: Some(config::create_required_startup_env()),
-            ..Container::default()
-        }];
-
-        let cm_name = self.create_config_map_name(node_type, hash);
-        let volumes = config::create_volumes(&cm_name);
-
-        (containers, volumes)
     }
 
     /// Create required config maps for the cluster
@@ -746,53 +677,11 @@ impl SparkState {
         data.insert("spark-defaults.conf".to_string(), conf);
         data.insert("spark-env.sh".to_string(), env);
 
-        let cm_name = self.create_config_map_name(node_type, hash);
+        let cm_name = pod_utils::create_config_map_name(&self.context.name(), node_type, hash);
         let cm = create_config_map(&self.context.resource, &cm_name, data)?;
         self.context.client.apply_patch(&cm, &cm).await?;
 
         Ok(())
-    }
-
-    /// Provide required labels for pods
-    ///
-    /// # Arguments
-    /// * `node_type` - SparkNodeType (master/worker/history-server)
-    /// * `hash` - NodeSelector hash
-    ///
-    fn build_labels(&self, node_type: &SparkNodeType, hash: &str) -> BTreeMap<String, String> {
-        let mut labels = BTreeMap::new();
-        labels.insert(TYPE_LABEL.to_string(), node_type.to_string());
-        labels.insert(HASH_LABEL.to_string(), hash.to_string());
-        labels.insert(VERSION_LABEL.to_string(), self.spec.version.to_string());
-
-        labels
-    }
-
-    /// All pod names follow a simple pattern: <spark_cluster_name>-<node_type>-<selector_hash>-<UUID>
-    ///
-    /// # Arguments
-    /// * `node_type` - SparkNodeType (master/worker/history-server)
-    /// * `hash` - NodeSelector hash
-    ///
-    fn create_pod_name(&self, node_type: &SparkNodeType, hash: &str) -> String {
-        format!(
-            "{}-{}-{}-{}",
-            self.context.name(),
-            node_type.as_str(),
-            hash,
-            Uuid::new_v4().as_fields().0.to_string(),
-        )
-    }
-
-    /// All config map names follow a simple pattern: <name of SparkCluster object>-<NodeType name>-<SelectorHash>-cm
-    /// That means multiple pods of one selector share one and the same config map
-    ///
-    /// # Arguments
-    /// * `node_type` - SparkNodeType (master/worker/history-server)
-    /// * `hash` - NodeSelector hash
-    ///
-    fn create_config_map_name(&self, node_type: &SparkNodeType, hash: &str) -> String {
-        format!("{}-{}-{}-cm", self.context.name(), node_type.as_str(), hash)
     }
 }
 

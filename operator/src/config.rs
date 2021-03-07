@@ -1,4 +1,4 @@
-use k8s_openapi::api::core::v1::{ConfigMapVolumeSource, EnvVar, Volume, VolumeMount};
+use k8s_openapi::api::core::v1::EnvVar;
 use stackable_spark_crd::{
     ConfigOption, SparkClusterSpec, SparkNode, SparkNodeSelector, SparkNodeType,
 };
@@ -31,122 +31,88 @@ const SPARK_HISTORY_UI_PORT: &str = "spark.history.ui.port";
 /// The worker start command needs to be extended with all known master nodes and ports.
 /// The required URLs are in format: 'spark://<master-node-name>:<master-port'
 /// Multiple masters are separated via ','
-/// The master port can be configured and needs to be checked in config / env or general options.
-/// Defaults to 7077 if no port is specified.
 ///
 /// # Arguments
 /// * `node_type` - SparkNodeType (master/worker/history-server)
 /// * `master` - Master SparkNode containing the required settings
 ///
-pub fn adapt_container_command(node_type: &SparkNodeType, master: &SparkNode) -> Option<String> {
-    let mut master_url: String = String::new();
+pub fn adapt_worker_command(node_type: &SparkNodeType, master: &SparkNode) -> Option<String> {
+    let mut adapted_command: String = String::new();
     // only for workers
     if node_type != &SparkNodeType::Worker {
         return None;
     }
+
+    let master_urls = get_master_urls(master);
+    for url in master_urls {
+        if !adapted_command.is_empty() {
+            adapted_command.push(',');
+        }
+        adapted_command.push_str(url.as_str());
+    }
+
+    Some(adapted_command)
+}
+
+/// The master port can be configured and needs to be checked in config / env or general options.
+/// Defaults to 7077 if no port is specified.
+///
+/// # Arguments
+/// * `master` - Master SparkNode containing the required settings
+///
+pub fn get_master_urls(master: &SparkNode) -> Vec<String> {
+    let mut master_urls = vec![];
     // get all available master selectors
     for selector in &master.selectors {
         // check in conf properties and env variables for port
         // conf properties have higher priority than env variables
         if let Some(conf) = &selector.config {
-            if let Some(master) =
-                search_master_port(&selector.node_name, SPARK_MASTER_PORT_CONF, conf)
-            {
-                master_url.push_str(master.as_str());
+            if let Some(port) = search_master_port(SPARK_MASTER_PORT_CONF, conf) {
+                master_urls.push(format!(
+                    "{}{}:{}",
+                    SPARK_URL_START, selector.node_name, port
+                ));
                 continue;
             }
         } else if let Some(env) = &selector.env {
-            if let Some(master) =
-                search_master_port(&selector.node_name, SPARK_MASTER_PORT_ENV, env)
-            {
-                master_url.push_str(master.as_str());
+            if let Some(port) = search_master_port(SPARK_MASTER_PORT_ENV, env) {
+                master_urls.push(format!(
+                    "{}{}:{}",
+                    SPARK_URL_START, selector.node_name, port
+                ));
                 continue;
             }
         } else if let Some(port) = selector.master_port {
-            master_url
-                .push_str(format!("{}{}:{},", SPARK_URL_START, selector.node_name, port).as_str());
+            master_urls.push(format!(
+                "{}{}:{}",
+                SPARK_URL_START, selector.node_name, port
+            ));
             continue;
         }
 
         // TODO: default to default value in product conf
-        master_url
-            .push_str(format!("{}{}:{},", SPARK_URL_START, selector.node_name, "7077").as_str());
+        master_urls.push(format!(
+            "{}{}:{}",
+            SPARK_URL_START, selector.node_name, "7077"
+        ));
     }
 
-    Some(master_url)
+    master_urls
 }
 
 /// Search for a master port in config properties or env variables
 ///
 /// # Arguments
-/// * `node_name` - Node IP / DNS address
 /// * `option_name` - Name of the option to look for e.g. "SPARK_MASTER_PORT"
 /// * `options` - Vec of config properties or env variables
 ///
-fn search_master_port(
-    node_name: &str,
-    option_name: &str,
-    options: &[ConfigOption],
-) -> Option<String> {
+fn search_master_port(option_name: &str, options: &[ConfigOption]) -> Option<String> {
     for option in options {
         if option.name == option_name {
-            return Some(format!(
-                "{}{}:{},",
-                SPARK_URL_START, node_name, option.value
-            ));
+            return Some(option.value.clone());
         }
     }
     None
-}
-
-const CONFIG_VOLUME: &str = "config-volume";
-const EVENT_VOLUME: &str = "event-volume";
-
-/// Create volume mounts for the spark config files and optional an event dir for spark logs
-///
-/// # Arguments
-/// * `log_dir` - Event/Log dir for SparkNodes. History Server reads these logs to offer metrics
-///
-pub fn create_volume_mounts(log_dir: &Option<String>) -> Vec<VolumeMount> {
-    let mut volume_mounts = vec![VolumeMount {
-        mount_path: "conf".to_string(),
-        name: CONFIG_VOLUME.to_string(),
-        ..VolumeMount::default()
-    }];
-    // if log dir is provided, create another folder for logDir
-    if let Some(dir) = log_dir {
-        volume_mounts.push(VolumeMount {
-            mount_path: dir.clone(),
-            name: EVENT_VOLUME.to_string(),
-            ..VolumeMount::default()
-        });
-    }
-
-    volume_mounts
-}
-
-/// Create a volume to store the spark config files and optional an event volume for spark logs
-///
-/// # Arguments
-/// * `configmap_name` - ConfigMap name where the required spark configuration files (spark-defaults.conf and spark-env.sh) are located
-///
-pub fn create_volumes(configmap_name: &str) -> Vec<Volume> {
-    let volumes = vec![
-        Volume {
-            name: CONFIG_VOLUME.to_string(),
-            config_map: Some(ConfigMapVolumeSource {
-                name: Some(configmap_name.to_string()),
-                ..ConfigMapVolumeSource::default()
-            }),
-            ..Volume::default()
-        },
-        Volume {
-            name: EVENT_VOLUME.to_string(),
-            ..Volume::default()
-        },
-    ];
-
-    volumes
 }
 
 /// The SPARK_CONFIG_DIR and SPARK_NO_DAEMONIZE must be provided as env variable in the container.
