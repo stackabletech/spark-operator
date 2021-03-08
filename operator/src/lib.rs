@@ -84,7 +84,7 @@ impl PodInformation {
     ///
     /// * `node_type` - Optional SparkNodeType (master/worker/history-server);
     ///
-    pub fn get_all_pods(&self, node_type: Option<SparkNodeType>) -> Vec<Pod> {
+    fn get_all_pods(&self, node_type: Option<SparkNodeType>) -> Vec<Pod> {
         let mut pods: Vec<Pod> = vec![];
 
         match node_type {
@@ -306,9 +306,14 @@ impl SparkState {
         Ok(ReconcileFunctionAction::Continue)
     }
 
-    /// Read all cluster specific pods. Check for valid labels such as HASH (required to match a certain selector) or TYPE (which indicates master/worker/history-server).
+    /// Read all cluster specific pods. Check for required valid labels such as:
+    /// - HASH (required to match a certain selector)
+    /// - TYPE (which indicates master/worker/history-server)
+    /// - VERSION (cluster version the pod was created for)
+    ///
     /// Remove invalid pods which are lacking (or have outdated) required labels.
-    /// Sort incoming valid pods into corresponding maps (hash -> Vec<Pod>) for later usage for each node type (master/worker/history-server).
+    /// Sort incoming valid pods into corresponding maps (hash -> Vec<Pod>)
+    /// for later usage for each node type (master/worker/history-server).
     pub async fn read_existing_pod_information(&mut self) -> SparkReconcileResult {
         trace!(
             "Reading existing pod information for {}",

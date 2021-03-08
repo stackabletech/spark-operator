@@ -19,7 +19,7 @@ pub const TYPE_LABEL: &str = "spark.stackable.tech/type";
 /// Pod label which indicates the cluster version it was created for
 pub const VERSION_LABEL: &str = "spark.stackable.tech/currentVersion";
 /// Pod label which indicates the known master urls for a worker pod
-pub const SPARK_MASTER_URLS_HASH_LABEL: &str = "spark.stackable.tech/masterUrls";
+pub const MASTER_URLS_HASH_LABEL: &str = "spark.stackable.tech/masterUrls";
 
 /// Name of the config volume to store configmap data
 const CONFIG_VOLUME: &str = "config-volume";
@@ -178,10 +178,12 @@ fn build_labels(
     labels.insert(HASH_LABEL.to_string(), hash.to_string());
     labels.insert(VERSION_LABEL.to_string(), version.to_string());
 
-    labels.insert(
-        SPARK_MASTER_URLS_HASH_LABEL.to_string(),
-        get_hashed_master_urls(master_node),
-    );
+    if node_type == &SparkNodeType::Worker {
+        labels.insert(
+            MASTER_URLS_HASH_LABEL.to_string(),
+            get_hashed_master_urls(master_node),
+        );
+    }
 
     labels
 }
