@@ -646,7 +646,7 @@ impl SparkState {
         let pod = pod_utils::build_pod(
             &self.context,
             node_type,
-            selector,
+            selector.node_name.as_str(),
             &self.spec.master,
             hash,
             &self.spec.version.to_string(),

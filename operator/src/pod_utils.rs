@@ -6,7 +6,7 @@ use k8s_openapi::api::core::v1::{
 use stackable_operator::krustlet::create_tolerations;
 use stackable_operator::metadata;
 use stackable_operator::reconcile::ReconciliationContext;
-use stackable_spark_crd::{SparkCluster, SparkNode, SparkNodeSelector, SparkNodeType};
+use stackable_spark_crd::{SparkCluster, SparkNode, SparkNodeType};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
@@ -19,7 +19,7 @@ pub const TYPE_LABEL: &str = "spark.stackable.tech/type";
 /// Pod label which indicates the cluster version it was created for
 pub const VERSION_LABEL: &str = "spark.stackable.tech/currentVersion";
 /// Pod label which indicates the known master urls for a worker pod
-pub const SPARK_MASTER_URLS_LABEL: &str = "spark.stackable.tech/masterUrls";
+pub const SPARK_MASTER_URLS_HASH_LABEL: &str = "spark.stackable.tech/masterUrls";
 
 /// Name of the config volume to store configmap data
 const CONFIG_VOLUME: &str = "config-volume";
@@ -31,7 +31,7 @@ const EVENT_VOLUME: &str = "event-volume";
 /// # Arguments
 /// * `context` - Reconciliation context for cluster name and resource (metadata)
 /// * `node_type` - SparkNodeType (master/worker/history-server)
-/// * `selector` - SparkNodeSelector which contains specific pod information
+/// * `node_name` - Specific node_name (host) of the pod
 /// * `master_node` - SparkNode master to retrieve master urls for worker start commands
 /// * `hash` - NodeSelector hash
 /// * `version` - Current cluster version
@@ -40,7 +40,7 @@ const EVENT_VOLUME: &str = "event-volume";
 pub fn build_pod(
     context: &ReconciliationContext<SparkCluster>,
     node_type: &SparkNodeType,
-    selector: &SparkNodeSelector,
+    node_name: &str,
     master_node: &SparkNode,
     hash: &str,
     version: &str,
@@ -58,7 +58,7 @@ pub fn build_pod(
             true,
         )?,
         spec: Some(PodSpec {
-            node_name: Some(selector.node_name.clone()),
+            node_name: Some(node_name.to_string()),
             tolerations: Some(create_tolerations()),
             containers,
             volumes: Some(volumes),
@@ -156,13 +156,16 @@ pub fn create_volume_mounts(log_dir: &Option<String>) -> Vec<VolumeMount> {
     volume_mounts
 }
 
-/// Provide required labels for pods
+/// Provide required labels for pods. We need to keep track of which workers are
+/// connected to which masters. This is accomplished by hashing known master urls
+/// and comparing to the pods. If the hash from pod and selector differ, that means
+/// we had changes (added / removed) masters and therefore restart the workers.
 ///
 /// # Arguments
 /// * `node_type` - SparkNodeType (master/worker/history-server)
 /// * `hash` - NodeSelector hash
 /// * `version` - Current cluster version
-/// * `master_node` - SparkNode master to retrieve master urls for worker start commands
+/// * `master_node` - SparkNode master to retrieve master urls
 ///
 fn build_labels(
     node_type: &SparkNodeType,
@@ -175,17 +178,28 @@ fn build_labels(
     labels.insert(HASH_LABEL.to_string(), hash.to_string());
     labels.insert(VERSION_LABEL.to_string(), version.to_string());
 
+    labels.insert(
+        SPARK_MASTER_URLS_HASH_LABEL.to_string(),
+        get_hashed_master_urls(master_node),
+    );
+
+    labels
+}
+
+/// Get all master urls and hash them. This is required to keep track of which workers
+/// are connected to which masters. In case masters are added / deleted, this hash changes
+/// and we need to restart the worker pods to keep them up to date with all known masters.
+///
+/// # Arguments
+/// * `master_node` - SparkNode master to retrieve master urls for pod label hash
+///
+pub fn get_hashed_master_urls(master_node: &SparkNode) -> String {
     let master_urls = config::get_master_urls(master_node);
     let mut hasher = DefaultHasher::new();
     for url in master_urls {
         url.hash(&mut hasher);
     }
-    labels.insert(
-        SPARK_MASTER_URLS_LABEL.to_string(),
-        hasher.finish().to_string(),
-    );
-
-    labels
+    hasher.finish().to_string()
 }
 
 /// All pod names follow a simple pattern: <spark_cluster_name>-<node_type>-<selector_hash>-<UUID>

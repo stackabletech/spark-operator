@@ -58,7 +58,7 @@ pub fn adapt_worker_command(node_type: &SparkNodeType, master: &SparkNode) -> Op
 /// Defaults to 7077 if no port is specified.
 ///
 /// # Arguments
-/// * `master` - Master SparkNode containing the required settings
+/// * `master` - Master SparkNode containing the required node_name and port settings
 ///
 pub fn get_master_urls(master: &SparkNode) -> Vec<String> {
     let mut master_urls = vec![];
@@ -67,7 +67,7 @@ pub fn get_master_urls(master: &SparkNode) -> Vec<String> {
         // check in conf properties and env variables for port
         // conf properties have higher priority than env variables
         if let Some(conf) = &selector.config {
-            if let Some(port) = search_master_port(SPARK_MASTER_PORT_CONF, conf) {
+            if let Some(port) = get_master_port(SPARK_MASTER_PORT_CONF, conf) {
                 master_urls.push(format!(
                     "{}{}:{}",
                     SPARK_URL_START, selector.node_name, port
@@ -75,7 +75,7 @@ pub fn get_master_urls(master: &SparkNode) -> Vec<String> {
                 continue;
             }
         } else if let Some(env) = &selector.env {
-            if let Some(port) = search_master_port(SPARK_MASTER_PORT_ENV, env) {
+            if let Some(port) = get_master_port(SPARK_MASTER_PORT_ENV, env) {
                 master_urls.push(format!(
                     "{}{}:{}",
                     SPARK_URL_START, selector.node_name, port
@@ -106,7 +106,7 @@ pub fn get_master_urls(master: &SparkNode) -> Vec<String> {
 /// * `option_name` - Name of the option to look for e.g. "SPARK_MASTER_PORT"
 /// * `options` - Vec of config properties or env variables
 ///
-fn search_master_port(option_name: &str, options: &[ConfigOption]) -> Option<String> {
+fn get_master_port(option_name: &str, options: &[ConfigOption]) -> Option<String> {
     for option in options {
         if option.name == option_name {
             return Some(option.value.clone());
