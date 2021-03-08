@@ -12,6 +12,7 @@ const SPARK_EVENT_LOG_ENABLED: &str = "spark.eventLog.enabled";
 const SPARK_EVENT_LOG_DIR: &str = "spark.eventLog.dir";
 const SPARK_AUTHENTICATE: &str = "spark.authenticate";
 const SPARK_AUTHENTICATE_SECRET: &str = "spark.authenticate.secret";
+const SPARK_PORT_MAX_RETRIES: &str = "spark.port.maxRetries";
 // master
 const SPARK_MASTER_PORT_ENV: &str = "SPARK_MASTER_PORT";
 const SPARK_MASTER_PORT_CONF: &str = "spark.master.port";
@@ -157,6 +158,13 @@ pub fn get_config_properties(
     if let Some(secret) = &spec.secret {
         config.insert(SPARK_AUTHENTICATE.to_string(), "true".to_string());
         config.insert(SPARK_AUTHENTICATE_SECRET.to_string(), secret.to_string());
+    }
+
+    if let Some(max_port_retries) = &spec.max_port_retries {
+        config.insert(
+            SPARK_PORT_MAX_RETRIES.to_string(),
+            max_port_retries.to_string(),
+        );
     }
 
     // history server

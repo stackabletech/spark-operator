@@ -75,13 +75,18 @@ There are three levels of configuration:
 
 |logDir
 |string
-|The log folder for spark applications
+|The log folder for spark applications (must created by user)
 |spark.history.fs.logDirectory=logDir, spark.eventLog.enabled=true, spark.eventLog.dir=logDir;
 
 |secret
 |string
 |A secret shared between nodes and required to submit applications via spark-submit
 |spark.authenticate=true, spark.authenticate.secret=secret;
+
+|maxPortRetries
+|integer
+|Maximum number of retries when binding to a port before giving up. When a port is given a specific value (non 0), each subsequent retry will increment the port used in the previous attempt by 1 before retrying. This essentially allows it to try a range of ports from the start port specified to port + maxRetries.
+|spark.port.maxRetries
 |===
 
 === Node type options

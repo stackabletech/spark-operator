@@ -31,6 +31,7 @@ pub struct SparkClusterSpec {
     pub version: SparkVersion,
     pub secret: Option<String>,
     pub log_dir: Option<String>,
+    pub max_port_retries: Option<usize>,
 }
 
 impl SparkClusterSpec {
