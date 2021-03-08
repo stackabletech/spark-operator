@@ -517,6 +517,34 @@ impl SparkState {
         true
     }
 
+    pub async fn check_worker_master_urls(&self) -> SparkReconcileResult {
+        if let Some(pod_info) = &self.pod_information {
+            let worker_pods = pod_info.get_all_pods(Some(SparkNodeType::Worker));
+            for pod in &worker_pods {
+                if let Some(labels) = &pod.metadata.labels {
+                    if let Some(label_hashed_master_urls) =
+                        labels.get(pod_utils::MASTER_URLS_HASH_LABEL)
+                    {
+                        let current_hashed_master_urls =
+                            pod_utils::get_hashed_master_urls(&self.spec.master);
+                        if label_hashed_master_urls != &current_hashed_master_urls {
+                            info!(
+                                "Pod [{}] has an outdated '{}' [{}] - required is [{}], deleting it",
+                                Meta::name(pod),
+                                pod_utils::MASTER_URLS_HASH_LABEL,
+                                label_hashed_master_urls,
+                                current_hashed_master_urls,
+                            );
+                            self.context.client.delete(pod).await?;
+                            return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(ReconcileFunctionAction::Continue)
+    }
+
     /// Process the cluster status version for upgrades/downgrades.
     pub async fn process_version(&mut self) -> SparkReconcileResult {
         // If we reach here it means all pods must be running on target_version.
@@ -709,6 +737,8 @@ impl ReconciliationState for SparkState {
                 .then(self.reconcile_cluster(&SparkNodeType::Worker))
                 .await?
                 .then(self.reconcile_cluster(&SparkNodeType::HistoryServer))
+                .await?
+                .then(self.check_worker_master_urls())
                 .await?
                 .then(self.process_version())
                 .await

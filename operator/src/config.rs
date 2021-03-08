@@ -4,8 +4,6 @@ use stackable_spark_crd::{
 };
 use std::collections::HashMap;
 
-const SPARK_URL_START: &str = "spark://";
-
 // basic for startup
 const SPARK_NO_DAEMONIZE: &str = "SPARK_NO_DAEMONIZE";
 const SPARK_CONF_DIR: &str = "SPARK_CONF_DIR";
@@ -29,7 +27,7 @@ const SPARK_HISTORY_STORE_PATH: &str = "spark.history.store.path";
 const SPARK_HISTORY_UI_PORT: &str = "spark.history.ui.port";
 
 /// The worker start command needs to be extended with all known master nodes and ports.
-/// The required URLs are in format: 'spark://<master-node-name>:<master-port'
+/// The required URLs are in format: '<master-node-name>:<master-port' with one time prefix 'spark://'
 /// Multiple masters are separated via ','
 ///
 /// # Arguments
@@ -47,6 +45,8 @@ pub fn adapt_worker_command(node_type: &SparkNodeType, master: &SparkNode) -> Op
     for url in master_urls {
         if !adapted_command.is_empty() {
             adapted_command.push(',');
+        } else {
+            adapted_command.push_str("spark://");
         }
         adapted_command.push_str(url.as_str());
     }
@@ -68,36 +68,34 @@ pub fn get_master_urls(master: &SparkNode) -> Vec<String> {
         // conf properties have higher priority than env variables
         if let Some(conf) = &selector.config {
             if let Some(port) = get_master_port(SPARK_MASTER_PORT_CONF, conf) {
-                master_urls.push(format!(
-                    "{}{}:{}",
-                    SPARK_URL_START, selector.node_name, port
-                ));
+                master_urls.push(create_master_url(&selector.node_name, &port.to_string()));
                 continue;
             }
         } else if let Some(env) = &selector.env {
             if let Some(port) = get_master_port(SPARK_MASTER_PORT_ENV, env) {
-                master_urls.push(format!(
-                    "{}{}:{}",
-                    SPARK_URL_START, selector.node_name, port
-                ));
+                master_urls.push(create_master_url(&selector.node_name, &port.to_string()));
                 continue;
             }
         } else if let Some(port) = selector.master_port {
-            master_urls.push(format!(
-                "{}{}:{}",
-                SPARK_URL_START, selector.node_name, port
-            ));
+            master_urls.push(create_master_url(&selector.node_name, &port.to_string()));
             continue;
         }
 
         // TODO: default to default value in product conf
-        master_urls.push(format!(
-            "{}{}:{}",
-            SPARK_URL_START, selector.node_name, "7077"
-        ));
+        master_urls.push(create_master_url(&selector.node_name, "7077"));
     }
 
     master_urls
+}
+
+/// Create master url in format: <node_name>:<port>
+///
+/// # Arguments
+/// * `node_name` - Master node_name / host name
+/// * `port` - Port on which the master is running
+///
+fn create_master_url(node_name: &str, port: &str) -> String {
+    format!("{}:{}", node_name, port)
 }
 
 /// Search for a master port in config properties or env variables
@@ -139,6 +137,7 @@ pub fn create_required_startup_env() -> Vec<EnvVar> {
 /// 2) from node
 /// 3) from selector
 /// 4) from config properties
+///
 /// # Arguments
 /// * `spec` - SparkCluster spec for common properties
 /// * `selector` - SparkClusterSelector containing desired config properties
@@ -192,6 +191,7 @@ pub fn get_config_properties(
 /// 2) from node
 /// 3) from selector
 /// 4) from environment variables
+///
 /// # Arguments
 /// * `selector` - SparkClusterSelector containing desired env variables
 ///
@@ -236,6 +236,7 @@ pub fn get_env_variables(selector: &SparkNodeSelector) -> HashMap<String, String
 }
 
 /// Unroll a map into a String using a given assignment character (for writing config maps)
+///
 /// # Arguments
 /// * `map` - Map containing option_name:option_value pairs
 /// * `assignment` - Used character to assign option_value to option_name (e.g. "=", " ", ":" ...)
