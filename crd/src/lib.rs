@@ -92,7 +92,7 @@ pub struct SparkNode {
     // TODO: history_server -> use Option<T>
 }
 
-#[derive(Derivative, Clone, Debug, Deserialize, Eq, JsonSchema, Serialize)]
+#[derive(Derivative, Clone, Debug, Default, Deserialize, Eq, JsonSchema, Serialize)]
 #[derivative(Hash, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SparkNodeSelector {
