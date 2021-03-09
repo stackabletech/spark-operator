@@ -20,3 +20,4 @@ spec:
       - nodeName: "mdesktop"
         instances: 1
   version: "3.0.1"
+  maxPortRetries: 0

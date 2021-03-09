@@ -135,6 +135,8 @@ spec:
                   type: string
                 logDir:
                   type: string
+                maxPortRetries:
+                  type: integer
             status:
               nullable: true
               properties:
