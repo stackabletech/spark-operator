@@ -517,69 +517,6 @@ impl SparkState {
         true
     }
 
-    pub async fn check_worker_master_urls(&self) -> SparkReconcileResult {
-        if let Some(pod_info) = &self.pod_information {
-            let worker_pods = pod_info.get_all_pods(Some(SparkNodeType::Worker));
-            for pod in &worker_pods {
-                if let Some(labels) = &pod.metadata.labels {
-                    if let Some(label_hashed_master_urls) =
-                        labels.get(pod_utils::MASTER_URLS_HASH_LABEL)
-                    {
-                        let current_hashed_master_urls =
-                            pod_utils::get_hashed_master_urls(&self.spec.master);
-                        if label_hashed_master_urls != &current_hashed_master_urls {
-                            info!(
-                                "Pod [{}] has an outdated '{}' [{}] - required is [{}], deleting it",
-                                Meta::name(pod),
-                                pod_utils::MASTER_URLS_HASH_LABEL,
-                                label_hashed_master_urls,
-                                current_hashed_master_urls,
-                            );
-                            self.context.client.delete(pod).await?;
-                            return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
-                        }
-                    }
-                }
-            }
-        }
-        Ok(ReconcileFunctionAction::Continue)
-    }
-
-    /// Process the cluster status version for upgrades/downgrades.
-    pub async fn process_version(&mut self) -> SparkReconcileResult {
-        // If we reach here it means all pods must be running on target_version.
-        // We can now set current_version to target_version (if target_version was set) and
-        // target_version to None
-        if let Some(status) = &self.status.clone() {
-            if let Some(target_version) = &status.target_version {
-                info!(
-                    "Finished upgrade/downgrade to [{}]. Cluster ready!",
-                    &target_version
-                );
-
-                self.status = self.set_target_version(None).await?.status;
-                self.status = self
-                    .set_current_version(Some(&target_version))
-                    .await?
-                    .status;
-                self.status = self
-                    .set_upgrading_condition(
-                        &status.conditions,
-                        &format!(
-                            "No change required [{:?}] is still the current_version",
-                            target_version
-                        ),
-                        "",
-                        ConditionStatus::False,
-                    )
-                    .await?
-                    .status;
-            }
-        }
-
-        Ok(ReconcileFunctionAction::Continue)
-    }
-
     /// Reconcile the cluster according to provided spec. Start with master nodes and continue to worker and history-server nodes.
     /// Create missing pods or delete excess pods to match the spec.
     ///
@@ -657,6 +594,75 @@ impl SparkState {
 
             if applied_changes {
                 return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
+            }
+        }
+
+        Ok(ReconcileFunctionAction::Continue)
+    }
+
+    /// In spark stand alone, workers are started via script and require the master urls to connect to.
+    /// If masters change (added/deleted), workers need to be updated accordingly to be able
+    /// to fall back on other masters, if the primary master fails.
+    /// Therefore we always need to keep the workers updated in terms of available master urls.
+    /// Available master urls are hashed and stored as label in the worker pod. If the label differs
+    /// from the spec, we need to replace (delete and and) the workers in a rolling fashion.
+    pub async fn check_worker_master_urls(&self) -> SparkReconcileResult {
+        if let Some(pod_info) = &self.pod_information {
+            let worker_pods = pod_info.get_all_pods(Some(SparkNodeType::Worker));
+            for pod in &worker_pods {
+                if let Some(labels) = &pod.metadata.labels {
+                    if let Some(label_hashed_master_urls) =
+                        labels.get(pod_utils::MASTER_URLS_HASH_LABEL)
+                    {
+                        let current_hashed_master_urls =
+                            pod_utils::get_hashed_master_urls(&self.spec.master);
+                        if label_hashed_master_urls != &current_hashed_master_urls {
+                            info!(
+                                "Pod [{}] has an outdated '{}' [{}] - required is [{}], deleting it",
+                                Meta::name(pod),
+                                pod_utils::MASTER_URLS_HASH_LABEL,
+                                label_hashed_master_urls,
+                                current_hashed_master_urls,
+                            );
+                            self.context.client.delete(pod).await?;
+                            return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(ReconcileFunctionAction::Continue)
+    }
+
+    /// Process the cluster status version for upgrades/downgrades.
+    pub async fn process_version(&mut self) -> SparkReconcileResult {
+        // If we reach here it means all pods must be running on target_version.
+        // We can now set current_version to target_version (if target_version was set) and
+        // target_version to None
+        if let Some(status) = &self.status.clone() {
+            if let Some(target_version) = &status.target_version {
+                info!(
+                    "Finished upgrade/downgrade to [{}]. Cluster ready!",
+                    &target_version
+                );
+
+                self.status = self.set_target_version(None).await?.status;
+                self.status = self
+                    .set_current_version(Some(&target_version))
+                    .await?
+                    .status;
+                self.status = self
+                    .set_upgrading_condition(
+                        &status.conditions,
+                        &format!(
+                            "No change required [{:?}] is still the current_version",
+                            target_version
+                        ),
+                        "",
+                        ConditionStatus::False,
+                    )
+                    .await?
+                    .status;
             }
         }
 

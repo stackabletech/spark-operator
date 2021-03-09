@@ -28,8 +28,9 @@ const SPARK_HISTORY_STORE_PATH: &str = "spark.history.store.path";
 const SPARK_HISTORY_UI_PORT: &str = "spark.history.ui.port";
 
 /// The worker start command needs to be extended with all known master nodes and ports.
-/// The required URLs are in format: '<master-node-name>:<master-port' with one time prefix 'spark://'
-/// Multiple masters are separated via ','
+/// The required URLs for the starting command are in format: '<master-node-name>:<master-port'
+/// and prefixed with 'spark://'. Multiple masters are separated via ',' e.g.:
+/// spark://<master-node-name-1>:<master-port-1>,<master-node-name-2>:<master-port-2>
 ///
 /// # Arguments
 /// * `node_type` - SparkNodeType (master/worker/history-server)
@@ -44,10 +45,10 @@ pub fn adapt_worker_command(node_type: &SparkNodeType, master: &SparkNode) -> Op
 
     let master_urls = get_master_urls(master);
     for url in master_urls {
-        if !adapted_command.is_empty() {
-            adapted_command.push(',');
-        } else {
+        if adapted_command.is_empty() {
             adapted_command.push_str("spark://");
+        } else {
+            adapted_command.push(',');
         }
         adapted_command.push_str(url.as_str());
     }
