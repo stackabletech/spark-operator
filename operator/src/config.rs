@@ -1,8 +1,15 @@
-use k8s_openapi::api::core::v1::EnvVar;
+use k8s_openapi::api::core::v1::{ConfigMap, EnvVar};
+use kube::api::Meta;
+use stackable_operator::config_map::create_config_map;
+use stackable_operator::error::OperatorResult;
 use stackable_spark_crd::{
-    ConfigOption, SparkClusterSpec, SparkNode, SparkNodeSelector, SparkNodeType,
+    ConfigOption, SparkCluster, SparkClusterSpec, SparkNode, SparkNodeSelector, SparkNodeType,
 };
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+
+// spark config files
+const SPARK_DEFAULTS_CONF: &str = "spark-defaults.conf";
+const SPARK_ENV_SH: &str = "spark-env.sh";
 
 // basic for startup
 const SPARK_NO_DAEMONIZE: &str = "SPARK_NO_DAEMONIZE";
@@ -144,7 +151,7 @@ pub fn create_required_startup_env() -> Vec<EnvVar> {
 /// * `spec` - SparkCluster spec for common properties
 /// * `selector` - SparkClusterSelector containing desired config properties
 ///
-pub fn get_config_properties(
+fn get_config_properties(
     spec: &SparkClusterSpec,
     selector: &SparkNodeSelector,
 ) -> HashMap<String, String> {
@@ -204,7 +211,7 @@ pub fn get_config_properties(
 /// # Arguments
 /// * `selector` - SparkClusterSelector containing desired env variables
 ///
-pub fn get_env_variables(selector: &SparkNodeSelector) -> HashMap<String, String> {
+fn get_env_variables(selector: &SparkNodeSelector) -> HashMap<String, String> {
     let mut config: HashMap<String, String> = HashMap::new();
 
     // master
@@ -250,7 +257,7 @@ pub fn get_env_variables(selector: &SparkNodeSelector) -> HashMap<String, String
 /// * `map` - Map containing option_name:option_value pairs
 /// * `assignment` - Used character to assign option_value to option_name (e.g. "=", " ", ":" ...)
 ///
-pub fn convert_map_to_string(map: &HashMap<String, String>, assignment: &str) -> String {
+fn convert_map_to_string(map: &HashMap<String, String>, assignment: &str) -> String {
     let mut data = String::new();
     for (key, value) in map {
         data.push_str(format!("{}{}{}\n", key, assignment, value).as_str());
@@ -258,9 +265,54 @@ pub fn convert_map_to_string(map: &HashMap<String, String>, assignment: &str) ->
     data
 }
 
+/// All config map names follow a simple pattern: <name of SparkCluster object>-<NodeType name>-<SelectorHash>-cm
+/// That means multiple pods of one selector share one and the same config map
+///
+/// # Arguments
+/// * `cluster_name` - Current cluster name
+/// * `node_type` - SparkNodeType (master/worker/history-server)
+/// * `hash` - NodeSelector hash
+///
+pub fn create_config_map_name(cluster_name: &str, node_type: &SparkNodeType, hash: &str) -> String {
+    format!("{}-{}-{}-cm", cluster_name, node_type.as_str(), hash)
+}
+
+/// Create all required config maps and respective config map data.
+///
+/// # Arguments
+/// * `resource` - SparkCluster
+/// * `spec` - SparkClusterSpec containing common cluster config options
+/// * `selector` - SparkClusterSelector containing node specific config options
+/// * `node_type` - SparkNodeType (master/worker/history-server)
+/// * `hash` - NodeSelector hash
+///
+pub fn create_config_maps(
+    resource: &SparkCluster,
+    spec: &SparkClusterSpec,
+    selector: &SparkNodeSelector,
+    node_type: &SparkNodeType,
+    hash: &str,
+) -> OperatorResult<Vec<ConfigMap>> {
+    let config_properties = get_config_properties(&spec, selector);
+    let env_vars = get_env_variables(selector);
+
+    let conf = convert_map_to_string(&config_properties, " ");
+    let env = convert_map_to_string(&env_vars, "=");
+
+    let mut data = BTreeMap::new();
+    data.insert(SPARK_DEFAULTS_CONF.to_string(), conf);
+    data.insert(SPARK_ENV_SH.to_string(), env);
+
+    let cm_name = create_config_map_name(&Meta::name(resource), node_type, hash);
+    let cm = create_config_map(resource, &cm_name, data)?;
+
+    Ok(vec![cm])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
     use stackable_spark_crd::SparkVersion;
 
     const MASTER_1_NODE_NAME: &str = "master_1";
@@ -271,6 +323,7 @@ mod tests {
     const MASTER_1_CORES: usize = 1;
     const MASTER_1_MEMORY: &str = "2g";
 
+    const CLUSTER_NAME: &str = "my-cluster";
     const CLUSTER_SECRET: &str = "secret";
     const CLUSTER_LOG_DIR: &str = "/tmp/spark-events";
     const CLUSTER_MAX_PORT_RETRIES: usize = 0;
@@ -470,5 +523,68 @@ mod tests {
             env_variables.get(SPARK_WORKER_MEMORY),
             Some(&MASTER_1_MEMORY.to_string())
         );
+    }
+
+    #[test]
+    fn test_create_config_map_name() {
+        assert_eq!(
+            create_config_map_name(CLUSTER_NAME, &SparkNodeType::Master, "12345"),
+            format!("{}-{}-{}-cm", CLUSTER_NAME, &SparkNodeType::Master, "12345")
+        );
+    }
+
+    fn create_spark_cluster(spec: &SparkClusterSpec) -> SparkCluster {
+        SparkCluster {
+            api_version: "spark.stackable.tech/v1".to_string(),
+            kind: "SparkCluster".to_string(),
+            metadata: ObjectMeta {
+                annotations: None,
+                cluster_name: None,
+                creation_timestamp: None,
+                deletion_grace_period_seconds: None,
+                deletion_timestamp: None,
+                finalizers: None,
+                generate_name: None,
+                generation: None,
+                labels: None,
+                managed_fields: None,
+                name: Some("spark-cluster".to_string()),
+                namespace: None,
+                owner_references: None,
+                resource_version: None,
+                self_link: None,
+                uid: Some("123123".to_string()),
+            },
+            spec: spec.clone(),
+            status: None,
+        }
+    }
+
+    #[test]
+    fn test_create_config_maps() {
+        let hash = "12345";
+        let spec = &create_spec();
+        let selector = &create_selector_1();
+        let spark_cluster = create_spark_cluster(spec);
+        let config_maps =
+            create_config_maps(&spark_cluster, spec, selector, &SparkNodeType::Master, hash)
+                .unwrap();
+
+        assert!(!config_maps.is_empty());
+
+        let cm = config_maps.get(0).unwrap();
+        let cm_data = cm.data.clone().unwrap();
+        assert!(cm_data.contains_key(SPARK_DEFAULTS_CONF));
+        assert!(cm_data.contains_key(SPARK_ENV_SH));
+
+        assert!(cm_data
+            .get(SPARK_DEFAULTS_CONF)
+            .unwrap()
+            .contains(SPARK_AUTHENTICATE));
+
+        assert!(cm_data
+            .get(SPARK_ENV_SH)
+            .unwrap()
+            .contains(SPARK_MASTER_PORT_ENV));
     }
 }

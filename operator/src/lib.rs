@@ -16,7 +16,6 @@ use async_trait::async_trait;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use stackable_operator::client::Client;
 use stackable_operator::conditions::ConditionStatus;
-use stackable_operator::config_map::create_config_map;
 use stackable_operator::controller::{Controller, ControllerStrategy, ReconciliationState};
 use stackable_operator::error::OperatorResult;
 use stackable_operator::reconcile::{
@@ -27,7 +26,7 @@ use stackable_spark_crd::{
     SparkCluster, SparkClusterSpec, SparkClusterStatus, SparkNodeSelector, SparkNodeType,
     SparkVersion,
 };
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::str::FromStr;
@@ -683,13 +682,11 @@ impl SparkState {
         hash: &str,
     ) -> Result<Pod, Error> {
         let pod = pod_utils::build_pod(
-            &self.context,
+            &self.context.resource,
+            &self.spec,
             node_type,
             selector.node_name.as_str(),
-            &self.spec.master,
             hash,
-            &self.spec.version.to_string(),
-            &self.spec.log_dir,
         )?;
         Ok(self.context.client.create(&pod).await?)
     }
@@ -698,6 +695,7 @@ impl SparkState {
     ///
     /// # Arguments
     /// * `node_type` - SparkNodeType (master/worker/history-server)
+    /// * `selector` - SparkNodeSelector to extract config options
     /// * `hash` - NodeSelector hash
     ///
     async fn create_config_maps(
@@ -706,19 +704,17 @@ impl SparkState {
         selector: &SparkNodeSelector,
         hash: &str,
     ) -> Result<(), Error> {
-        let config_properties = config::get_config_properties(&self.spec, selector);
-        let env_vars = config::get_env_variables(selector);
+        let config_maps = config::create_config_maps(
+            &self.context.resource,
+            &self.spec,
+            selector,
+            node_type,
+            hash,
+        )?;
 
-        let conf = config::convert_map_to_string(&config_properties, " ");
-        let env = config::convert_map_to_string(&env_vars, "=");
-
-        let mut data = BTreeMap::new();
-        data.insert("spark-defaults.conf".to_string(), conf);
-        data.insert("spark-env.sh".to_string(), env);
-
-        let cm_name = pod_utils::create_config_map_name(&self.context.name(), node_type, hash);
-        let cm = create_config_map(&self.context.resource, &cm_name, data)?;
-        self.context.client.apply_patch(&cm, &cm).await?;
+        for cm in config_maps {
+            self.context.client.apply_patch(&cm, &cm).await?;
+        }
 
         Ok(())
     }
