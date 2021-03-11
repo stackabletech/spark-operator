@@ -19,6 +19,9 @@ strum_macros = "0.20"
 thiserror = "1.0"
 derivative = "2.2"
 
+[dev-dependencies]
+stackable-spark-common = { path = "../common" }
+
 [features]
 default = ["native-tls"]
 native-tls = ["kube/native-tls"]

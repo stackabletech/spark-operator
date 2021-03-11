@@ -2,37 +2,11 @@ use k8s_openapi::api::core::v1::{ConfigMap, EnvVar};
 use kube::api::Meta;
 use stackable_operator::config_map::create_config_map;
 use stackable_operator::error::OperatorResult;
+use stackable_spark_common::constants::*;
 use stackable_spark_crd::{
     ConfigOption, SparkCluster, SparkClusterSpec, SparkNode, SparkNodeSelector, SparkNodeType,
 };
 use std::collections::{BTreeMap, HashMap};
-
-// spark config files
-const SPARK_DEFAULTS_CONF: &str = "spark-defaults.conf";
-const SPARK_ENV_SH: &str = "spark-env.sh";
-
-// basic for startup
-const SPARK_NO_DAEMONIZE: &str = "SPARK_NO_DAEMONIZE";
-const SPARK_CONF_DIR: &str = "SPARK_CONF_DIR";
-// common
-const SPARK_EVENT_LOG_ENABLED: &str = "spark.eventLog.enabled";
-const SPARK_EVENT_LOG_DIR: &str = "spark.eventLog.dir";
-const SPARK_AUTHENTICATE: &str = "spark.authenticate";
-const SPARK_AUTHENTICATE_SECRET: &str = "spark.authenticate.secret";
-const SPARK_PORT_MAX_RETRIES: &str = "spark.port.maxRetries";
-// master
-const SPARK_MASTER_PORT_ENV: &str = "SPARK_MASTER_PORT";
-const SPARK_MASTER_PORT_CONF: &str = "spark.master.port";
-const SPARK_MASTER_WEBUI_PORT: &str = "SPARK_MASTER_WEBUI_PORT";
-// worker
-const SPARK_WORKER_CORES: &str = "SPARK_WORKER_CORES";
-const SPARK_WORKER_MEMORY: &str = "SPARK_WORKER_MEMORY";
-const SPARK_WORKER_PORT: &str = "SPARK_WORKER_PORT";
-const SPARK_WORKER_WEBUI_PORT: &str = "SPARK_MASTER_WEBUI_PORT";
-// history server
-const SPARK_HISTORY_FS_LOG_DIRECTORY: &str = "spark.history.fs.logDirectory";
-const SPARK_HISTORY_STORE_PATH: &str = "spark.history.store.path";
-const SPARK_HISTORY_UI_PORT: &str = "spark.history.ui.port";
 
 /// The worker start command needs to be extended with all known master nodes and ports.
 /// The required URLs for the starting command are in format: '<master-node-name>:<master-port'

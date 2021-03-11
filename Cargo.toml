@@ -1,5 +1,5 @@
 [workspace]
 
 members = [
-    "crd", "operator", "server"
+    "crd", "operator", "server", "common"
 ]

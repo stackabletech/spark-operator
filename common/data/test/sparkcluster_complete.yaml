@@ -1,0 +1,42 @@
+apiVersion: spark.stackable.tech/v1
+kind: SparkCluster
+metadata:
+  name: spark-cluster
+spec:
+  master:
+    selectors:
+      - nodeName: "master_node_1"
+        instances: 1
+        masterPort: 10000
+        masterWebUiPort: 10100
+        config:
+          - name: "spark.master.port"
+            value: "10001"
+        env:
+          - name: "SPARK_MASTER_PORT"
+            value: "10002"
+      - nodeName: "master_node_2"
+        instances: 2
+        masterPort: 20000
+        masterWebUiPort: 20200
+  worker:
+    selectors:
+      - nodeName: "worker_node_1"
+        instances: 1
+        cores: 1
+        memory: "1g"
+        env:
+          - name: "SPARK_WORKER_MEMORY"
+            value: "3g"
+      - nodeName: "worker_node_2"
+        instances: 2
+        cores: 2
+        memory: "2g"
+  historyServer:
+    selectors:
+      - nodeName: "history_server_node_1"
+        instances: 1
+  version: "3.0.1"
+  secret: "secret"
+  log_dir: "/tmp/spark-events"
+  maxPortRetries: 0

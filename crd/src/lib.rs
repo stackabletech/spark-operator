@@ -273,3 +273,94 @@ impl SparkVersion {
         Ok(to_version < from_version)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use stackable_spark_common::test::resource::{LoadResource, SparkClusterComplete};
+
+    fn setup() -> SparkCluster {
+        SparkClusterComplete::load_resource()
+    }
+
+    fn get_instances(node: &SparkNode) -> usize {
+        let mut instances = 0;
+        for selector in &node.selectors {
+            instances += selector.instances;
+        }
+        instances
+    }
+
+    #[test]
+    fn test_spec_hashed_selectors() {
+        let cluster: SparkCluster = setup();
+        let spec: &SparkClusterSpec = &cluster.spec;
+        let cluster_name = &cluster.metadata.name.unwrap();
+
+        let all_spec_hashed_selectors = spec.get_hashed_selectors(cluster_name);
+        if spec.history_server.is_some() {
+            // master + worker + history
+            assert_eq!(all_spec_hashed_selectors.len(), 3);
+        } else {
+            // master + worker
+            assert_eq!(all_spec_hashed_selectors.len(), 2);
+        }
+    }
+
+    #[test]
+    fn test_get_instances() {
+        let spec: &SparkClusterSpec = &setup().spec;
+
+        assert_eq!(spec.master.get_instances(), get_instances(&spec.master));
+        assert_eq!(spec.worker.get_instances(), get_instances(&spec.worker));
+        if let Some(history) = &spec.history_server {
+            assert_eq!(history.get_instances(), get_instances(history));
+        }
+    }
+
+    #[test]
+    fn test_spark_node_type_as_str() {
+        assert_eq!(SparkNodeType::Master.as_str(), MASTER);
+        assert_eq!(SparkNodeType::Worker.as_str(), WORKER);
+        assert_eq!(SparkNodeType::HistoryServer.as_str(), HISTORY_SERVER);
+    }
+
+    #[test]
+    fn test_spark_node_type_get_command() {
+        let spec: &SparkClusterSpec = &setup().spec;
+        let version = &spec.version;
+
+        assert_eq!(
+            SparkNodeType::Master.get_command(&version.to_string()),
+            format!(
+                "spark-{}-bin-hadoop2.7/sbin/start-{}.sh",
+                &version.to_string(),
+                MASTER
+            )
+        );
+    }
+
+    #[test]
+    fn test_spark_version_is_upgrade() {
+        assert_eq!(
+            SparkVersion::v2_4_7.is_upgrade(&SparkVersion::v3_0_1),
+            Ok(true)
+        );
+        assert_eq!(
+            SparkVersion::v3_0_1.is_upgrade(&SparkVersion::v3_0_1),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn test_spark_version_is_downgrade() {
+        assert_eq!(
+            SparkVersion::v3_0_1.is_downgrade(&SparkVersion::v2_4_7),
+            Ok(true)
+        );
+        assert_eq!(
+            SparkVersion::v3_0_1.is_downgrade(&SparkVersion::v3_0_1),
+            Ok(false)
+        );
+    }
+}
