@@ -1,58 +1,102 @@
 pub mod resource {
-    use crate::constants;
     use serde::de;
 
-    pub trait LoadResource<T: de::DeserializeOwned> {
-        type Resource;
-        fn load_resource() -> Self::Resource;
+    pub trait LoadCluster<T>
+    where
+        T: de::DeserializeOwned,
+    {
+        type Cluster;
+
+        fn load_cluster() -> T;
     }
 
-    pub struct SparkClusterComplete;
+    pub trait ClusterData {
+        const MASTER_SELECTOR_1_NODE_NAME: &'static str;
+        const MASTER_SELECTOR_1_INSTANCES: usize;
+        const MASTER_SELECTOR_1_PORT: usize;
+        const MASTER_SELECTOR_1_WEB_UI_PORT: usize;
+        const MASTER_SELECTOR_1_CONFIG_PORT: usize;
+        const MASTER_SELECTOR_1_ENV_PORT: usize;
 
-    impl<T: de::DeserializeOwned> LoadResource<T> for SparkClusterComplete {
-        type Resource = T;
+        const MASTER_SELECTOR_2_NODE_NAME: &'static str;
+        const MASTER_SELECTOR_2_INSTANCES: usize;
+        const MASTER_SELECTOR_2_PORT: usize;
+        const MASTER_SELECTOR_2_WEB_UI_PORT: usize;
 
-        fn load_resource() -> Self::Resource {
-            let yaml = include_str!("../data/test/sparkcluster_complete.yaml");
+        const MASTER_SELECTOR_3_NODE_NAME: &'static str;
+        const MASTER_SELECTOR_3_INSTANCES: usize;
+
+        const WORKER_SELECTOR_1_NODE_NAME: &'static str;
+        const WORKER_SELECTOR_1_INSTANCES: usize;
+        const WORKER_SELECTOR_1_CORES: usize;
+        const WORKER_SELECTOR_1_MEMORY: &'static str;
+        const WORKER_SELECTOR_1_ENV_MEMORY: &'static str;
+
+        const WORKER_SELECTOR_2_NODE_NAME: &'static str;
+        const WORKER_SELECTOR_2_INSTANCES: usize;
+        const WORKER_SELECTOR_2_CORES: usize;
+        const WORKER_SELECTOR_2_MEMORY: &'static str;
+
+        const HISTORY_SERVER_SELECTOR_2_NODE_NAME: &'static str;
+        const HISTORY_SERVER_SELECTOR_2_INSTANCES: usize;
+        const HISTORY_SERVER_SELECTOR_2_CORES: usize;
+        const HISTORY_SERVER_SELECTOR_2_MEMORY: &'static str;
+
+        const CLUSTER_VERSION: &'static str;
+        const CLUSTER_SECRET: &'static str;
+        const CLUSTER_LOG_DIR: &'static str;
+        const CLUSTER_MAX_PORT_RETRIES: usize;
+    }
+
+    pub struct TestSparkClusterCorrect;
+
+    impl<T> LoadCluster<T> for TestSparkClusterCorrect
+    where
+        T: de::DeserializeOwned,
+    {
+        type Cluster = T;
+
+        fn load_cluster() -> T {
+            let yaml = include_str!("../data/test/test_spark_cluster.yaml");
             serde_yaml::from_str(yaml).unwrap()
         }
     }
 
-    impl SparkClusterComplete {
-        pub const MASTER_SELECTOR_1_NODE_NAME: &'static str = "master_node_1";
-        pub const MASTER_SELECTOR_1_INSTANCES: usize = 1;
-        pub const MASTER_SELECTOR_1_PORT: usize = 10000;
-        pub const MASTER_SELECTOR_1_WEB_UI_PORT: usize = 10100;
-        pub const MASTER_SELECTOR_1_CONFIG_MASTER_PORT: (&'static str, &'static str) =
-            (constants::SPARK_MASTER_PORT_CONF, "10001");
-        pub const MASTER_SELECTOR_1_ENV_PORT: (&'static str, &'static str) =
-            (constants::SPARK_MASTER_PORT_ENV, "10002");
+    impl ClusterData for TestSparkClusterCorrect {
+        const MASTER_SELECTOR_1_NODE_NAME: &'static str = "master_node_1";
+        const MASTER_SELECTOR_1_INSTANCES: usize = 1;
+        const MASTER_SELECTOR_1_PORT: usize = 10000;
+        const MASTER_SELECTOR_1_WEB_UI_PORT: usize = 10100;
+        const MASTER_SELECTOR_1_CONFIG_PORT: usize = 10001;
+        const MASTER_SELECTOR_1_ENV_PORT: usize = 10002;
 
-        pub const MASTER_SELECTOR_2_NODE_NAME: &'static str = "master_node_2";
-        pub const MASTER_SELECTOR_2_INSTANCES: usize = 2;
-        pub const MASTER_SELECTOR_2_MASTER_PORT: usize = 20000;
-        pub const MASTER_SELECTOR_2_MASTER_WEB_UI_PORT: usize = 20200;
+        const MASTER_SELECTOR_2_NODE_NAME: &'static str = "master_node_2";
+        const MASTER_SELECTOR_2_INSTANCES: usize = 2;
+        const MASTER_SELECTOR_2_PORT: usize = 20000;
+        const MASTER_SELECTOR_2_WEB_UI_PORT: usize = 20200;
 
-        pub const WORKER_SELECTOR_1_NODE_NAME: &'static str = "worker_node_1";
-        pub const WORKER_SELECTOR_1_INSTANCES: usize = 1;
-        pub const WORKER_SELECTOR_1_CORES: usize = 1;
-        pub const WORKER_SELECTOR_1_MEMORY: &'static str = "1g";
-        pub const WORKER_SELECTOR_1_ENV_MEMORY: (&'static str, &'static str) =
-            (constants::SPARK_WORKER_MEMORY, "3g");
+        const MASTER_SELECTOR_3_NODE_NAME: &'static str = "master_node_3";
+        const MASTER_SELECTOR_3_INSTANCES: usize = 1;
 
-        pub const WORKER_SELECTOR_2_NODE_NAME: &'static str = "worker_node_2";
-        pub const WORKER_SELECTOR_2_INSTANCES: usize = 2;
-        pub const WORKER_SELECTOR_2_CORES: usize = 2;
-        pub const WORKER_SELECTOR_2_MEMORY: &'static str = "2g";
+        const WORKER_SELECTOR_1_NODE_NAME: &'static str = "worker_node_1";
+        const WORKER_SELECTOR_1_INSTANCES: usize = 1;
+        const WORKER_SELECTOR_1_CORES: usize = 1;
+        const WORKER_SELECTOR_1_MEMORY: &'static str = "1g";
+        const WORKER_SELECTOR_1_ENV_MEMORY: &'static str = "3g";
 
-        pub const HISTORY_SERVER_SELECTOR_2_NODE_NAME: &'static str = "history_server_node_1";
-        pub const HISTORY_SERVER_SELECTOR_2_INSTANCES: usize = 1;
-        pub const HISTORY_SERVER_SELECTOR_2_CORES: usize = 2;
-        pub const HISTORY_SERVER_SELECTOR_2_MEMORY: &'static str = "2g";
+        const WORKER_SELECTOR_2_NODE_NAME: &'static str = "worker_node_2";
+        const WORKER_SELECTOR_2_INSTANCES: usize = 2;
+        const WORKER_SELECTOR_2_CORES: usize = 2;
+        const WORKER_SELECTOR_2_MEMORY: &'static str = "2g";
 
-        pub const CLUSTER_VERSION: &'static str = "3.0.1";
-        pub const CLUSTER_SECRET: &'static str = "secret";
-        pub const CLUSTER_LOG_DIR: &'static str = "/tmp/spark-events";
-        pub const CLUSTER_MAX_PORT_RETRIES: usize = 0;
+        const HISTORY_SERVER_SELECTOR_2_NODE_NAME: &'static str = "history_server_node_1";
+        const HISTORY_SERVER_SELECTOR_2_INSTANCES: usize = 1;
+        const HISTORY_SERVER_SELECTOR_2_CORES: usize = 2;
+        const HISTORY_SERVER_SELECTOR_2_MEMORY: &'static str = "2g";
+
+        const CLUSTER_VERSION: &'static str = "3.0.1";
+        const CLUSTER_SECRET: &'static str = "secret";
+        const CLUSTER_LOG_DIR: &'static str = "/tmp/spark-events";
+        const CLUSTER_MAX_PORT_RETRIES: usize = 0;
     }
 }

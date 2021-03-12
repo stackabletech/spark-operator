@@ -277,10 +277,10 @@ impl SparkVersion {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stackable_spark_common::test::resource::{LoadResource, SparkClusterComplete};
+    use stackable_spark_common::test::resource::{LoadCluster, TestSparkClusterCorrect};
 
     fn setup() -> SparkCluster {
-        SparkClusterComplete::load_resource()
+        TestSparkClusterCorrect::load_cluster()
     }
 
     fn get_instances(node: &SparkNode) -> usize {

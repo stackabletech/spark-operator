@@ -19,6 +19,8 @@ spec:
         instances: 2
         masterPort: 20000
         masterWebUiPort: 20200
+      - nodeName: "master_node_3"
+        instances: 1
   worker:
     selectors:
       - nodeName: "worker_node_1"
@@ -38,5 +40,5 @@ spec:
         instances: 1
   version: "3.0.1"
   secret: "secret"
-  log_dir: "/tmp/spark-events"
+  logDir: "/tmp/spark-events"
   maxPortRetries: 0

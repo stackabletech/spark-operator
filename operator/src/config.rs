@@ -131,29 +131,31 @@ fn get_config_properties(
 ) -> HashMap<String, String> {
     let mut config: HashMap<String, String> = HashMap::new();
 
-    let log_dir = &spec.log_dir.clone().unwrap_or_else(|| "/tmp".to_string());
+    // logging
+    if let Some(log_dir) = &spec.log_dir {
+        config.insert(SPARK_EVENT_LOG_ENABLED.to_string(), "true".to_string());
+        config.insert(SPARK_EVENT_LOG_DIR.to_string(), log_dir.to_string());
 
-    // common
-    config.insert(SPARK_EVENT_LOG_ENABLED.to_string(), "true".to_string());
-    config.insert(SPARK_EVENT_LOG_DIR.to_string(), log_dir.to_string());
+        config.insert(
+            SPARK_HISTORY_FS_LOG_DIRECTORY.to_string(),
+            log_dir.to_string(),
+        );
+    }
 
+    // secret
     if let Some(secret) = &spec.secret {
         config.insert(SPARK_AUTHENTICATE.to_string(), "true".to_string());
         config.insert(SPARK_AUTHENTICATE_SECRET.to_string(), secret.to_string());
     }
 
-    if let Some(max_port_retries) = &spec.max_port_retries {
-        config.insert(
-            SPARK_PORT_MAX_RETRIES.to_string(),
-            max_port_retries.to_string(),
-        );
-    }
+    // maximum port retries if taken (default to 0)
+    let max_port_retries = &spec.max_port_retries.unwrap_or(0);
+    config.insert(
+        SPARK_PORT_MAX_RETRIES.to_string(),
+        max_port_retries.to_string(),
+    );
 
     // history server
-    config.insert(
-        SPARK_HISTORY_FS_LOG_DIRECTORY.to_string(),
-        log_dir.to_string(),
-    );
     if let Some(store_path) = &selector.store_path {
         config.insert(SPARK_HISTORY_STORE_PATH.to_string(), store_path.to_string());
     }
@@ -286,120 +288,58 @@ pub fn create_config_maps(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
-    use stackable_spark_crd::SparkVersion;
+    use stackable_spark_common::constants;
+    use stackable_spark_common::test::resource::{
+        ClusterData, LoadCluster, TestSparkClusterCorrect,
+    };
 
-    const MASTER_1_NODE_NAME: &str = "master_1";
-    const MASTER_1_PORT_CONF_VAL: &str = "10000";
-    const MASTER_1_PORT_ENV_VAL: &str = "11000";
-    const MASTER_1_PORT: usize = 12000;
-    const MASTER_1_WEB_UI_PORT: usize = 13000;
-    const MASTER_1_CORES: usize = 1;
-    const MASTER_1_MEMORY: &str = "2g";
-
-    const CLUSTER_NAME: &str = "my-cluster";
-    const CLUSTER_SECRET: &str = "secret";
-    const CLUSTER_LOG_DIR: &str = "/tmp/spark-events";
-    const CLUSTER_MAX_PORT_RETRIES: usize = 0;
-
-    const MASTER_2_NODE_NAME: &str = "master_2";
-    const MASTER_2_PORT: usize = 22000;
-
-    const MASTER_3_NODE_NAME: &str = "master_3";
-    const MASTER_3_DEFAULT_PORT: usize = 7077;
-
-    fn create_spec() -> SparkClusterSpec {
-        SparkClusterSpec {
-            master: SparkNode {
-                selectors: vec![create_selector_1()],
-            },
-            worker: SparkNode {
-                selectors: vec![create_selector_1()],
-            },
-            history_server: None,
-            version: SparkVersion::v3_0_1,
-            secret: Some(CLUSTER_SECRET.to_string()),
-            log_dir: Some(CLUSTER_LOG_DIR.to_string()),
-            max_port_retries: Some(CLUSTER_MAX_PORT_RETRIES),
-        }
+    fn setup() -> SparkCluster {
+        let mut cluster: SparkCluster = TestSparkClusterCorrect::load_cluster();
+        // set metadata.uid
+        cluster.metadata.uid = Some("123456789".to_string());
+        cluster
     }
 
-    fn create_selector_1() -> SparkNodeSelector {
-        SparkNodeSelector {
-            node_name: MASTER_1_NODE_NAME.to_string(),
-            instances: 1,
-            config: Some(vec![ConfigOption {
-                name: SPARK_MASTER_PORT_CONF.to_string(),
-                value: MASTER_1_PORT_CONF_VAL.to_string(),
-            }]),
-            env: Some(vec![ConfigOption {
-                name: SPARK_MASTER_PORT_ENV.to_string(),
-                value: MASTER_1_PORT_ENV_VAL.to_string(),
-            }]),
-            master_port: Some(MASTER_1_PORT),
-            master_web_ui_port: Some(MASTER_1_WEB_UI_PORT),
-            cores: Some(MASTER_1_CORES),
-            memory: Some(MASTER_1_MEMORY.to_string()),
-            ..SparkNodeSelector::default()
-        }
-    }
-
-    fn create_master_node() -> SparkNode {
-        SparkNode {
-            selectors: vec![
-                create_selector_1(),
-                SparkNodeSelector {
-                    node_name: MASTER_2_NODE_NAME.to_string(),
-                    instances: 1,
-                    master_port: Some(MASTER_2_PORT),
-                    ..SparkNodeSelector::default()
-                },
-                SparkNodeSelector {
-                    node_name: MASTER_3_NODE_NAME.to_string(),
-                    instances: 1,
-                    ..SparkNodeSelector::default()
-                },
-            ],
-        }
-    }
+    // TODO: get default port from config-properties
+    const MASTER_DEFAULT_PORT: usize = 7077;
 
     #[test]
     fn test_get_master_urls() {
-        let master = &create_master_node();
+        let master = &setup().spec.master;
         let master_urls = get_master_urls(master);
         assert!(!master_urls.is_empty());
         // For master_1 we expect the config port
         assert!(master_urls.contains(&create_master_url(
-            MASTER_1_NODE_NAME,
-            MASTER_1_PORT_CONF_VAL
+            TestSparkClusterCorrect::MASTER_SELECTOR_1_NODE_NAME,
+            &TestSparkClusterCorrect::MASTER_SELECTOR_1_CONFIG_PORT.to_string()
         )));
-        // For master_2 we expect the masterPort
+        // For master_2 we expect the standard masterPort
         assert!(master_urls.contains(&create_master_url(
-            MASTER_2_NODE_NAME,
-            &MASTER_2_PORT.to_string()
+            TestSparkClusterCorrect::MASTER_SELECTOR_2_NODE_NAME,
+            &TestSparkClusterCorrect::MASTER_SELECTOR_2_PORT.to_string()
         )));
         // For master_3 we expect the default port
         assert!(master_urls.contains(&create_master_url(
-            MASTER_3_NODE_NAME,
-            &MASTER_3_DEFAULT_PORT.to_string()
+            TestSparkClusterCorrect::MASTER_SELECTOR_3_NODE_NAME,
+            &MASTER_DEFAULT_PORT.to_string()
         )));
     }
 
     #[test]
     fn test_adapt_worker_command() {
-        let master = &create_master_node();
+        let master = &setup().spec.master;
         let command = adapt_worker_command(&SparkNodeType::Worker, master);
         let created_cmd = format!(
             "spark://{}:{},{}:{},{}:{}",
             // For master_1 we expect the config port
-            MASTER_1_NODE_NAME,
-            MASTER_1_PORT_CONF_VAL,
+            TestSparkClusterCorrect::MASTER_SELECTOR_1_NODE_NAME,
+            TestSparkClusterCorrect::MASTER_SELECTOR_1_CONFIG_PORT,
             // For master_2 we expect the masterPort
-            MASTER_2_NODE_NAME,
-            MASTER_2_PORT,
+            TestSparkClusterCorrect::MASTER_SELECTOR_2_NODE_NAME,
+            TestSparkClusterCorrect::MASTER_SELECTOR_2_PORT,
             // For master_3 we expect the default port
-            MASTER_3_NODE_NAME,
-            MASTER_3_DEFAULT_PORT
+            TestSparkClusterCorrect::MASTER_SELECTOR_3_NODE_NAME,
+            MASTER_DEFAULT_PORT
         );
         assert_eq!(command, Some(created_cmd));
     }
@@ -407,8 +347,15 @@ mod tests {
     #[test]
     fn test_create_master_url() {
         assert_eq!(
-            create_master_url(MASTER_1_NODE_NAME, MASTER_1_PORT_CONF_VAL),
-            format!("{}:{}", MASTER_1_NODE_NAME, MASTER_1_PORT_CONF_VAL)
+            create_master_url(
+                TestSparkClusterCorrect::MASTER_SELECTOR_1_NODE_NAME,
+                &TestSparkClusterCorrect::MASTER_SELECTOR_1_CONFIG_PORT.to_string()
+            ),
+            format!(
+                "{}:{}",
+                TestSparkClusterCorrect::MASTER_SELECTOR_1_NODE_NAME,
+                &TestSparkClusterCorrect::MASTER_SELECTOR_1_CONFIG_PORT.to_string()
+            )
         );
     }
 
@@ -429,136 +376,112 @@ mod tests {
 
     #[test]
     fn test_get_config_properties() {
-        let spec = &create_spec();
-        let selector = &create_selector_1();
+        let spec = &setup().spec;
+        let selector = &spec.master.selectors.get(0).unwrap();
         let config_properties = get_config_properties(spec, selector);
 
         // log_dir
-        assert!(config_properties.contains_key(SPARK_EVENT_LOG_ENABLED));
+        assert!(config_properties.contains_key(constants::SPARK_EVENT_LOG_ENABLED));
         assert_eq!(
-            config_properties.get(SPARK_EVENT_LOG_ENABLED),
+            config_properties.get(constants::SPARK_EVENT_LOG_ENABLED),
             Some(&"true".to_string())
         );
-        assert!(config_properties.contains_key(SPARK_EVENT_LOG_DIR));
+        assert!(config_properties.contains_key(constants::SPARK_EVENT_LOG_DIR));
         assert_eq!(
-            config_properties.get(SPARK_EVENT_LOG_DIR),
-            Some(&CLUSTER_LOG_DIR.to_string())
+            config_properties.get(constants::SPARK_EVENT_LOG_DIR),
+            Some(&TestSparkClusterCorrect::CLUSTER_LOG_DIR.to_string())
         );
 
         // secret
-        assert!(config_properties.contains_key(SPARK_AUTHENTICATE));
+        assert!(config_properties.contains_key(constants::SPARK_AUTHENTICATE));
         assert_eq!(
-            config_properties.get(SPARK_AUTHENTICATE),
+            config_properties.get(constants::SPARK_AUTHENTICATE),
             Some(&"true".to_string())
         );
-        assert!(config_properties.contains_key(SPARK_AUTHENTICATE_SECRET));
+        assert!(config_properties.contains_key(constants::SPARK_AUTHENTICATE_SECRET));
         assert_eq!(
-            config_properties.get(SPARK_AUTHENTICATE_SECRET),
-            Some(&CLUSTER_SECRET.to_string())
+            config_properties.get(constants::SPARK_AUTHENTICATE_SECRET),
+            Some(&TestSparkClusterCorrect::CLUSTER_SECRET.to_string())
         );
 
         // port_max_retry
-        assert!(config_properties.contains_key(SPARK_PORT_MAX_RETRIES));
+        assert!(config_properties.contains_key(constants::SPARK_PORT_MAX_RETRIES));
         assert_eq!(
-            config_properties.get(SPARK_PORT_MAX_RETRIES),
-            Some(&CLUSTER_MAX_PORT_RETRIES.to_string())
+            config_properties.get(constants::SPARK_PORT_MAX_RETRIES),
+            Some(&TestSparkClusterCorrect::CLUSTER_MAX_PORT_RETRIES.to_string())
         );
 
         // config options
-        assert!(config_properties.contains_key(SPARK_MASTER_PORT_CONF));
+        assert!(config_properties.contains_key(constants::SPARK_MASTER_PORT_CONF));
         assert_eq!(
-            config_properties.get(SPARK_MASTER_PORT_CONF),
-            Some(&MASTER_1_PORT_CONF_VAL.to_string())
+            config_properties.get(constants::SPARK_MASTER_PORT_CONF),
+            Some(&TestSparkClusterCorrect::MASTER_SELECTOR_1_CONFIG_PORT.to_string())
         );
     }
 
     #[test]
     fn test_get_env_variables() {
-        let selector = &create_selector_1();
-        let env_variables = get_env_variables(selector);
+        let spec = &setup().spec;
+        let selector = &spec.worker.selectors.get(0).unwrap();
+        let env_variables = get_env_variables(&selector);
 
-        // web ui port
-        assert!(env_variables.contains_key(SPARK_MASTER_WEBUI_PORT));
+        // memory
+        assert!(env_variables.contains_key(constants::SPARK_WORKER_MEMORY));
         assert_eq!(
-            env_variables.get(SPARK_MASTER_WEBUI_PORT),
-            Some(&MASTER_1_WEB_UI_PORT.to_string())
+            env_variables.get(constants::SPARK_WORKER_MEMORY),
+            Some(&TestSparkClusterCorrect::WORKER_SELECTOR_1_ENV_MEMORY.to_string())
         );
 
         // cores
-        assert!(env_variables.contains_key(SPARK_WORKER_CORES));
+        assert!(env_variables.contains_key(constants::SPARK_WORKER_CORES));
         assert_eq!(
-            env_variables.get(SPARK_WORKER_CORES),
-            Some(&MASTER_1_CORES.to_string())
-        );
-
-        // memory
-        assert!(env_variables.contains_key(SPARK_WORKER_MEMORY));
-        assert_eq!(
-            env_variables.get(SPARK_WORKER_MEMORY),
-            Some(&MASTER_1_MEMORY.to_string())
+            env_variables.get(constants::SPARK_WORKER_CORES),
+            Some(&TestSparkClusterCorrect::WORKER_SELECTOR_1_CORES.to_string())
         );
     }
 
     #[test]
     fn test_create_config_map_name() {
+        let cluster_name = &setup().metadata.name.unwrap();
+        let hash = "12345";
         assert_eq!(
-            create_config_map_name(CLUSTER_NAME, &SparkNodeType::Master, "12345"),
-            format!("{}-{}-{}-cm", CLUSTER_NAME, &SparkNodeType::Master, "12345")
+            create_config_map_name(cluster_name, &SparkNodeType::Master, hash),
+            format!("{}-{}-{}-cm", cluster_name, &SparkNodeType::Master, hash)
         );
-    }
-
-    fn create_spark_cluster(spec: &SparkClusterSpec) -> SparkCluster {
-        SparkCluster {
-            api_version: "spark.stackable.tech/v1".to_string(),
-            kind: "SparkCluster".to_string(),
-            metadata: ObjectMeta {
-                annotations: None,
-                cluster_name: None,
-                creation_timestamp: None,
-                deletion_grace_period_seconds: None,
-                deletion_timestamp: None,
-                finalizers: None,
-                generate_name: None,
-                generation: None,
-                labels: None,
-                managed_fields: None,
-                name: Some("spark-cluster".to_string()),
-                namespace: None,
-                owner_references: None,
-                resource_version: None,
-                self_link: None,
-                uid: Some("123123".to_string()),
-            },
-            spec: spec.clone(),
-            status: None,
-        }
     }
 
     #[test]
     fn test_create_config_maps() {
         let hash = "12345";
-        let spec = &create_spec();
-        let selector = &create_selector_1();
-        let spark_cluster = create_spark_cluster(spec);
-        let config_maps =
-            create_config_maps(&spark_cluster, spec, selector, &SparkNodeType::Master, hash)
-                .unwrap();
+        let cluster = &setup();
+        let selector = &cluster.spec.master.selectors.get(0).unwrap();
+
+        let config_maps = create_config_maps(
+            &cluster,
+            &cluster.spec,
+            selector,
+            &SparkNodeType::Master,
+            hash,
+        )
+        .unwrap();
 
         assert!(!config_maps.is_empty());
 
         let cm = config_maps.get(0).unwrap();
         let cm_data = cm.data.clone().unwrap();
-        assert!(cm_data.contains_key(SPARK_DEFAULTS_CONF));
-        assert!(cm_data.contains_key(SPARK_ENV_SH));
+        assert!(cm_data.contains_key(constants::SPARK_DEFAULTS_CONF));
+        assert!(cm_data.contains_key(constants::SPARK_ENV_SH));
 
         assert!(cm_data
-            .get(SPARK_DEFAULTS_CONF)
+            .get(constants::SPARK_DEFAULTS_CONF)
             .unwrap()
-            .contains(SPARK_AUTHENTICATE));
+            .contains(constants::SPARK_AUTHENTICATE));
 
         assert!(cm_data
-            .get(SPARK_ENV_SH)
+            .get(constants::SPARK_ENV_SH)
             .unwrap()
-            .contains(SPARK_MASTER_PORT_ENV));
+            .contains(constants::SPARK_MASTER_PORT_ENV));
+
+        // TODO: add more asserts
     }
 }
