@@ -132,15 +132,14 @@ fn get_config_properties(
     let mut config: HashMap<String, String> = HashMap::new();
 
     // logging
-    if let Some(log_dir) = &spec.log_dir {
-        config.insert(SPARK_EVENT_LOG_ENABLED.to_string(), "true".to_string());
-        config.insert(SPARK_EVENT_LOG_DIR.to_string(), log_dir.to_string());
-
-        config.insert(
-            SPARK_HISTORY_FS_LOG_DIRECTORY.to_string(),
-            log_dir.to_string(),
-        );
-    }
+    // TODO: default to /tmp? -> only required if history server is used without logDir
+    let log_dir = &spec.log_dir.clone().unwrap_or_else(|| "/tmp".to_string());
+    config.insert(SPARK_EVENT_LOG_ENABLED.to_string(), "true".to_string());
+    config.insert(SPARK_EVENT_LOG_DIR.to_string(), log_dir.to_string());
+    config.insert(
+        SPARK_HISTORY_FS_LOG_DIRECTORY.to_string(),
+        log_dir.to_string(),
+    );
 
     // secret
     if let Some(secret) = &spec.secret {
@@ -304,6 +303,28 @@ mod tests {
     const MASTER_DEFAULT_PORT: usize = 7077;
 
     #[test]
+    fn test_adapt_worker_command() {
+        let master = &setup().spec.master;
+        let command = adapt_worker_command(&SparkNodeType::Worker, master);
+        let created_cmd = format!(
+            "spark://{}:{},{}:{},{}:{},{}:{}",
+            // For master_1 we expect the config port
+            TestSparkClusterCorrect::MASTER_SELECTOR_1_NODE_NAME,
+            TestSparkClusterCorrect::MASTER_SELECTOR_1_CONFIG_PORT,
+            // For master_2 we expect the env port
+            TestSparkClusterCorrect::MASTER_SELECTOR_2_NODE_NAME,
+            TestSparkClusterCorrect::MASTER_SELECTOR_2_ENV_PORT,
+            // For master_3 we expect the normal port
+            TestSparkClusterCorrect::MASTER_SELECTOR_3_NODE_NAME,
+            TestSparkClusterCorrect::MASTER_SELECTOR_3_PORT,
+            // For master_4 we expect the default port
+            TestSparkClusterCorrect::MASTER_SELECTOR_4_NODE_NAME,
+            MASTER_DEFAULT_PORT
+        );
+        assert_eq!(command, Some(created_cmd));
+    }
+
+    #[test]
     fn test_get_master_urls() {
         let master = &setup().spec.master;
         let master_urls = get_master_urls(master);
@@ -313,35 +334,21 @@ mod tests {
             TestSparkClusterCorrect::MASTER_SELECTOR_1_NODE_NAME,
             &TestSparkClusterCorrect::MASTER_SELECTOR_1_CONFIG_PORT.to_string()
         )));
-        // For master_2 we expect the standard masterPort
+        // For master_2 we expect the env port
         assert!(master_urls.contains(&create_master_url(
             TestSparkClusterCorrect::MASTER_SELECTOR_2_NODE_NAME,
-            &TestSparkClusterCorrect::MASTER_SELECTOR_2_PORT.to_string()
+            &TestSparkClusterCorrect::MASTER_SELECTOR_2_ENV_PORT.to_string()
         )));
-        // For master_3 we expect the default port
+        // For master_3 we expect the normal port
         assert!(master_urls.contains(&create_master_url(
             TestSparkClusterCorrect::MASTER_SELECTOR_3_NODE_NAME,
+            &TestSparkClusterCorrect::MASTER_SELECTOR_3_PORT.to_string()
+        )));
+        // For master_4 we expect the default port
+        assert!(master_urls.contains(&create_master_url(
+            TestSparkClusterCorrect::MASTER_SELECTOR_4_NODE_NAME,
             &MASTER_DEFAULT_PORT.to_string()
         )));
-    }
-
-    #[test]
-    fn test_adapt_worker_command() {
-        let master = &setup().spec.master;
-        let command = adapt_worker_command(&SparkNodeType::Worker, master);
-        let created_cmd = format!(
-            "spark://{}:{},{}:{},{}:{}",
-            // For master_1 we expect the config port
-            TestSparkClusterCorrect::MASTER_SELECTOR_1_NODE_NAME,
-            TestSparkClusterCorrect::MASTER_SELECTOR_1_CONFIG_PORT,
-            // For master_2 we expect the masterPort
-            TestSparkClusterCorrect::MASTER_SELECTOR_2_NODE_NAME,
-            TestSparkClusterCorrect::MASTER_SELECTOR_2_PORT,
-            // For master_3 we expect the default port
-            TestSparkClusterCorrect::MASTER_SELECTOR_3_NODE_NAME,
-            MASTER_DEFAULT_PORT
-        );
-        assert_eq!(command, Some(created_cmd));
     }
 
     #[test]

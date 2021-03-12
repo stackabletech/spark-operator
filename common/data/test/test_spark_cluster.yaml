@@ -16,10 +16,16 @@ spec:
           - name: "SPARK_MASTER_PORT"
             value: "10002"
       - nodeName: "master_node_2"
-        instances: 2
+        instances: 1
         masterPort: 20000
         masterWebUiPort: 20200
+        env:
+          - name: "SPARK_MASTER_PORT"
+            value: "20002"
       - nodeName: "master_node_3"
+        instances: 1
+        masterPort: 30000
+      - nodeName: "master_node_4"
         instances: 1
   worker:
     selectors:

@@ -22,9 +22,14 @@ pub mod resource {
         const MASTER_SELECTOR_2_INSTANCES: usize;
         const MASTER_SELECTOR_2_PORT: usize;
         const MASTER_SELECTOR_2_WEB_UI_PORT: usize;
+        const MASTER_SELECTOR_2_ENV_PORT: usize;
 
         const MASTER_SELECTOR_3_NODE_NAME: &'static str;
         const MASTER_SELECTOR_3_INSTANCES: usize;
+        const MASTER_SELECTOR_3_PORT: usize;
+
+        const MASTER_SELECTOR_4_NODE_NAME: &'static str;
+        const MASTER_SELECTOR_4_INSTANCES: usize;
 
         const WORKER_SELECTOR_1_NODE_NAME: &'static str;
         const WORKER_SELECTOR_1_INSTANCES: usize;
@@ -74,9 +79,14 @@ pub mod resource {
         const MASTER_SELECTOR_2_INSTANCES: usize = 2;
         const MASTER_SELECTOR_2_PORT: usize = 20000;
         const MASTER_SELECTOR_2_WEB_UI_PORT: usize = 20200;
+        const MASTER_SELECTOR_2_ENV_PORT: usize = 20002;
 
         const MASTER_SELECTOR_3_NODE_NAME: &'static str = "master_node_3";
         const MASTER_SELECTOR_3_INSTANCES: usize = 1;
+        const MASTER_SELECTOR_3_PORT: usize = 30000;
+
+        const MASTER_SELECTOR_4_NODE_NAME: &'static str = "master_node_4";
+        const MASTER_SELECTOR_4_INSTANCES: usize = 1;
 
         const WORKER_SELECTOR_1_NODE_NAME: &'static str = "worker_node_1";
         const WORKER_SELECTOR_1_INSTANCES: usize = 1;

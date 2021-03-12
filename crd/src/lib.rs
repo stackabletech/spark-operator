@@ -308,6 +308,19 @@ mod tests {
     }
 
     #[test]
+    fn test_get_all_instances() {
+        let spec: &SparkClusterSpec = &setup().spec;
+        let all_instances = spec.get_all_instances();
+        let mut calculated_instances = 0;
+        calculated_instances += spec.master.get_instances();
+        calculated_instances += spec.worker.get_instances();
+        if let Some(history) = &spec.history_server {
+            calculated_instances += history.get_instances();
+        }
+        assert_eq!(all_instances, calculated_instances)
+    }
+
+    #[test]
     fn test_get_instances() {
         let spec: &SparkClusterSpec = &setup().spec;
 
@@ -323,6 +336,32 @@ mod tests {
         assert_eq!(SparkNodeType::Master.as_str(), MASTER);
         assert_eq!(SparkNodeType::Worker.as_str(), WORKER);
         assert_eq!(SparkNodeType::HistoryServer.as_str(), HISTORY_SERVER);
+    }
+
+    #[test]
+    fn test_spark_node_type_from_str() {
+        assert_eq!(
+            SparkNodeType::from_str(MASTER).unwrap(),
+            SparkNodeType::Master
+        );
+        assert_eq!(
+            SparkNodeType::from_str(WORKER).unwrap(),
+            SparkNodeType::Worker
+        );
+        assert_eq!(
+            SparkNodeType::from_str(HISTORY_SERVER).unwrap(),
+            SparkNodeType::HistoryServer
+        );
+
+        let bad_node = "not_a_node";
+        let res = SparkNodeType::from_str(bad_node);
+
+        assert_eq!(
+            res,
+            Err(CrdError::InvalidNodeType {
+                node_type: bad_node.to_string()
+            })
+        );
     }
 
     #[test]
