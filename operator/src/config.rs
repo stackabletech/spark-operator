@@ -1,3 +1,6 @@
+//! This module contains all methods that are responsible for setting / adapting configuration
+//! parameters in the Pods and respective ConfigMaps.
+
 use k8s_openapi::api::core::v1::{ConfigMap, EnvVar};
 use kube::api::Meta;
 use stackable_operator::config_map::create_config_map;
@@ -288,12 +291,10 @@ pub fn create_config_maps(
 mod tests {
     use super::*;
     use stackable_spark_common::constants;
-    use stackable_spark_common::test::resource::{
-        ClusterData, LoadCluster, TestSparkClusterCorrect,
-    };
+    use stackable_spark_common::test::cluster::{Data, Load, TestSparkCluster};
 
     fn setup() -> SparkCluster {
-        let mut cluster: SparkCluster = TestSparkClusterCorrect::load_cluster();
+        let mut cluster: SparkCluster = TestSparkCluster::load();
         // set metadata.uid
         cluster.metadata.uid = Some("123456789".to_string());
         cluster
@@ -309,16 +310,16 @@ mod tests {
         let created_cmd = format!(
             "spark://{}:{},{}:{},{}:{},{}:{}",
             // For master_1 we expect the config port
-            TestSparkClusterCorrect::MASTER_SELECTOR_1_NODE_NAME,
-            TestSparkClusterCorrect::MASTER_SELECTOR_1_CONFIG_PORT,
+            TestSparkCluster::MASTER_SELECTOR_1_NODE_NAME,
+            TestSparkCluster::MASTER_SELECTOR_1_CONFIG_PORT,
             // For master_2 we expect the env port
-            TestSparkClusterCorrect::MASTER_SELECTOR_2_NODE_NAME,
-            TestSparkClusterCorrect::MASTER_SELECTOR_2_ENV_PORT,
+            TestSparkCluster::MASTER_SELECTOR_2_NODE_NAME,
+            TestSparkCluster::MASTER_SELECTOR_2_ENV_PORT,
             // For master_3 we expect the normal port
-            TestSparkClusterCorrect::MASTER_SELECTOR_3_NODE_NAME,
-            TestSparkClusterCorrect::MASTER_SELECTOR_3_PORT,
+            TestSparkCluster::MASTER_SELECTOR_3_NODE_NAME,
+            TestSparkCluster::MASTER_SELECTOR_3_PORT,
             // For master_4 we expect the default port
-            TestSparkClusterCorrect::MASTER_SELECTOR_4_NODE_NAME,
+            TestSparkCluster::MASTER_SELECTOR_4_NODE_NAME,
             MASTER_DEFAULT_PORT
         );
         assert_eq!(command, Some(created_cmd));
@@ -331,22 +332,22 @@ mod tests {
         assert!(!master_urls.is_empty());
         // For master_1 we expect the config port
         assert!(master_urls.contains(&create_master_url(
-            TestSparkClusterCorrect::MASTER_SELECTOR_1_NODE_NAME,
-            &TestSparkClusterCorrect::MASTER_SELECTOR_1_CONFIG_PORT.to_string()
+            TestSparkCluster::MASTER_SELECTOR_1_NODE_NAME,
+            &TestSparkCluster::MASTER_SELECTOR_1_CONFIG_PORT.to_string()
         )));
         // For master_2 we expect the env port
         assert!(master_urls.contains(&create_master_url(
-            TestSparkClusterCorrect::MASTER_SELECTOR_2_NODE_NAME,
-            &TestSparkClusterCorrect::MASTER_SELECTOR_2_ENV_PORT.to_string()
+            TestSparkCluster::MASTER_SELECTOR_2_NODE_NAME,
+            &TestSparkCluster::MASTER_SELECTOR_2_ENV_PORT.to_string()
         )));
         // For master_3 we expect the normal port
         assert!(master_urls.contains(&create_master_url(
-            TestSparkClusterCorrect::MASTER_SELECTOR_3_NODE_NAME,
-            &TestSparkClusterCorrect::MASTER_SELECTOR_3_PORT.to_string()
+            TestSparkCluster::MASTER_SELECTOR_3_NODE_NAME,
+            &TestSparkCluster::MASTER_SELECTOR_3_PORT.to_string()
         )));
         // For master_4 we expect the default port
         assert!(master_urls.contains(&create_master_url(
-            TestSparkClusterCorrect::MASTER_SELECTOR_4_NODE_NAME,
+            TestSparkCluster::MASTER_SELECTOR_4_NODE_NAME,
             &MASTER_DEFAULT_PORT.to_string()
         )));
     }
@@ -355,13 +356,13 @@ mod tests {
     fn test_create_master_url() {
         assert_eq!(
             create_master_url(
-                TestSparkClusterCorrect::MASTER_SELECTOR_1_NODE_NAME,
-                &TestSparkClusterCorrect::MASTER_SELECTOR_1_CONFIG_PORT.to_string()
+                TestSparkCluster::MASTER_SELECTOR_1_NODE_NAME,
+                &TestSparkCluster::MASTER_SELECTOR_1_CONFIG_PORT.to_string()
             ),
             format!(
                 "{}:{}",
-                TestSparkClusterCorrect::MASTER_SELECTOR_1_NODE_NAME,
-                &TestSparkClusterCorrect::MASTER_SELECTOR_1_CONFIG_PORT.to_string()
+                TestSparkCluster::MASTER_SELECTOR_1_NODE_NAME,
+                &TestSparkCluster::MASTER_SELECTOR_1_CONFIG_PORT.to_string()
             )
         );
     }
@@ -396,7 +397,7 @@ mod tests {
         assert!(config_properties.contains_key(constants::SPARK_EVENT_LOG_DIR));
         assert_eq!(
             config_properties.get(constants::SPARK_EVENT_LOG_DIR),
-            Some(&TestSparkClusterCorrect::CLUSTER_LOG_DIR.to_string())
+            Some(&TestSparkCluster::CLUSTER_LOG_DIR.to_string())
         );
 
         // secret
@@ -408,21 +409,21 @@ mod tests {
         assert!(config_properties.contains_key(constants::SPARK_AUTHENTICATE_SECRET));
         assert_eq!(
             config_properties.get(constants::SPARK_AUTHENTICATE_SECRET),
-            Some(&TestSparkClusterCorrect::CLUSTER_SECRET.to_string())
+            Some(&TestSparkCluster::CLUSTER_SECRET.to_string())
         );
 
         // port_max_retry
         assert!(config_properties.contains_key(constants::SPARK_PORT_MAX_RETRIES));
         assert_eq!(
             config_properties.get(constants::SPARK_PORT_MAX_RETRIES),
-            Some(&TestSparkClusterCorrect::CLUSTER_MAX_PORT_RETRIES.to_string())
+            Some(&TestSparkCluster::CLUSTER_MAX_PORT_RETRIES.to_string())
         );
 
         // config options
         assert!(config_properties.contains_key(constants::SPARK_MASTER_PORT_CONF));
         assert_eq!(
             config_properties.get(constants::SPARK_MASTER_PORT_CONF),
-            Some(&TestSparkClusterCorrect::MASTER_SELECTOR_1_CONFIG_PORT.to_string())
+            Some(&TestSparkCluster::MASTER_SELECTOR_1_CONFIG_PORT.to_string())
         );
     }
 
@@ -436,14 +437,14 @@ mod tests {
         assert!(env_variables.contains_key(constants::SPARK_WORKER_MEMORY));
         assert_eq!(
             env_variables.get(constants::SPARK_WORKER_MEMORY),
-            Some(&TestSparkClusterCorrect::WORKER_SELECTOR_1_ENV_MEMORY.to_string())
+            Some(&TestSparkCluster::WORKER_SELECTOR_1_ENV_MEMORY.to_string())
         );
 
         // cores
         assert!(env_variables.contains_key(constants::SPARK_WORKER_CORES));
         assert_eq!(
             env_variables.get(constants::SPARK_WORKER_CORES),
-            Some(&TestSparkClusterCorrect::WORKER_SELECTOR_1_CORES.to_string())
+            Some(&TestSparkCluster::WORKER_SELECTOR_1_CORES.to_string())
         );
     }
 

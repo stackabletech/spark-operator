@@ -1,16 +1,22 @@
-pub mod resource {
+//! This module provides test functionality to build cluster objects from (YAML) files and matches
+//! contained data definitions for testing.
+//! Each cluster objects consists of a Load trait and a Data trait.
+//! The goal is to provide interchangeable cluster objects for testing.
+pub mod cluster {
     use serde::de;
 
-    pub trait LoadCluster<T>
+    /// Loads a cluster object and parses the content to T
+    pub trait Load<T>
     where
         T: de::DeserializeOwned,
     {
         type Cluster;
 
-        fn load_cluster() -> T;
+        fn load() -> T;
     }
 
-    pub trait ClusterData {
+    /// Contains object definitions that should match the provided file data
+    pub trait Data {
         const MASTER_SELECTOR_1_NODE_NAME: &'static str;
         const MASTER_SELECTOR_1_INSTANCES: usize;
         const MASTER_SELECTOR_1_PORT: usize;
@@ -53,21 +59,21 @@ pub mod resource {
         const CLUSTER_MAX_PORT_RETRIES: usize;
     }
 
-    pub struct TestSparkClusterCorrect;
+    pub struct TestSparkCluster;
 
-    impl<T> LoadCluster<T> for TestSparkClusterCorrect
+    impl<T> Load<T> for TestSparkCluster
     where
         T: de::DeserializeOwned,
     {
         type Cluster = T;
 
-        fn load_cluster() -> T {
+        fn load() -> T {
             let yaml = include_str!("../data/test/test_spark_cluster.yaml");
             serde_yaml::from_str(yaml).unwrap()
         }
     }
 
-    impl ClusterData for TestSparkClusterCorrect {
+    impl Data for TestSparkCluster {
         const MASTER_SELECTOR_1_NODE_NAME: &'static str = "master_node_1";
         const MASTER_SELECTOR_1_INSTANCES: usize = 1;
         const MASTER_SELECTOR_1_PORT: usize = 10000;

@@ -1,3 +1,4 @@
+//! This module provides all required CRD definitions and additional helper methods.
 mod error;
 
 pub use crate::error::CrdError;
@@ -277,10 +278,10 @@ impl SparkVersion {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stackable_spark_common::test::resource::{LoadCluster, TestSparkClusterCorrect};
+    use stackable_spark_common::test::cluster::{Load, TestSparkCluster};
 
     fn setup() -> SparkCluster {
-        TestSparkClusterCorrect::load_cluster()
+        TestSparkCluster::load()
     }
 
     fn get_instances(node: &SparkNode) -> usize {

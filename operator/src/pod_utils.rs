@@ -1,3 +1,4 @@
+//! This module contains all Pod related methods.
 use crate::config;
 use crate::error::Error;
 use k8s_openapi::api::core::v1::{
@@ -222,11 +223,11 @@ fn create_pod_name(cluster_name: &str, node_type: &SparkNodeType, hash: &str) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stackable_spark_common::test::resource::{LoadCluster, TestSparkClusterCorrect};
+    use stackable_spark_common::test::cluster::{Load, TestSparkCluster};
     use stackable_spark_crd::SparkNodeSelector;
 
     fn setup() -> SparkCluster {
-        let mut cluster: SparkCluster = TestSparkClusterCorrect::load_cluster();
+        let mut cluster: SparkCluster = TestSparkCluster::load();
         // set metadata.uid
         cluster.metadata.uid = Some("123456789".to_string());
         cluster
