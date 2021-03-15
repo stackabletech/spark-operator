@@ -291,7 +291,7 @@ pub fn create_config_maps(
 mod tests {
     use super::*;
     use stackable_spark_common::constants;
-    use stackable_spark_common::test::cluster::{Data, Load, TestSparkCluster};
+    use stackable_spark_test_utils::cluster::{Data, Load, TestSparkCluster};
 
     fn setup() -> SparkCluster {
         let mut cluster: SparkCluster = TestSparkCluster::load();

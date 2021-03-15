@@ -6,6 +6,7 @@ edition = "2018"
 
 [dependencies]
 stackable-operator = { git = "https://github.com/stackabletech/operator-rs.git", branch = "main" }
+stackable-spark-common = { path = "../common" }
 
 k8s-openapi = { version = "0.11.0", default-features = false, features = ["v1_20"] }
 kube = { version = "0.49", default-features = false, features = ["derive"] }
@@ -20,7 +21,7 @@ thiserror = "1.0"
 derivative = "2.2"
 
 [dev-dependencies]
-stackable-spark-common = { path = "../common" }
+stackable-spark-test-utils = { path = "../test_utils" }
 
 [features]
 default = ["native-tls"]

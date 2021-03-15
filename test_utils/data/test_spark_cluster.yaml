@@ -17,11 +17,11 @@ spec:
             value: "10002"
       - nodeName: "master_node_2"
         instances: 1
-        masterPort: 20000
-        masterWebUiPort: 20200
+        masterPort: 10000
+        masterWebUiPort: 10100
         env:
           - name: "SPARK_MASTER_PORT"
-            value: "20002"
+            value: "10002"
       - nodeName: "master_node_3"
         instances: 1
         masterPort: 30000

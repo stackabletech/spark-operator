@@ -223,8 +223,8 @@ fn create_pod_name(cluster_name: &str, node_type: &SparkNodeType, hash: &str) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stackable_spark_common::test::cluster::{Load, TestSparkCluster};
     use stackable_spark_crd::SparkNodeSelector;
+    use stackable_spark_test_utils::cluster::{Load, TestSparkCluster};
 
     fn setup() -> SparkCluster {
         let mut cluster: SparkCluster = TestSparkCluster::load();

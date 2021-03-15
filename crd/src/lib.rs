@@ -278,7 +278,7 @@ impl SparkVersion {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stackable_spark_common::test::cluster::{Load, TestSparkCluster};
+    use stackable_spark_test_utils::cluster::{Load, TestSparkCluster};
 
     fn setup() -> SparkCluster {
         TestSparkCluster::load()
