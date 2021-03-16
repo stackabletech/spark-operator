@@ -127,7 +127,7 @@ fn get_pods_for_node(hashed: &HashMap<String, Vec<Pod>>) -> Vec<Pod> {
 }
 
 impl SparkState {
-    async fn set_upgrading_condition(
+    async fn set_installing_condition(
         &self,
         conditions: &[Condition],
         message: &str,
@@ -141,7 +141,7 @@ impl SparkState {
                 message.to_string(),
                 reason.to_string(),
                 status,
-                "Upgrading".to_string(),
+                "Installing".to_string(),
             )
             .await?;
 
@@ -177,10 +177,12 @@ impl SparkState {
         Ok(resource)
     }
 
-    pub async fn restart(&self) -> SparkReconcileResult {
-        let restarts =
-            stackable_operator::command_controller::list_commands::<Restart>(&self.context.client)
-                .await?;
+    pub async fn process_restart_command(&self) -> SparkReconcileResult {
+        let restarts = stackable_operator::command_controller::list_commands::<Restart>(
+            &self.context.client,
+            true,
+        )
+        .await?;
 
         for item in restarts {
             info!("Got Command: {:?}", item);
@@ -215,7 +217,7 @@ impl SparkState {
                     spec_version
                 );
                 self.status = self
-                    .set_upgrading_condition(
+                    .set_installing_condition(
                         &status.conditions,
                         &format!("Initial installation to version [{:?}]", spec_version),
                         "InitialInstallation",
@@ -238,7 +240,7 @@ impl SparkState {
                 }
                 // We do this here to update the observedGeneration if needed
                 self.status = self
-                    .set_upgrading_condition(
+                    .set_installing_condition(
                         &status.conditions,
                         &format!("Initial installation to version [{:?}]", spec_version),
                         "InitialInstallation",
@@ -278,7 +280,7 @@ impl SparkState {
                 trace!("{}", message);
 
                 self.status = self
-                    .set_upgrading_condition(
+                    .set_installing_condition(
                         &status.conditions,
                         &message,
                         &reason,
@@ -304,7 +306,7 @@ impl SparkState {
                 );
 
                 self.status = self
-                    .set_upgrading_condition(
+                    .set_installing_condition(
                         &status.conditions,
                         &message,
                         "",
@@ -664,7 +666,7 @@ impl SparkState {
                     .await?
                     .status;
                 self.status = self
-                    .set_upgrading_condition(
+                    .set_installing_condition(
                         &status.conditions,
                         &format!(
                             "No change required [{:?}] is still the current_version",
@@ -743,11 +745,11 @@ impl ReconciliationState for SparkState {
         Box::pin(async move {
             self.init_status()
                 .await?
-                .then(self.restart())
-                .await?
                 .then(self.read_existing_pod_information())
                 .await?
                 .then(self.check_pods_up_and_running())
+                .await?
+                .then(self.process_restart_command())
                 .await?
                 .then(self.reconcile_cluster(&SparkNodeType::Master))
                 .await?
