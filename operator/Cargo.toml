@@ -7,7 +7,8 @@ edition = "2018"
 [dependencies]
 stackable-spark-common = { path = "../common" }
 stackable-spark-crd = { path = "../crd" }
-stackable-operator = { git = "https://github.com/stackabletech/operator-rs.git", branch = "main" }
+#stackable-operator = { git = "https://github.com/stackabletech/operator-rs.git", branch = "main" }
+stackable-operator = { path = "../../operator-rs" }
 product-config = { git = "https://github.com/stackabletech/product-config.git", branch = "start" }
 
 async-trait = "0.1"

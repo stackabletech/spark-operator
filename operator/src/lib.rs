@@ -23,9 +23,10 @@ use stackable_operator::reconcile::{
 };
 use stackable_operator::{finalizer, podutils};
 use stackable_spark_crd::{
-    SparkCluster, SparkClusterSpec, SparkClusterStatus, SparkNodeSelector, SparkNodeType,
+    Restart, SparkCluster, SparkClusterSpec, SparkClusterStatus, SparkNodeSelector, SparkNodeType,
     SparkVersion,
 };
+
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -174,6 +175,18 @@ impl SparkState {
             .await?;
 
         Ok(resource)
+    }
+
+    pub async fn restart(&self) -> SparkReconcileResult {
+        let restarts =
+            stackable_operator::command_controller::list_commands::<Restart>(&self.context.client)
+                .await?;
+
+        for item in restarts {
+            info!("Got Command: {:?}", item);
+        }
+
+        Ok(ReconcileFunctionAction::Continue)
     }
 
     /// Will initialize the status object if it's never been set.
@@ -730,6 +743,8 @@ impl ReconciliationState for SparkState {
         Box::pin(async move {
             self.init_status()
                 .await?
+                .then(self.restart())
+                .await?
                 .then(self.read_existing_pod_information())
                 .await?
                 .then(self.check_pods_up_and_running())
@@ -794,5 +809,7 @@ pub async fn create_controller(client: Client) {
 
     let strategy = SparkStrategy::new();
 
-    controller.run(client, strategy).await;
+    controller
+        .run(client, strategy, Duration::from_secs(10))
+        .await;
 }
