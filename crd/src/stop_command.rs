@@ -8,22 +8,27 @@ use stackable_operator::Crd;
 #[kube(
     group = "command.spark.stackable.tech",
     version = "v1",
-    kind = "Restart",
+    kind = "Stop",
     namespaced
 )]
+#[kube(status = "StopCommandStatus")]
 #[serde(rename_all = "camelCase")]
-pub struct SparkClusterCommandRestartSpec {
+pub struct StopCommandSpec {
     pub name: String,
 }
 
-impl stackable_operator::command_controller::CommandCrd for Restart {
+impl stackable_operator::command_controller::CommandCrd for Stop {
     type Parent = SparkCluster;
     fn get_name(&self) -> String {
         self.spec.name.clone()
     }
 }
 
-impl Crd for Restart {
-    const RESOURCE_NAME: &'static str = "restarts.command.spark.stackable.tech";
-    const CRD_DEFINITION: &'static str = include_str!("../sparkcluster.command.restart.crd.yaml");
+impl Crd for Stop {
+    const RESOURCE_NAME: &'static str = "stops.command.spark.stackable.tech";
+    const CRD_DEFINITION: &'static str = include_str!("../stop.command.crd.yaml");
 }
+
+#[derive(Clone, Debug, Default, Deserialize, JsonSchema, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StopCommandStatus {}

@@ -23,3 +23,15 @@ spec:
               properties:
                 name:
                   type: string
+            status:
+              nullable: true
+              type: object
+              properties:
+                startedAt:
+                  type: string
+                finishedAt:
+                  type: string
+                message:
+                  type: string
+      subresources:
+        status: { }
