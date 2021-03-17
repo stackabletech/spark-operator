@@ -1347,9 +1347,6 @@ dependencies = [
 [[package]]
 name = "stackable-spark-common"
 version = "0.1.0"
-dependencies = [
- "serde_yaml",
-]
 
 [[package]]
 name = "stackable-spark-crd"
