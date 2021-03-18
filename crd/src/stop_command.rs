@@ -18,7 +18,7 @@ pub struct StopCommandSpec {
 }
 
 impl stackable_operator::command_controller::CommandCrd for Stop {
-    type Parent = SparkCluster;
+    type Owner = SparkCluster;
     fn get_name(&self) -> String {
         self.spec.name.clone()
     }
@@ -31,4 +31,8 @@ impl Crd for Stop {
 
 #[derive(Clone, Debug, Default, Deserialize, JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct StopCommandStatus {}
+pub struct StopCommandStatus {
+    started_at: Option<String>,
+    finished_at: Option<String>,
+    message: Option<String>,
+}

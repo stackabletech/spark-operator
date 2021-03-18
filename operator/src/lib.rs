@@ -24,7 +24,7 @@ use stackable_operator::reconcile::{
 use stackable_operator::{finalizer, podutils};
 use stackable_spark_crd::{
     Restart, SparkCluster, SparkClusterSpec, SparkClusterStatus, SparkNodeSelector, SparkNodeType,
-    SparkVersion,
+    SparkVersion, Start, Stop,
 };
 
 use std::collections::HashMap;
@@ -112,6 +112,12 @@ impl PodInformation {
     }
 }
 
+struct CommandInformation {
+    pub restarts: Option<Vec<Restart>>,
+    pub starts: Option<Vec<Start>>,
+    pub stops: Option<Vec<Stop>>,
+}
+
 /// Retrieve all pods from a hashed selector (like PodInformation: Master, Worker, HistoryServer)
 ///
 /// # Arguments
@@ -178,15 +184,14 @@ impl SparkState {
     }
 
     pub async fn process_restart_command(&self) -> SparkReconcileResult {
-        let restarts = stackable_operator::command_controller::list_commands::<Restart>(
-            &self.context.client,
-            true,
-        )
-        .await?;
+        let restarts: Vec<Restart> =
+            stackable_operator::command_controller::list_commands::<Restart>(
+                &self.context.client,
+                true,
+            )
+            .await?;
 
-        for item in restarts {
-            info!("Got Command: {:?}", item);
-        }
+        info!("Got {} command(s): {:?}", restarts.len(), restarts);
 
         Ok(ReconcileFunctionAction::Continue)
     }
@@ -316,6 +321,36 @@ impl SparkState {
                     .status;
             }
         }
+
+        Ok(ReconcileFunctionAction::Continue)
+    }
+
+    pub async fn read_and_init_existing_commands(&self) -> SparkReconcileResult {
+        let restart_commands: Vec<Restart> =
+            stackable_operator::command_controller::list_commands::<Restart>(
+                &self.context.client,
+                true,
+            )
+            .await?;
+
+        let start_commands: Vec<Start> = stackable_operator::command_controller::list_commands::<
+            Start,
+        >(&self.context.client, true)
+        .await?;
+
+        let stop_commands: Vec<Stop> =
+            stackable_operator::command_controller::list_commands::<Stop>(
+                &self.context.client,
+                true,
+            )
+            .await?;
+
+        info!(
+            "Available commands: RESTART[{}] - START[{}] - STOP[{}]",
+            restart_commands.len(),
+            start_commands.len(),
+            stop_commands.len()
+        );
 
         Ok(ReconcileFunctionAction::Continue)
     }
@@ -746,6 +781,8 @@ impl ReconciliationState for SparkState {
             self.init_status()
                 .await?
                 .then(self.read_existing_pod_information())
+                .await?
+                .then(self.read_and_init_existing_commands())
                 .await?
                 .then(self.check_pods_up_and_running())
                 .await?

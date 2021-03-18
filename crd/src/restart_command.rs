@@ -18,7 +18,7 @@ pub struct RestartCommandSpec {
 }
 
 impl stackable_operator::command_controller::CommandCrd for Restart {
-    type Parent = SparkCluster;
+    type Owner = SparkCluster;
     fn get_name(&self) -> String {
         self.spec.name.clone()
     }
@@ -31,4 +31,8 @@ impl Crd for Restart {
 
 #[derive(Clone, Debug, Default, Deserialize, JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RestartCommandStatus {}
+pub struct RestartCommandStatus {
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+    pub message: Option<String>,
+}

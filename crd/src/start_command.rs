@@ -18,7 +18,7 @@ pub struct StartCommandSpec {
 }
 
 impl stackable_operator::command_controller::CommandCrd for Start {
-    type Parent = SparkCluster;
+    type Owner = SparkCluster;
     fn get_name(&self) -> String {
         self.spec.name.clone()
     }
@@ -31,4 +31,8 @@ impl Crd for Start {
 
 #[derive(Clone, Debug, Default, Deserialize, JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct StartCommandStatus {}
+pub struct StartCommandStatus {
+    started_at: Option<String>,
+    finished_at: Option<String>,
+    message: Option<String>,
+}
