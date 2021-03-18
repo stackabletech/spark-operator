@@ -1,0 +1,49 @@
+//! This module provides constants that are shared via multiple crates.
+
+/// Name of the config properties file where spark nodes look for configuration data
+pub const SPARK_DEFAULTS_CONF: &str = "spark-defaults.conf";
+/// Name of the environment variables file where spark nodes look for configuration data
+pub const SPARK_ENV_SH: &str = "spark-env.sh";
+/// Basic start up parameter: We do not want to let processes work in background,
+/// so SPARK_NO_DAEMONIZE = true must be set at all times (before starting the process).
+pub const SPARK_NO_DAEMONIZE: &str = "SPARK_NO_DAEMONIZE";
+/// Basic start up parameter: We need to point the spark nodes to "our" configuration
+/// folder. Must be set at all times (before starting the process).
+pub const SPARK_CONF_DIR: &str = "SPARK_CONF_DIR";
+/// Common parameter: Must be set to true on all nodes (Master, Worker, HistoryServer) to
+/// enable node logging to be read and analysed by the HistoryServer.
+pub const SPARK_EVENT_LOG_ENABLED: &str = "spark.eventLog.enabled";
+/// Common parameter: Must be set on nodes (Master, Worker) to point where to write
+/// the logs. Should be a common storage path like HDFS, S3 in order for the HistoryServer to read.
+pub const SPARK_EVENT_LOG_DIR: &str = "spark.eventLog.dir";
+/// Common parameter: Must be set to true on all nodes (Master, Worker, HistoryServer) to
+/// enable authentication.
+pub const SPARK_AUTHENTICATE: &str = "spark.authenticate";
+/// Common parameter: Must be set on all nodes (Master, Worker, HistoryServer) to activate
+/// a secret password which needs to be supplied via spark-submit.
+pub const SPARK_AUTHENTICATE_SECRET: &str = "spark.authenticate.secret";
+/// Common parameter: Must be set to '0' on all nodes (Master, Worker, HistoryServer) to disable
+/// automatic port search. Otherwise the nodes will increase their given port if it's already in use.
+pub const SPARK_PORT_MAX_RETRIES: &str = "spark.port.maxRetries";
+/// Master specific parameter: Set the master port in environment variables.
+pub const SPARK_MASTER_PORT_ENV: &str = "SPARK_MASTER_PORT";
+/// Master specific parameter: Set the master port in config properties.
+pub const SPARK_MASTER_PORT_CONF: &str = "spark.master.port";
+/// Master specific parameter: Set the master web ui port in environment variables.
+pub const SPARK_MASTER_WEBUI_PORT: &str = "SPARK_MASTER_WEBUI_PORT";
+/// Worker specific parameter: Set the worker cores in environment variables.
+pub const SPARK_WORKER_CORES: &str = "SPARK_WORKER_CORES";
+/// Worker specific parameter: Set the worker memory (500m, 2g) in environment variables.
+pub const SPARK_WORKER_MEMORY: &str = "SPARK_WORKER_MEMORY";
+/// Worker specific parameter: Set the worker port in environment variables.
+pub const SPARK_WORKER_PORT: &str = "SPARK_WORKER_PORT";
+/// Worker specific parameter: Set the worker web ui port in environment variables.
+pub const SPARK_WORKER_WEBUI_PORT: &str = "SPARK_MASTER_WEBUI_PORT";
+/// HistoryServer specific parameter: Set directory where to search for logs. Normally should
+/// match the 'SPARK_EVENT_LOG_DIR' set on master and worker nodes
+pub const SPARK_HISTORY_FS_LOG_DIRECTORY: &str = "spark.history.fs.logDirectory";
+/// HistoryServer specific parameter: Set directory to cache application history data. If not set,
+/// the data will be kept in memory and is lost after restarts.
+pub const SPARK_HISTORY_STORE_PATH: &str = "spark.history.store.path";
+/// HistoryServer specific parameter: Set HistoryServer web ui port to access the common logs.
+pub const SPARK_HISTORY_UI_PORT: &str = "spark.history.ui.port";

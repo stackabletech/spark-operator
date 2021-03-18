@@ -1,12 +1,13 @@
+//! This module contains all Pod related methods.
 use crate::config;
 use crate::error::Error;
 use k8s_openapi::api::core::v1::{
     ConfigMapVolumeSource, Container, Pod, PodSpec, Volume, VolumeMount,
 };
+use kube::api::Meta;
 use stackable_operator::krustlet::create_tolerations;
 use stackable_operator::metadata;
-use stackable_operator::reconcile::ReconciliationContext;
-use stackable_spark_crd::{SparkCluster, SparkNode, SparkNodeType};
+use stackable_spark_crd::{SparkCluster, SparkClusterSpec, SparkNode, SparkNodeType};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
@@ -26,35 +27,35 @@ const CONFIG_VOLUME: &str = "config-volume";
 /// Name of the logging / event volume for SparkNode logs required by the history server
 const EVENT_VOLUME: &str = "event-volume";
 
-/// Build a pod using its selector and node_type
+/// Build a pod which represents a SparkNode (Master, Worker, HistoryServer) in the cluster.
 ///
 /// # Arguments
-/// * `context` - Reconciliation context for cluster name and resource (metadata)
+/// * `resource` - SparkCluster
+/// * `spec` - SparkClusterSpec to get some options like version or log_dir
 /// * `node_type` - SparkNodeType (master/worker/history-server)
 /// * `node_name` - Specific node_name (host) of the pod
-/// * `master_node` - SparkNode master to retrieve master urls for worker start commands
 /// * `hash` - NodeSelector hash
-/// * `version` - Current cluster version
-/// * `log_dir` - Logging dir for all nodes to enable history server logs
 ///
 pub fn build_pod(
-    context: &ReconciliationContext<SparkCluster>,
+    resource: &SparkCluster,
+    spec: &SparkClusterSpec,
     node_type: &SparkNodeType,
     node_name: &str,
-    master_node: &SparkNode,
     hash: &str,
-    version: &str,
-    log_dir: &Option<String>,
 ) -> Result<Pod, Error> {
-    let cluster_name = &context.name();
-    let (containers, volumes) =
-        build_containers(master_node, cluster_name, node_type, hash, version, log_dir);
+    let cluster_name = &Meta::name(resource);
+    let (containers, volumes) = build_containers(&spec, node_type, cluster_name, hash);
 
     Ok(Pod {
         metadata: metadata::build_metadata(
             create_pod_name(cluster_name, node_type, hash),
-            Some(build_labels(node_type, hash, version, master_node)),
-            &context.resource,
+            Some(build_labels(
+                node_type,
+                hash,
+                &spec.version.to_string(),
+                &spec.master,
+            )),
+            resource,
             true,
         )?,
         spec: Some(PodSpec {
@@ -71,26 +72,22 @@ pub fn build_pod(
 /// Build required pod containers
 ///
 /// # Arguments
-/// * `master_node` - SparkNode master to retrieve master urls for worker start commands
-/// * `cluster_name` - Current cluster name
+/// * `spec` - SparkClusterSpec to get some options like version or log_dir
 /// * `node_type` - SparkNodeType (master/worker/history-server)
+/// * `cluster_name` - Current cluster name
 /// * `hash` - NodeSelector hash
-/// * `version` - Current cluster version
-/// * `log_dir` - Logging dir for all nodes to enable history server logs
 ///
 fn build_containers(
-    master_node: &SparkNode,
-    cluster_name: &str,
+    spec: &SparkClusterSpec,
     node_type: &SparkNodeType,
+    cluster_name: &str,
     hash: &str,
-    version: &str,
-    log_dir: &Option<String>,
 ) -> (Vec<Container>, Vec<Volume>) {
-    let image_name = format!("spark:{}", version);
+    let image_name = format!("spark:{}", &spec.version.to_string());
 
-    let mut command = vec![node_type.get_command(version)];
+    let mut command = vec![node_type.get_command(&spec.version.to_string())];
     // adapt worker command with master url(s)
-    if let Some(master_urls) = config::adapt_worker_command(node_type, master_node) {
+    if let Some(master_urls) = config::adapt_worker_command(node_type, &spec.master) {
         command.push(master_urls);
     }
 
@@ -98,13 +95,13 @@ fn build_containers(
         image: Some(image_name),
         name: "spark".to_string(),
         command: Some(command),
-        volume_mounts: Some(create_volume_mounts(log_dir)),
+        volume_mounts: Some(create_volume_mounts(&spec.log_dir)),
         env: Some(config::create_required_startup_env()),
         ..Container::default()
     }];
 
-    let cm_name = create_config_map_name(cluster_name, node_type, hash);
-    let volumes = create_volumes(&cm_name);
+    let cm_name = config::create_config_map_name(cluster_name, node_type, hash);
+    let volumes = create_volumes(&cm_name, spec.log_dir.clone());
 
     (containers, volumes)
 }
@@ -113,22 +110,24 @@ fn build_containers(
 ///
 /// # Arguments
 /// * `configmap_name` - ConfigMap name where the required spark configuration files (spark-defaults.conf and spark-env.sh) are located
+/// * `log_dir` - Event/Log dir for SparkNodes. History Server reads these logs to offer metrics
 ///
-fn create_volumes(configmap_name: &str) -> Vec<Volume> {
-    let volumes = vec![
-        Volume {
-            name: CONFIG_VOLUME.to_string(),
-            config_map: Some(ConfigMapVolumeSource {
-                name: Some(configmap_name.to_string()),
-                ..ConfigMapVolumeSource::default()
-            }),
-            ..Volume::default()
-        },
-        Volume {
+fn create_volumes(configmap_name: &str, log_dir: Option<String>) -> Vec<Volume> {
+    let mut volumes = vec![Volume {
+        name: CONFIG_VOLUME.to_string(),
+        config_map: Some(ConfigMapVolumeSource {
+            name: Some(configmap_name.to_string()),
+            ..ConfigMapVolumeSource::default()
+        }),
+        ..Volume::default()
+    }];
+
+    if log_dir.is_some() {
+        volumes.push(Volume {
             name: EVENT_VOLUME.to_string(),
             ..Volume::default()
-        },
-    ];
+        })
+    }
 
     volumes
 }
@@ -138,7 +137,7 @@ fn create_volumes(configmap_name: &str) -> Vec<Volume> {
 /// # Arguments
 /// * `log_dir` - Event/Log dir for SparkNodes. History Server reads these logs to offer metrics
 ///
-pub fn create_volume_mounts(log_dir: &Option<String>) -> Vec<VolumeMount> {
+fn create_volume_mounts(log_dir: &Option<String>) -> Vec<VolumeMount> {
     let mut volume_mounts = vec![VolumeMount {
         mount_path: "conf".to_string(),
         name: CONFIG_VOLUME.to_string(),
@@ -221,14 +220,103 @@ fn create_pod_name(cluster_name: &str, node_type: &SparkNodeType, hash: &str) ->
     )
 }
 
-/// All config map names follow a simple pattern: <name of SparkCluster object>-<NodeType name>-<SelectorHash>-cm
-/// That means multiple pods of one selector share one and the same config map
-///
-/// # Arguments
-/// * `cluster_name` - Current cluster name
-/// * `node_type` - SparkNodeType (master/worker/history-server)
-/// * `hash` - NodeSelector hash
-///
-pub fn create_config_map_name(cluster_name: &str, node_type: &SparkNodeType, hash: &str) -> String {
-    format!("{}-{}-{}-cm", cluster_name, node_type.as_str(), hash)
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use stackable_spark_crd::SparkNodeSelector;
+    use stackable_spark_test_utils::cluster::{Load, TestSparkCluster};
+
+    fn setup() -> SparkCluster {
+        let mut cluster: SparkCluster = TestSparkCluster::load();
+        // set metadata.uid
+        cluster.metadata.uid = Some("123456789".to_string());
+        cluster
+    }
+
+    fn get_selector_hash(
+        selector: &SparkNodeSelector,
+        node_type: &SparkNodeType,
+        cluster_name: &str,
+    ) -> String {
+        let mut hasher = DefaultHasher::new();
+        selector.hash(&mut hasher);
+        node_type.as_str().hash(&mut hasher);
+        cluster_name.hash(&mut hasher);
+        hasher.finish().to_string()
+    }
+
+    #[test]
+    fn test_build_master_pod() {
+        let cluster = &setup();
+        let spec = &cluster.spec.clone();
+        let selector = &spec.master.selectors.get(0).unwrap();
+        let cluster_name = &cluster.metadata.name.clone().unwrap();
+        let node_type = &SparkNodeType::Master;
+        let hash = &get_selector_hash(selector, node_type, cluster_name);
+
+        let pod = build_pod(cluster, spec, node_type, &selector.node_name, hash).unwrap();
+
+        // check labels
+        assert!(pod.metadata.labels.is_some());
+
+        let labels = pod.metadata.labels.unwrap();
+        assert_eq!(labels.get(HASH_LABEL), Some(&hash.to_string()));
+        assert_eq!(labels.get(TYPE_LABEL), Some(&node_type.to_string()));
+        assert_eq!(labels.get(VERSION_LABEL), Some(&spec.version.to_string()));
+
+        // check node name
+        assert_eq!(
+            pod.spec.clone().unwrap().node_name,
+            Some(selector.node_name.to_string())
+        );
+
+        // check containers
+        let containers = pod.spec.clone().unwrap().containers;
+        assert_eq!(containers.len(), 1);
+        let container = containers.get(0).unwrap();
+        assert_eq!(
+            container.command.clone().unwrap(),
+            vec![node_type.get_command(&spec.version.to_string())]
+        );
+        // only start command for masters
+        assert_eq!(container.command.clone().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_build_worker_pod() {
+        let cluster = &setup();
+        let spec = &cluster.spec.clone();
+        let selector = &spec.worker.selectors.get(0).unwrap();
+        let cluster_name = &cluster.metadata.name.clone().unwrap();
+        let node_type = &SparkNodeType::Worker;
+        let hash = &get_selector_hash(selector, node_type, cluster_name);
+
+        let pod = build_pod(cluster, spec, node_type, &selector.node_name, hash).unwrap();
+
+        // check labels
+        assert!(pod.metadata.labels.is_some());
+
+        let labels = pod.metadata.labels.unwrap();
+        assert_eq!(labels.get(HASH_LABEL), Some(&hash.to_string()));
+        assert_eq!(labels.get(TYPE_LABEL), Some(&node_type.to_string()));
+        assert_eq!(labels.get(VERSION_LABEL), Some(&spec.version.to_string()));
+        assert_eq!(
+            labels.get(MASTER_URLS_HASH_LABEL),
+            Some(&get_hashed_master_urls(&spec.master))
+        );
+
+        // check node name
+        assert_eq!(
+            pod.spec.clone().unwrap().node_name,
+            Some(selector.node_name.to_string())
+        );
+
+        // check containers
+        let containers = pod.spec.clone().unwrap().containers;
+        assert_eq!(containers.len(), 1);
+
+        let container = containers.get(0).unwrap();
+        // start command and master urls for workers
+        assert_eq!(container.command.clone().unwrap().len(), 2);
+    }
 }

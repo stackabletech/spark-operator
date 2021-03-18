@@ -1345,6 +1345,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "stackable-spark-common"
+version = "0.1.0"
+
+[[package]]
 name = "stackable-spark-crd"
 version = "0.1.0"
 dependencies = [
@@ -1356,6 +1360,8 @@ dependencies = [
  "serde",
  "serde_json",
  "stackable-operator",
+ "stackable-spark-common",
+ "stackable-spark-test-utils",
  "strum",
  "strum_macros",
  "thiserror",
@@ -1375,7 +1381,9 @@ dependencies = [
  "serde",
  "serde_json",
  "stackable-operator",
+ "stackable-spark-common",
  "stackable-spark-crd",
+ "stackable-spark-test-utils",
  "thiserror",
  "tracing",
  "uuid",
@@ -1389,6 +1397,14 @@ dependencies = [
  "stackable-spark-crd",
  "stackable-spark-operator",
  "tokio",
+]
+
+[[package]]
+name = "stackable-spark-test-utils"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_yaml",
 ]
 
 [[package]]
