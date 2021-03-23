@@ -1,11 +1,7 @@
 //! This module provides all required CRD definitions and additional helper methods.
+pub mod commands;
 mod error;
-pub mod restart_command;
-pub use restart_command::Restart;
-pub mod start_command;
-pub use start_command::Start;
-pub mod stop_command;
-pub use stop_command::Stop;
+pub use commands::{Restart, Start, Stop};
 
 pub use crate::error::CrdError;
 use derivative::Derivative;

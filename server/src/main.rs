@@ -1,8 +1,6 @@
 use stackable_operator::{client, error};
-use stackable_spark_crd::Restart;
 use stackable_spark_crd::SparkCluster;
-use stackable_spark_crd::Start;
-use stackable_spark_crd::Stop;
+use stackable_spark_crd::{Restart, Start, Stop};
 
 #[tokio::main]
 async fn main() -> Result<(), error::Error> {
