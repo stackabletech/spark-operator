@@ -360,7 +360,7 @@ impl SparkState {
                     info!("Starting command [{}]", command.get_name());
 
                     command
-                        .run(
+                        .process_command_start(
                             &self.context.client,
                             &self.pod_information.as_ref().unwrap().get_all_pods(None),
                         )
@@ -425,6 +425,8 @@ impl SparkState {
                             }),
                         )
                         .await?;
+
+                    command.process_command_finish().await?;
 
                     info!("Finished command [{}]", command.get_name());
                     break;
