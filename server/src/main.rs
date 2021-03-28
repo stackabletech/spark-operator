@@ -14,11 +14,15 @@ async fn main() -> Result<(), error::Error> {
 
     tokio::join!(
         stackable_spark_operator::create_controller(client.clone()),
-        stackable_operator::command_controller::create_command_controller::<Restart>(
+        stackable_operator::command_controller::create_command_controller::<Restart, SparkCluster>(
             client.clone()
         ),
-        stackable_operator::command_controller::create_command_controller::<Start>(client.clone()),
-        stackable_operator::command_controller::create_command_controller::<Stop>(client.clone())
+        stackable_operator::command_controller::create_command_controller::<Start, SparkCluster>(
+            client.clone()
+        ),
+        stackable_operator::command_controller::create_command_controller::<Stop, SparkCluster>(
+            client.clone()
+        )
     );
 
     Ok(())

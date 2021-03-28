@@ -22,13 +22,13 @@ use stackable_operator::reconcile::{
     ReconcileFunctionAction, ReconcileResult, ReconciliationContext,
 };
 use stackable_operator::{finalizer, podutils};
+use stackable_spark_crd::commands::{Restart, Start, Stop};
 use stackable_spark_crd::{
     SparkCluster, SparkClusterSpec, SparkClusterStatus, SparkNodeSelector, SparkNodeType,
     SparkVersion,
 };
 
 use crate::command_utils::CommandType;
-use stackable_spark_crd::commands::CommandStatus;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -313,14 +313,16 @@ impl SparkState {
         Ok(ReconcileFunctionAction::Continue)
     }
 
+    /// Read available commands. Init the command status with "Enqueued" and sort commands according to the creation timestamp.
     pub async fn read_existing_command_information(&mut self) -> SparkReconcileResult {
         let mut all_commands = command_utils::collect_commands(&self.context.client).await?;
 
         all_commands.sort_by(|a, b| a.get_creation_timestamp().cmp(&b.get_creation_timestamp()));
 
-        command_utils::init_commands(&self.context.client, &mut all_commands).await?;
-
-        trace!("Found {} command(s)", all_commands.len());
+        // if we had any status updates we need a requeue
+        if command_utils::init_commands(&self.context.client, &mut all_commands).await? {
+            return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
+        }
 
         self.command_information = Some(CommandInformation {
             commands: all_commands,
@@ -329,115 +331,59 @@ impl SparkState {
         Ok(ReconcileFunctionAction::Continue)
     }
 
-    pub async fn start_commands(&mut self) -> SparkReconcileResult {
-        // should never happen
-        if self.command_information.is_none() {
-            return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(5)));
-        }
-
-        for command in &mut self.command_information.as_mut().unwrap().commands {
-            // should never happen
-            if command.get_status().is_none() {
-                return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(5)));
-            }
-
-            let status = command.get_status().unwrap();
-
-            match (status.started_at, status.finished_at) {
-                // Command is in queue and will be started
-                (None, None) => {
-                    command
-                        .write_status(
-                            &self.context.client,
-                            Some(CommandStatus {
-                                started_at: command_utils::get_time(),
-                                finished_at: None,
-                                message: Some("Starting".to_string()),
-                            }),
-                        )
-                        .await?;
-
-                    info!("Starting command [{}]", command.get_name());
-
-                    command
-                        .process_command_start(
-                            &self.context.client,
-                            &self.pod_information.as_ref().unwrap().get_all_pods(None),
-                        )
-                        .await?;
-
-                    return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(5)));
+    /// If a command does not have any startedAt or finishedAt timestamps, start the command with the
+    /// oldest creation timestamp.
+    /// If a command has startedAt timestamp it is running -> observe
+    /// If a command has both startedAt and finishedAt timestamp it is done -> skip
+    pub async fn execute_commands(&mut self) -> SparkReconcileResult {
+        if let Some(command) = command_utils::get_current_command(&self.command_information)? {
+            if let Some(status) = command.get_status().clone() {
+                match (status.started_at, status.finished_at) {
+                    // Command is in queue and will be started
+                    (None, None) => {
+                        if command
+                            .process_command_execute(
+                                &self.context.client,
+                                &self.pod_information.as_ref().unwrap().get_all_pods(None),
+                            )
+                            .await?
+                        {
+                            return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
+                        }
+                    }
+                    // command is already running
+                    (Some(_), None) => {
+                        if command
+                            .process_command_running(&self.context.client)
+                            .await?
+                        {
+                            return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
+                        }
+                    }
+                    _ => {}
                 }
-
-                (Some(_), None) => {
-                    command
-                        .write_status(
-                            &self.context.client,
-                            Some(CommandStatus {
-                                started_at: None,
-                                finished_at: None,
-                                message: Some("Running".to_string()),
-                            }),
-                        )
-                        .await?;
-
-                    info!("Command running [{}]", command.get_name());
-                    break;
-                }
-                // This should not happen and is a bug!
-                (None, Some(_)) => {
-                    // TODO: delete?
-                    error!("Command [{}] has finish_at but no started_at set. This is a bug and illegal!", command.get_name());
-                }
-                // If bot times are set the command is done and finished -> check next command
-                (Some(_), Some(_)) => continue,
             }
         }
 
         Ok(ReconcileFunctionAction::Continue)
     }
 
-    pub async fn finish_commands(&mut self) -> SparkReconcileResult {
-        // should never happen
-        if self.command_information.is_none() {
-            return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(5)));
-        }
-
-        for command in &mut self.command_information.as_mut().unwrap().commands {
-            // should never happen
-            if command.get_status().is_none() {
-                return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(5)));
-            }
-
-            let status = command.get_status().unwrap();
-
-            match (status.started_at, status.finished_at) {
-                // Command is in queue and will be started
-                (None, None) => {}
-                (Some(_), None) => {
-                    command
-                        .write_status(
-                            &self.context.client,
-                            Some(CommandStatus {
-                                started_at: None,
-                                finished_at: command_utils::get_time(),
-                                message: Some("Finished".to_string()),
-                            }),
-                        )
-                        .await?;
-
-                    command.process_command_finish().await?;
-
-                    info!("Finished command [{}]", command.get_name());
-                    break;
+    /// After pod reconcile, if a command has startedAt but no finishedAt timestamp, set finishedAt
+    /// timestamp and finalize command.
+    pub async fn finalize_commands(&mut self) -> SparkReconcileResult {
+        if let Some(command) = command_utils::get_current_command(&mut self.command_information)? {
+            if let Some(status) = command.get_status().clone() {
+                match (status.started_at, status.finished_at) {
+                    (Some(_), None) => {
+                        if command
+                            .process_command_finalize(&self.context.client)
+                            .await?
+                        {
+                            return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
+                        }
+                    }
+                    _ => {}
                 }
-                // This should not happen and is a bug!
-                (None, Some(_)) => {
-                    // TODO: delete?
-                    error!("Command [{}] has finish_at but no started_at set. This is a bug and illegal!", command.get_name());
-                }
-                // If bot times are set the command is done and finished -> check next command
-                (Some(_), Some(_)) => continue,
             }
         }
 
@@ -875,7 +821,7 @@ impl ReconciliationState for SparkState {
                 .await?
                 .then(self.check_pods_up_and_running())
                 .await?
-                .then(self.start_commands())
+                .then(self.execute_commands())
                 .await?
                 .then(self.reconcile_cluster(&SparkNodeType::Master))
                 .await?
@@ -885,7 +831,7 @@ impl ReconciliationState for SparkState {
                 .await?
                 .then(self.check_worker_master_urls())
                 .await?
-                .then(self.finish_commands())
+                .then(self.finalize_commands())
                 .await?
                 .then(self.process_version())
                 .await
@@ -933,10 +879,16 @@ pub async fn create_controller(client: Client) {
     let spark_api: Api<SparkCluster> = client.get_all_api();
     let pods_api: Api<Pod> = client.get_all_api();
     let config_maps_api: Api<ConfigMap> = client.get_all_api();
+    let cmd_restart_api: Api<Restart> = client.get_all_api();
+    let cmd_start_api: Api<Start> = client.get_all_api();
+    let cmd_stop_api: Api<Stop> = client.get_all_api();
 
     let controller = Controller::new(spark_api)
         .owns(pods_api, ListParams::default())
-        .owns(config_maps_api, ListParams::default());
+        .owns(config_maps_api, ListParams::default())
+        .owns(cmd_restart_api, ListParams::default())
+        .owns(cmd_start_api, ListParams::default())
+        .owns(cmd_stop_api, ListParams::default());
 
     let strategy = SparkStrategy::new();
 

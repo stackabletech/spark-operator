@@ -32,4 +32,7 @@ pub enum Error {
         #[from]
         source: stackable_spark_crd::CrdError,
     },
+
+    #[error("Error during command processing: {0}")]
+    CommandError(String),
 }

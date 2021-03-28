@@ -1,8 +1,7 @@
-use crate::SparkCluster;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use stackable_operator::command_controller::CommandOwner;
+use stackable_operator::command_controller::Command;
 use stackable_operator::Crd;
 
 #[derive(Clone, CustomResource, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
@@ -23,9 +22,7 @@ impl Crd for Restart {
     const CRD_DEFINITION: &'static str = include_str!("../restart.command.crd.yaml");
 }
 
-impl CommandOwner for Restart {
-    type Owner = SparkCluster;
-
+impl Command for Restart {
     fn get_owner_name(&self) -> String {
         self.spec.name.clone()
     }
@@ -49,9 +46,7 @@ impl Crd for Start {
     const CRD_DEFINITION: &'static str = include_str!("../start.command.crd.yaml");
 }
 
-impl CommandOwner for Start {
-    type Owner = SparkCluster;
-
+impl Command for Start {
     fn get_owner_name(&self) -> String {
         self.spec.name.clone()
     }
@@ -75,9 +70,7 @@ impl Crd for Stop {
     const CRD_DEFINITION: &'static str = include_str!("../stop.command.crd.yaml");
 }
 
-impl CommandOwner for Stop {
-    type Owner = SparkCluster;
-
+impl Command for Stop {
     fn get_owner_name(&self) -> String {
         self.spec.name.clone()
     }
@@ -91,5 +84,23 @@ pub struct CommandStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
+    pub message: Option<CommandStatusMessage>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Serialize,
+    JsonSchema,
+    PartialEq,
+    strum_macros::Display,
+    strum_macros::EnumString,
+)]
+pub enum CommandStatusMessage {
+    Enqueued,
+    Started,
+    Running,
+    Finished,
+    Error,
 }
