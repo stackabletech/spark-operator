@@ -1373,6 +1373,7 @@ checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
 [[package]]
 name = "stackable-operator"
 version = "0.1.0"
+source = "git+https://github.com/stackabletech/operator-rs.git?branch=command_controller#078f7bd0fa91fa44c7cd1ea4a17c5d5876fd2f5d"
 dependencies = [
  "async-trait",
  "chrono",

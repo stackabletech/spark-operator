@@ -10,7 +10,7 @@ use stackable_operator::error::OperatorResult;
 use stackable_spark_crd::commands::{CommandStatus, CommandStatusMessage};
 use stackable_spark_crd::{Restart, Start, Stop};
 use std::fmt::Debug;
-use tracing::{debug, error, info, trace};
+use tracing::debug;
 
 /// Collection of all required commands defined in the crd crate.
 /// CommandType can easily be stored in a vector to access all available commands.
@@ -85,7 +85,7 @@ impl CommandType {
     pub async fn process_command_execute(
         &self,
         client: &Client,
-        pods: &Vec<Pod>,
+        pods: &[Pod],
     ) -> OperatorResult<bool> {
         let new_status = &CommandStatus {
             started_at: get_time(),
@@ -127,7 +127,10 @@ impl CommandType {
     }
 
     /// Implementation of behavior when commands are finished (at the end of reconcile)
-    /// e.g. logging
+    ///
+    /// # Arguments
+    /// * `client` - Kubernetes client
+    ///
     pub async fn process_command_finalize(&self, client: &Client) -> OperatorResult<bool> {
         let new_status = &CommandStatus {
             started_at: None,
@@ -146,7 +149,7 @@ impl CommandType {
 /// * `client` - Kubernetes client
 /// * `commands` - Available commands
 ///
-pub async fn init_commands(client: &Client, commands: &Vec<CommandType>) -> OperatorResult<bool> {
+pub async fn init_commands(client: &Client, commands: &[CommandType]) -> OperatorResult<bool> {
     let mut changed = false;
     for command in commands {
         // patch empty status first
@@ -276,13 +279,13 @@ where
     let mut changes = false;
     if let Some(status) = current_status {
         if status.message != new_status.message {
-            info!(
+            debug!(
                 "Command [{}] -> {}",
                 T::KIND,
                 new_status
                     .message
                     .as_ref()
-                    .unwrap_or_else(|| &CommandStatusMessage::Enqueued)
+                    .unwrap_or(&CommandStatusMessage::Enqueued)
             );
 
             write_status(client, resource, new_status).await?;
@@ -299,9 +302,5 @@ where
 /// Retrieve a timestamp in format: "2021-03-23T16:20:19Z".
 /// Required to set command start and finish timestamps.
 pub fn get_time() -> Option<String> {
-    Some(
-        chrono::Utc::now()
-            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-            .to_string(),
-    )
+    Some(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
 }

@@ -48,6 +48,12 @@ struct SparkState {
 }
 
 /// This will be filled in the beginning of the reconcile method.
+/// All available commands are sorted into a list via ascending creation_timestamp.
+pub struct CommandInformation {
+    pub commands: Vec<CommandType>,
+}
+
+/// This will be filled in the beginning of the reconcile method.
 /// Nodes are sorted according to their cluster role / node type and their corresponding selector hash.
 /// The selector hash identifies a provided selector which shares properties for one or multiple pods.
 /// In order to reconcile properly, we need the pods to identify themselves via a hash belonging to a certain selector.
@@ -113,10 +119,6 @@ impl PodInformation {
 
         pods
     }
-}
-
-pub struct CommandInformation {
-    pub commands: Vec<CommandType>,
 }
 
 /// Retrieve all pods from a hashed selector (like PodInformation: Master, Worker, HistoryServer)
@@ -317,10 +319,10 @@ impl SparkState {
     pub async fn read_existing_command_information(&mut self) -> SparkReconcileResult {
         let mut all_commands = command_utils::collect_commands(&self.context.client).await?;
 
-        all_commands.sort_by(|a, b| a.get_creation_timestamp().cmp(&b.get_creation_timestamp()));
+        all_commands.sort_by_key(|a| a.get_creation_timestamp());
 
         // if we had any status updates we need a requeue
-        if command_utils::init_commands(&self.context.client, &mut all_commands).await? {
+        if command_utils::init_commands(&self.context.client, &all_commands).await? {
             return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
         }
 
@@ -371,18 +373,15 @@ impl SparkState {
     /// After pod reconcile, if a command has startedAt but no finishedAt timestamp, set finishedAt
     /// timestamp and finalize command.
     pub async fn finalize_commands(&mut self) -> SparkReconcileResult {
-        if let Some(command) = command_utils::get_current_command(&mut self.command_information)? {
+        if let Some(command) = command_utils::get_current_command(&self.command_information)? {
             if let Some(status) = command.get_status().clone() {
-                match (status.started_at, status.finished_at) {
-                    (Some(_), None) => {
-                        if command
-                            .process_command_finalize(&self.context.client)
-                            .await?
-                        {
-                            return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
-                        }
+                if let (Some(_), None) = (status.started_at, status.finished_at) {
+                    if command
+                        .process_command_finalize(&self.context.client)
+                        .await?
+                    {
+                        return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
                     }
-                    _ => {}
                 }
             }
         }
