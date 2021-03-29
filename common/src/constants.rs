@@ -23,7 +23,7 @@ pub const SPARK_AUTHENTICATE: &str = "spark.authenticate";
 /// a secret password which needs to be supplied via spark-submit.
 pub const SPARK_AUTHENTICATE_SECRET: &str = "spark.authenticate.secret";
 /// Common parameter: Must be set to '0' on all nodes (Master, Worker, HistoryServer) to disable
-/// automatic port search. Otherwise the nodes will increase their given port if its already in use.
+/// automatic port search. Otherwise the nodes will increase their given port if it's already in use.
 pub const SPARK_PORT_MAX_RETRIES: &str = "spark.port.maxRetries";
 /// Master specific parameter: Set the master port in environment variables.
 pub const SPARK_MASTER_PORT_ENV: &str = "SPARK_MASTER_PORT";
