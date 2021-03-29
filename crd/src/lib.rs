@@ -1,5 +1,7 @@
 //! This module provides all required CRD definitions and additional helper methods.
+pub mod commands;
 mod error;
+
 pub use commands::{Restart, Start, Stop};
 
 pub use crate::error::CrdError;
