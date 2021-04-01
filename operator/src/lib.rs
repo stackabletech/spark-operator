@@ -44,13 +44,7 @@ struct SparkState {
     spec: SparkClusterSpec,
     status: Option<SparkClusterStatus>,
     pod_information: Option<PodInformation>,
-    command_information: Option<CommandInformation>,
-}
-
-/// This will be filled in the beginning of the reconcile method.
-/// All available commands are sorted into a list via ascending creation_timestamp.
-pub struct CommandInformation {
-    pub commands: Vec<CommandType>,
+    commands: Option<Vec<CommandType>>,
 }
 
 /// This will be filled in the beginning of the reconcile method.
@@ -326,9 +320,7 @@ impl SparkState {
             return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
         }
 
-        self.command_information = Some(CommandInformation {
-            commands: all_commands,
-        });
+        self.commands = Some(all_commands);
 
         Ok(ReconcileFunctionAction::Continue)
     }
@@ -338,7 +330,7 @@ impl SparkState {
     /// If a command has startedAt timestamp it is running -> observe
     /// If a command has both startedAt and finishedAt timestamp it is done -> skip
     pub async fn execute_commands(&mut self) -> SparkReconcileResult {
-        if let Some(command) = command_utils::get_current_command(&self.command_information)? {
+        if let Some(command) = command_utils::get_current_command(&self.commands)? {
             if let Some(status) = command.get_status().clone() {
                 match (status.started_at, status.finished_at) {
                     // Command is in queue and will be started
@@ -373,7 +365,7 @@ impl SparkState {
     /// After pod reconcile, if a command has startedAt but no finishedAt timestamp, set finishedAt
     /// timestamp and finalize command.
     pub async fn finalize_commands(&mut self) -> SparkReconcileResult {
-        if let Some(command) = command_utils::get_current_command(&self.command_information)? {
+        if let Some(command) = command_utils::get_current_command(&self.commands)? {
             if let Some(status) = command.get_status().clone() {
                 if let (Some(_), None) = (status.started_at, status.finished_at) {
                     if command
@@ -866,7 +858,7 @@ impl ControllerStrategy for SparkStrategy {
             status: context.resource.status.clone(),
             context,
             pod_information: None,
-            command_information: None,
+            commands: None,
         })
     }
 }

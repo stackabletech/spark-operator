@@ -1,4 +1,3 @@
-use crate::CommandInformation;
 use crate::Error;
 use k8s_openapi::api::core::v1::Pod;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
@@ -142,7 +141,7 @@ impl CommandType {
     }
 }
 
-/// Initialize all comments with a status message if no status available yet. Returns true
+/// Initialize all commands with a status message if no status available yet. Returns true
 /// if any status has been updated.
 ///
 /// # Arguments
@@ -208,16 +207,16 @@ pub async fn collect_commands(client: &Client) -> OperatorResult<Vec<CommandType
 /// * `command_information` - CommandInformation containing a list of all commands
 ///
 pub fn get_current_command(
-    command_information: &Option<CommandInformation>,
+    commands: &Option<Vec<CommandType>>,
 ) -> Result<Option<&CommandType>, Error> {
     // should never happen
-    if command_information.is_none() {
+    if commands.is_none() {
         return Err(Error::CommandError("CommandInformation missing, this is a programming error and should never happen. Please report in our issue tracker.".to_string()));
     }
 
     let mut current_command = None;
 
-    for command in &command_information.as_ref().unwrap().commands {
+    for command in commands.as_ref().unwrap() {
         // should never happen
         if command.get_status().is_none() {
             return Err(Error::CommandError(format!("Received uninitialized status for [{}] , this is a programming error and should never happen. Please report in our issue tracker.", command.get_name())));
@@ -226,7 +225,7 @@ pub fn get_current_command(
         let status = command.get_status().unwrap();
 
         match (status.started_at, status.finished_at) {
-            (None,Some(_)) => return  Err(Error::CommandError(format!("Received command [{}] with finishedAt but missing startedAt timestamp in status, this is a programming error and should never happen. Please report in our issue tracker.", command.get_name()))),
+            (None, Some(_)) => return  Err(Error::CommandError(format!("Received command [{}] with finishedAt but missing startedAt timestamp in status, this is a programming error and should never happen. Please report in our issue tracker.", command.get_name()))),
             (Some(_), Some(_)) => continue,
             _ => {
                 current_command = Some(command);
