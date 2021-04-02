@@ -931,7 +931,7 @@ dependencies = [
 [[package]]
 name = "product-config"
 version = "0.1.0"
-source = "git+https://github.com/stackabletech/product-config.git?branch=start#2c3642d193431e306ddb5e6bb9e82106536e664c"
+source = "git+https://github.com/stackabletech/product-config.git?branch=start#f18ddba01e4071511ae7b737ff04f934e87a5ca1"
 dependencies = [
  "regex",
  "semver",
