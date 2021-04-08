@@ -1,7 +1,7 @@
-mod command_utils;
 mod config;
 mod error;
-mod pod_utils;
+mod spark_command_utils;
+mod spark_pod_utils;
 
 use crate::error::Error;
 
@@ -18,24 +18,24 @@ use stackable_operator::client::Client;
 use stackable_operator::conditions::ConditionStatus;
 use stackable_operator::controller::{Controller, ControllerStrategy, ReconciliationState};
 use stackable_operator::error::OperatorResult;
+use stackable_operator::pod_utils;
 use stackable_operator::reconcile::{
     ReconcileFunctionAction, ReconcileResult, ReconciliationContext,
 };
-use stackable_operator::{finalizer, podutils};
+use stackable_operator::{finalizer, reconcile};
 use stackable_spark_crd::commands::{Restart, Start, Stop};
 use stackable_spark_crd::{
     SparkCluster, SparkClusterSpec, SparkClusterStatus, SparkNodeSelector, SparkNodeType,
     SparkVersion,
 };
 
-use crate::command_utils::CommandType;
+use crate::spark_command_utils::CommandType;
+use kube_runtime::controller::ReconcilerAction;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::time::Duration;
-
-const FINALIZER_NAME: &str = "spark.stackable.tech/cleanup";
 
 type SparkReconcileResult = ReconcileResult<error::Error>;
 
@@ -311,12 +311,12 @@ impl SparkState {
 
     /// Read available commands. Init the command status with "Enqueued" and sort commands according to the creation timestamp.
     pub async fn read_existing_command_information(&mut self) -> SparkReconcileResult {
-        let mut all_commands = command_utils::collect_commands(&self.context.client).await?;
+        let mut all_commands = spark_command_utils::collect_commands(&self.context.client).await?;
 
         all_commands.sort_by_key(|a| a.get_creation_timestamp());
 
         // if we had any status updates we need a requeue
-        if command_utils::init_commands(&self.context.client, &all_commands).await? {
+        if spark_command_utils::init_commands(&self.context.client, &all_commands).await? {
             return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
         }
 
@@ -330,7 +330,7 @@ impl SparkState {
     /// If a command has startedAt timestamp it is running -> observe
     /// If a command has both startedAt and finishedAt timestamp it is done -> skip
     pub async fn execute_commands(&mut self) -> SparkReconcileResult {
-        if let Some(command) = command_utils::get_current_command(&self.commands)? {
+        if let Some(command) = spark_command_utils::get_current_command(&self.commands)? {
             if let Some(status) = command.get_status().clone() {
                 match (status.started_at, status.finished_at) {
                     // Command is in queue and will be started
@@ -365,7 +365,7 @@ impl SparkState {
     /// After pod reconcile, if a command has startedAt but no finishedAt timestamp, set finishedAt
     /// timestamp and finalize command.
     pub async fn finalize_commands(&mut self) -> SparkReconcileResult {
-        if let Some(command) = command_utils::get_current_command(&self.commands)? {
+        if let Some(command) = spark_command_utils::get_current_command(&self.commands)? {
             if let Some(status) = command.get_status().clone() {
                 if let (Some(_), None) = (status.started_at, status.finished_at) {
                     if command
@@ -418,9 +418,9 @@ impl SparkState {
             if let Some(labels) = pod.metadata.labels.clone() {
                 // we require HASH and TYPE label to identify and sort the pods into the NodeInformation
                 if let (Some(hash), Some(node_type), Some(version)) = (
-                    labels.get(pod_utils::HASH_LABEL),
-                    labels.get(pod_utils::TYPE_LABEL),
-                    labels.get(pod_utils::VERSION_LABEL),
+                    labels.get(spark_pod_utils::HASH_LABEL),
+                    labels.get(spark_pod_utils::TYPE_LABEL),
+                    labels.get(spark_pod_utils::VERSION_LABEL),
                 ) {
                     let spark_node_type = match SparkNodeType::from_str(node_type) {
                         Ok(nt) => nt,
@@ -428,7 +428,7 @@ impl SparkState {
                             error!(
                                 "Pod [{}] has an invalid type '{}' [{}], deleting it.",
                                 Meta::name(&pod),
-                                pod_utils::TYPE_LABEL,
+                                spark_pod_utils::TYPE_LABEL,
                                 node_type
                             );
                             self.context.client.delete(&pod).await?;
@@ -442,7 +442,7 @@ impl SparkState {
                             error!(
                                 "Pod [{}] has an outdated '{}' [{}], deleting it.",
                                 Meta::name(&pod),
-                                pod_utils::HASH_LABEL,
+                                spark_pod_utils::HASH_LABEL,
                                 hash
                             );
                             self.context.client.delete(&pod).await?;
@@ -458,7 +458,7 @@ impl SparkState {
                             info!(
                                 "Pod [{}] has an outdated '{}' [{}] - required is [{}], deleting it",
                                 Meta::name(&pod),
-                                pod_utils::VERSION_LABEL,
+                                spark_pod_utils::VERSION_LABEL,
                                 version,
                                 target_version
                             );
@@ -482,7 +482,7 @@ impl SparkState {
                 } else {
                     // some labels missing
                     error!("Pod [{}] is missing one or more required '{:?}' labels, this is illegal, deleting it.",
-                         Meta::name(&pod), vec![pod_utils::HASH_LABEL, pod_utils::TYPE_LABEL, pod_utils::VERSION_LABEL]);
+                         Meta::name(&pod), vec![spark_pod_utils::HASH_LABEL, spark_pod_utils::TYPE_LABEL, spark_pod_utils::VERSION_LABEL]);
                     self.context.client.delete(&pod).await?;
                 }
             } else {
@@ -567,7 +567,7 @@ impl SparkState {
                 terminated_pods.push(Meta::name(pod));
             }
 
-            if !podutils::is_pod_running_and_ready(pod) {
+            if !pod_utils::is_pod_running_and_ready(pod) {
                 started_pods.push(Meta::name(pod));
             }
         }
@@ -687,15 +687,15 @@ impl SparkState {
             for pod in &worker_pods {
                 if let Some(labels) = &pod.metadata.labels {
                     if let Some(label_hashed_master_urls) =
-                        labels.get(pod_utils::MASTER_URLS_HASH_LABEL)
+                        labels.get(spark_pod_utils::MASTER_URLS_HASH_LABEL)
                     {
                         let current_hashed_master_urls =
-                            pod_utils::get_hashed_master_urls(&self.spec.master);
+                            spark_pod_utils::get_hashed_master_urls(&self.spec.master);
                         if label_hashed_master_urls != &current_hashed_master_urls {
                             info!(
                                 "Pod [{}] has an outdated '{}' [{}] - required is [{}], deleting it",
                                 Meta::name(pod),
-                                pod_utils::MASTER_URLS_HASH_LABEL,
+                                spark_pod_utils::MASTER_URLS_HASH_LABEL,
                                 label_hashed_master_urls,
                                 current_hashed_master_urls,
                             );
@@ -757,7 +757,7 @@ impl SparkState {
         node_type: &SparkNodeType,
         hash: &str,
     ) -> Result<Pod, Error> {
-        let pod = pod_utils::build_pod(
+        let pod = spark_pod_utils::build_pod(
             &self.context.resource,
             &self.spec,
             node_type,
@@ -845,8 +845,15 @@ impl ControllerStrategy for SparkStrategy {
     type State = SparkState;
     type Error = error::Error;
 
-    fn finalizer_name(&self) -> String {
-        FINALIZER_NAME.to_string()
+    fn error_policy(&self) -> ReconcilerAction {
+        let reconcile_after_error_sec = 30;
+        error!(
+            "Reconciliation error: requeuing after {} seconds!",
+            reconcile_after_error_sec
+        );
+        reconcile::create_requeuing_reconciler_action(Duration::from_secs(
+            reconcile_after_error_sec,
+        ))
     }
 
     async fn init_reconcile_state(
