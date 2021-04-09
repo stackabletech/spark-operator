@@ -196,6 +196,21 @@ spec:
                     - 3.1.1
                   nullable: true
                   type: string
+                currentCommand:
+                  type: object
+                  properties:
+                    commandRef:
+                      type: string
+                    commandType:
+                      type: string
+                    startedAt:
+                      type: string
+                clusterStatus:
+                  enum:
+                    - Stopped
+                    - Running
+                  nullable: true
+                  type: string
               type: object
       subresources:
         status: { }

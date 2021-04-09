@@ -1,13 +1,16 @@
 use crate::Error;
 use k8s_openapi::api::core::v1::Pod;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
-use k8s_openapi::Metadata;
+use k8s_openapi::{Metadata, Resource};
 use kube::api::{Meta, ObjectMeta};
 use serde::de::DeserializeOwned;
+use serde_json::json;
 use stackable_operator::client::Client;
 use stackable_operator::error::OperatorResult;
 use stackable_spark_crd::commands::{CommandStatus, CommandStatusMessage};
-use stackable_spark_crd::{Restart, Start, Stop};
+use stackable_spark_crd::{
+    ClusterStatus, CurrentCommand, Restart, SparkCluster, SparkClusterStatus, Start, Stop,
+};
 use std::fmt::Debug;
 use tracing::debug;
 
@@ -32,45 +35,20 @@ impl CommandType {
         }
     }
 
+    pub fn get_type(&self) -> String {
+        match self {
+            CommandType::Restart(restart) => restart.kind.clone(),
+            CommandType::Start(start) => start.kind.clone(),
+            CommandType::Stop(stop) => stop.kind.clone(),
+        }
+    }
+
     /// Return the creation timestamp of a command object for sorting purposes
     pub fn get_creation_timestamp(&self) -> Option<Time> {
         match self {
             CommandType::Restart(restart) => restart.meta().creation_timestamp.clone(),
             CommandType::Start(start) => start.meta().creation_timestamp.clone(),
             CommandType::Stop(stop) => stop.meta().creation_timestamp.clone(),
-        }
-    }
-
-    /// Return the current command status
-    pub fn get_status(&self) -> Option<CommandStatus> {
-        match self {
-            CommandType::Restart(restart) => restart.status.clone(),
-            CommandType::Start(start) => start.status.clone(),
-            CommandType::Stop(stop) => stop.status.clone(),
-        }
-    }
-
-    /// Writes / updates the status in the command object
-    ///
-    /// # Arguments
-    /// * `client` - Kubernetes client
-    /// * `new_status` - Desired new status
-    ///
-    pub async fn write_status(
-        &self,
-        client: &Client,
-        new_status: &CommandStatus,
-    ) -> OperatorResult<bool> {
-        match self {
-            CommandType::Restart(restart) => {
-                update_status(client, restart, &self.get_status(), new_status).await
-            }
-            CommandType::Start(start) => {
-                update_status(client, start, &self.get_status(), new_status).await
-            }
-            CommandType::Stop(stop) => {
-                update_status(client, stop, &self.get_status(), new_status).await
-            }
         }
     }
 
@@ -81,32 +59,32 @@ impl CommandType {
     /// * `client` - Kubernetes client
     /// * `pods` - All available cluster pods
     ///
-    pub async fn process_command_execute(
+    pub async fn process_command_start(
         &self,
         client: &Client,
+        cluster: &SparkCluster,
         pods: &[Pod],
-    ) -> OperatorResult<bool> {
-        let new_status = &CommandStatus {
-            started_at: get_time(),
-            finished_at: None,
-            message: Some(CommandStatusMessage::Started),
-        };
-
+    ) -> OperatorResult<()> {
         match self {
             CommandType::Restart(_) => {
                 for pod in pods {
                     client.delete(pod).await?;
                 }
-
-                self.write_status(client, new_status).await
             }
             CommandType::Start(_) => {
+                // remove cluster status stopped
                 unimplemented!();
             }
             CommandType::Stop(_) => {
-                unimplemented!();
+                for pod in pods {
+                    client.delete(pod).await?;
+                }
+                // set cluster status stopped
+                update_cluster_status(client, cluster, &ClusterStatus::Stopped).await?;
             }
         }
+
+        Ok(())
     }
 
     /// Implementation of command behavior when the command is running
@@ -115,14 +93,8 @@ impl CommandType {
     /// * `client` - Kubernetes client
     /// * `pods` - All available cluster pods
     ///
-    pub async fn process_command_running(&self, client: &Client) -> OperatorResult<bool> {
-        let new_status = &CommandStatus {
-            started_at: None,
-            finished_at: None,
-            message: Some(CommandStatusMessage::Running),
-        };
-
-        self.write_status(&client, new_status).await
+    pub async fn process_command_running(&self, client: &Client) -> OperatorResult<()> {
+        Ok(())
     }
 
     /// Implementation of behavior when commands are finished (at the end of reconcile)
@@ -130,41 +102,91 @@ impl CommandType {
     /// # Arguments
     /// * `client` - Kubernetes client
     ///
-    pub async fn process_command_finalize(&self, client: &Client) -> OperatorResult<bool> {
-        let new_status = &CommandStatus {
-            started_at: None,
-            finished_at: get_time(),
-            message: Some(CommandStatusMessage::Finished),
-        };
+    pub async fn process_command_finalize(
+        &self,
+        client: &Client,
+        cluster: &SparkCluster,
+    ) -> OperatorResult<()> {
+        match self {
+            CommandType::Restart(_) => {}
+            CommandType::Start(_) => {}
+            CommandType::Stop(_) => {}
+        }
 
-        self.write_status(&client, new_status).await
+        // delete command from status
+        update_current_command_status(client, cluster, &None).await?;
+        // set cluster to running
+        update_cluster_status(client, cluster, &ClusterStatus::Running).await?;
+        // TODO: set label "done" to command to avoid retrieving it via list
+        // (for now label selector is not available in list_commands so we need to check
+        // the label when retrieving all commands ourselves)
+        Ok(())
     }
 }
 
-/// Initialize all commands with a status message if no status available yet. Returns true
-/// if any status has been updated.
+async fn update_cluster_status(
+    client: &Client,
+    cluster: &SparkCluster,
+    cluster_status: &ClusterStatus,
+) -> OperatorResult<SparkCluster> {
+    client
+        .merge_patch_status(cluster, &json!({ "clusterStatus": cluster_status }))
+        .await
+}
+
+async fn update_current_command_status(
+    client: &Client,
+    cluster: &SparkCluster,
+    current_command: &Option<CurrentCommand>,
+) -> OperatorResult<SparkCluster> {
+    client
+        .merge_patch_status(cluster, &json!({ "currentCommand": current_command }))
+        .await
+}
+
+async fn update_command_label() {}
+
+pub async fn get_command_from_ref(
+    client: &Client,
+    command_type: &str,
+    command: &str,
+    namespace: Option<&str>,
+) -> OperatorResult<CommandType> {
+    // TODO: adapt ::KIND for kube-rs changes on 0.52
+    match command_type {
+        stackable_spark_crd::Restart::KIND => Ok(CommandType::Restart(
+            client
+                .get::<stackable_spark_crd::Restart>(command, namespace)
+                .await?,
+        )),
+        stackable_spark_crd::Start::KIND => Ok(CommandType::Start(
+            client
+                .get::<stackable_spark_crd::Start>(command, namespace)
+                .await?,
+        )),
+        stackable_spark_crd::Stop::KIND => Ok(CommandType::Stop(
+            client
+                .get::<stackable_spark_crd::Stop>(command, namespace)
+                .await?,
+        )),
+        _ => Err(stackable_operator::error::Error::MissingCustomResource {
+            name: command.to_string(),
+        }),
+    }
+}
+
+/// Collect and sort all available commands and return the first (the one with
+/// the oldest creation timestamp) element.
 ///
 /// # Arguments
 /// * `client` - Kubernetes client
-/// * `commands` - Available commands
 ///
-pub async fn init_commands(client: &Client, commands: &[CommandType]) -> OperatorResult<bool> {
-    let mut changed = false;
-    for command in commands {
-        // patch empty status first
-        if command.get_status().is_none() {
-            let new_status = CommandStatus {
-                started_at: None,
-                finished_at: None,
-                message: Some(CommandStatusMessage::Enqueued),
-            };
+pub async fn get_next_command(client: &Client) -> OperatorResult<Option<CommandType>> {
+    let mut all_commands = collect_commands(client).await?;
 
-            command.write_status(client, &new_status).await?;
+    all_commands.sort_by_key(|a| a.get_creation_timestamp());
 
-            changed = true;
-        }
-    }
-    Ok(changed)
+    Ok(all_commands.into_iter().nth(0))
 }
 
 /// Collect all different commands in one vector.
@@ -172,7 +194,7 @@ pub async fn init_commands(client: &Client, commands: &[CommandType]) -> Operato
 /// # Arguments
 /// * `client` - Kubernetes client
 ///
-pub async fn collect_commands(client: &Client) -> OperatorResult<Vec<CommandType>> {
+async fn collect_commands(client: &Client) -> OperatorResult<Vec<CommandType>> {
     let mut all_commands = vec![];
     let mut restart_commands: Vec<Restart> =
         stackable_operator::command_controller::list_commands::<Restart>(client).await?;
@@ -198,108 +220,8 @@ pub async fn collect_commands(client: &Client) -> OperatorResult<Vec<CommandType
     Ok(all_commands)
 }
 
-/// Retrieve the current command depending on its status. We search for "enqueued" commands which
-/// have no startedAt and finishedAt timestamps, as well as started/running commands that have
-/// a startedAt but no finishedAt timestamp. We ignore finished commands (startedAt, finishedAt
-/// are set).
-///
-/// # Arguments
-/// * `command_information` - CommandInformation containing a list of all commands
-///
-pub fn get_current_command(
-    commands: &Option<Vec<CommandType>>,
-) -> Result<Option<&CommandType>, Error> {
-    // should never happen
-    if commands.is_none() {
-        return Err(Error::CommandError("CommandInformation missing, this is a programming error and should never happen. Please report in our issue tracker.".to_string()));
-    }
-
-    let mut current_command = None;
-
-    for command in commands.as_ref().unwrap() {
-        // should never happen
-        if command.get_status().is_none() {
-            return Err(Error::CommandError(format!("Received uninitialized status for [{}] , this is a programming error and should never happen. Please report in our issue tracker.", command.get_name())));
-        }
-
-        let status = command.get_status().unwrap();
-
-        match (status.started_at, status.finished_at) {
-            (None, Some(_)) => return  Err(Error::CommandError(format!("Received command [{}] with finishedAt but missing startedAt timestamp in status, this is a programming error and should never happen. Please report in our issue tracker.", command.get_name()))),
-            (Some(_), Some(_)) => continue,
-            _ => {
-                current_command = Some(command);
-                break;
-            }
-        }
-    }
-
-    Ok(current_command)
-}
-
-/// Write / merge the command status.
-///
-/// # Arguments
-/// * `client` - Kubernetes client
-/// * `resource` - Resource owning the status
-/// * `status` - Status to be written / merged
-///
-async fn write_status<T>(
-    client: &Client,
-    resource: &T,
-    new_status: &CommandStatus,
-) -> OperatorResult<T>
-where
-    T: Clone + Debug + DeserializeOwned + Meta + Metadata<Ty = ObjectMeta> + Send + Sync,
-{
-    client
-        .merge_patch_status(resource, &serde_json::json!(new_status))
-        .await
-}
-
-/// Update the status. Checks if current message is already set and only updates the
-/// status if a new message (e.g. a transition from started to running) will be written.
-///
-/// # Arguments
-/// * `client` - Kubernetes client
-/// * `resource` - Resource owning the status
-/// * `current_status` - Current status that will be updated
-/// * `new_status` - New status to be written / merged
-///
-async fn update_status<T>(
-    client: &Client,
-    resource: &T,
-    current_status: &Option<CommandStatus>,
-    new_status: &CommandStatus,
-) -> OperatorResult<bool>
-where
-    T: Clone + Debug + DeserializeOwned + Meta + Metadata<Ty = ObjectMeta> + Send + Sync,
-{
-    let mut changes = false;
-    if let Some(status) = current_status {
-        if status.message != new_status.message {
-            debug!(
-                "Command [{}] -> {}",
-                T::KIND,
-                new_status
-                    .message
-                    .as_ref()
-                    .unwrap_or(&CommandStatusMessage::Enqueued)
-            );
-
-            write_status(client, resource, new_status).await?;
-            changes = true;
-        }
-    } else {
-        write_status(client, resource, new_status).await?;
-        changes = true;
-    }
-
-    Ok(changes)
-}
-
 /// Retrieve a timestamp in format: "2021-03-23T16:20:19Z".
 /// Required to set command start and finish timestamps.
-pub fn get_time() -> Option<String> {
-    Some(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+pub fn get_current_timestamp() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
