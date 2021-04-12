@@ -1431,6 +1431,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures",
+ "json-patch",
  "k8s-openapi",
  "kube",
  "kube-runtime",

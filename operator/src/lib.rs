@@ -29,10 +29,8 @@ use stackable_spark_crd::{
     SparkNodeSelector, SparkNodeType, SparkVersion,
 };
 
-use crate::command_utils::CommandType;
 use kube_runtime::controller::ReconcilerAction;
 use std::collections::HashMap;
-use std::env::current_exe;
 use std::future::Future;
 use std::pin::Pin;
 use std::str::FromStr;
@@ -526,22 +524,23 @@ impl SparkState {
     ///  
     pub async fn process_commands(&mut self) -> SparkReconcileResult {
         if let Some(status) = &self.status {
-            if Some(ClusterStatus::Stopped) == status.cluster_status {
-                trace!("Cluster is stopped. Waiting for start command!");
-                // TODO: check next command for start?
-                return Ok(ReconcileFunctionAction::Done);
-            }
-
             // command running
             if let Some(current_command) = &status.current_command {
-                info!(
-                    "Command '{}' of type '{}' is running since {}...",
-                    current_command.command_ref,
-                    current_command.command_type,
-                    current_command.started_at
-                );
+                let running_command = command_utils::get_command_from_ref(
+                    &self.context.client,
+                    &current_command.command_type,
+                    &current_command.command_ref,
+                    Meta::namespace(&self.context.resource).as_deref(),
+                )
+                .await?;
 
-                return Ok(ReconcileFunctionAction::Continue);
+                return Ok(running_command
+                    .process_command_running(
+                        &self.context.client,
+                        &mut self.context.resource,
+                        current_command,
+                    )
+                    .await?);
             } else {
                 // list commands, write to cluster_status and start
                 if let Some(next_command) =
@@ -553,25 +552,23 @@ impl SparkState {
                         started_at: command_utils::get_current_timestamp(),
                     };
 
-                    self.context
-                        .client
-                        .merge_patch_status(
-                            &self.context.resource,
-                            &json!({ "currentCommand": &current_command }),
-                        )
-                        .await?;
-
                     if let Some(pod_info) = &self.pod_information {
                         next_command
                             .process_command_start(
                                 &self.context.client,
                                 &self.context.resource,
+                                &current_command,
                                 &pod_info.get_all_pods(None),
                             )
                             .await?;
                     }
 
                     return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
+                    // if no next command check if cluster is stopped
+                } else if Some(ClusterStatus::Stopped) == status.cluster_status {
+                    info!("Cluster is stopped. Waiting for next command!");
+                    // TODO: check next command for start?
+                    return Ok(ReconcileFunctionAction::Done);
                 }
             }
         }
@@ -716,7 +713,7 @@ impl SparkState {
                 .await?;
 
                 current_command
-                    .process_command_finalize(&self.context.client, &self.context.resource)
+                    .process_command_finalize(&self.context.client, &mut self.context.resource)
                     .await?;
 
                 return Ok(ReconcileFunctionAction::Continue);
