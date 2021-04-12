@@ -518,10 +518,10 @@ impl SparkState {
         true
     }
 
-    /// Process available / running commands
-    /// 1) Check cluster_status for stopped -> Done
-    /// 2) Check if a current_command is set in the cluster status
-    ///  
+    /// Process available / running commands. If current_command in the status is set, we have
+    /// a running command. If it is not set, but commands are available, start the oldest command.
+    /// If no command is running, no command is waiting and the cluster_status field is "Stopped",
+    /// abort the reconcile action.
     pub async fn process_commands(&mut self) -> SparkReconcileResult {
         if let Some(status) = &self.status {
             // command running
@@ -567,7 +567,6 @@ impl SparkState {
                     // if no next command check if cluster is stopped
                 } else if Some(ClusterStatus::Stopped) == status.cluster_status {
                     info!("Cluster is stopped. Waiting for next command!");
-                    // TODO: check next command for start?
                     return Ok(ReconcileFunctionAction::Done);
                 }
             }

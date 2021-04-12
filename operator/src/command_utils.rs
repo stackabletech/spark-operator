@@ -178,6 +178,8 @@ async fn finalize_current_command(
     //
     // client.json_patch(cluster, patch).await
 
+    // TODO: Now we replace the whole status just to remove the current_command.
+    // I tried json_patch delete / replace as well (check commented code above), did not work. Any suggestions?
     if let Some(status) = &mut cluster.status {
         status.current_command = None;
         status.cluster_status = Some(cluster_status.clone());
@@ -356,6 +358,7 @@ async fn collect_commands(client: &Client) -> OperatorResult<Vec<CommandType>> {
 /// # Arguments
 /// * `command` - Command custom resource
 ///
+// TODO: will be obsolete with label selector in list_commands
 fn is_command_done<T>(command: &T) -> bool
 where
     T: Meta,
