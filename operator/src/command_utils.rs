@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 
 use stackable_operator::reconcile::ReconcileFunctionAction;
+use std::time::Duration;
 use tracing::info;
 
 const COMMAND_STATUS_LABEL: &str = "status";
@@ -56,7 +57,7 @@ impl CommandType {
         }
     }
 
-    /// Implementation of command behavior when starting the command
+    /// Implementation of command behavior when starting to execute the command
     /// e.g. delete pods for restart
     ///
     /// # Arguments
@@ -65,41 +66,40 @@ impl CommandType {
     /// * `current_command` - Command that is currently processed
     /// * `pods` - All available cluster pods
     ///
-    pub async fn process_command_start(
+    pub async fn process_command_execute(
         &self,
         client: &Client,
         cluster: &SparkCluster,
         current_command: &CurrentCommand,
         pods: &[Pod],
-    ) -> OperatorResult<()> {
+    ) -> OperatorResult<ReconcileFunctionAction> {
+        info!(
+            "Executing [{}] command '{}'",
+            current_command.command_type, current_command.command_ref,
+        );
         // set the current_command in the cluster custom resource status
         let updated_cluster = update_current_command(client, cluster, current_command).await?;
-
         // apply command specific action
-        match self {
+        return match self {
             CommandType::Restart(_) => {
                 for pod in pods {
                     client.delete(pod).await?;
                 }
                 update_cluster_status(client, &updated_cluster, &ClusterStatus::Running).await?;
+                Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)))
             }
             CommandType::Start(_) => {
                 update_cluster_status(client, &updated_cluster, &ClusterStatus::Running).await?;
+                Ok(ReconcileFunctionAction::Continue)
             }
             CommandType::Stop(_) => {
                 for pod in pods {
                     client.delete(pod).await?;
                 }
                 update_cluster_status(client, &updated_cluster, &ClusterStatus::Stopped).await?;
+                Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)))
             }
-        }
-
-        info!(
-            "Executing command '{}' of type '{}' ...",
-            current_command.command_ref, current_command.command_type
-        );
-
-        Ok(())
+        };
     }
 
     /// Implementation of command behavior when the command is running
@@ -118,12 +118,18 @@ impl CommandType {
         if let CommandType::Stop(stop) = self {
             finalize_current_command(client, cluster, &ClusterStatus::Stopped).await?;
             update_command_label(client, stop).await?;
+
+            info!(
+                "Finished [{}] command '{}'",
+                current_command.command_type, current_command.command_ref
+            );
+
             return Ok(ReconcileFunctionAction::Done);
         }
 
         info!(
-            "Command '{}' of type '{}' is running since {}...",
-            current_command.command_ref, current_command.command_type, current_command.started_at
+            "Running [{}] command '{}' since {}",
+            current_command.command_type, current_command.command_ref, current_command.started_at
         );
 
         Ok(ReconcileFunctionAction::Continue)
@@ -139,14 +145,20 @@ impl CommandType {
         &self,
         client: &Client,
         cluster: &mut SparkCluster,
-    ) -> OperatorResult<SparkCluster> {
-        let updated_cluster =
-            finalize_current_command(client, cluster, &ClusterStatus::Running).await?;
+    ) -> OperatorResult<ReconcileFunctionAction> {
+        info!(
+            "Finished [{}] command '{}'",
+            self.get_type(),
+            self.get_name()
+        );
+
+        finalize_current_command(client, cluster, &ClusterStatus::Running).await?;
 
         // TODO: set label "done" to command to avoid retrieving it via list
         // (for now label selector is not available in list_commands so we need to check
         // the label when retrieving all commands ourselves)
         match self {
+            // TODO: better to requeue to avoid status conflicts?
             CommandType::Restart(restart) => {
                 update_command_label(client, restart).await?;
             }
@@ -156,7 +168,7 @@ impl CommandType {
             _ => {}
         }
 
-        Ok(updated_cluster)
+        Ok(ReconcileFunctionAction::Continue)
     }
 }
 

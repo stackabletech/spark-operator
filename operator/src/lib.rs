@@ -541,34 +541,31 @@ impl SparkState {
                         current_command,
                     )
                     .await?);
-            } else {
-                // list commands, write to cluster_status and start
-                if let Some(next_command) =
-                    command_utils::get_next_command(&self.context.client).await?
-                {
-                    let current_command = CurrentCommand {
-                        command_ref: next_command.get_name(),
-                        command_type: next_command.get_type(),
-                        started_at: command_utils::get_current_timestamp(),
-                    };
+            // no commands running -> check for available commands
+            } else if let Some(next_command) =
+                command_utils::get_next_command(&self.context.client).await?
+            {
+                let current_command = CurrentCommand {
+                    command_ref: next_command.get_name(),
+                    command_type: next_command.get_type(),
+                    started_at: command_utils::get_current_timestamp(),
+                };
 
-                    if let Some(pod_info) = &self.pod_information {
-                        next_command
-                            .process_command_start(
-                                &self.context.client,
-                                &self.context.resource,
-                                &current_command,
-                                &pod_info.get_all_pods(None),
-                            )
-                            .await?;
-                    }
-
-                    return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
-                    // if no next command check if cluster is stopped
-                } else if Some(ClusterStatus::Stopped) == status.cluster_status {
-                    info!("Cluster is stopped. Waiting for next command!");
-                    return Ok(ReconcileFunctionAction::Done);
+                if let Some(pod_info) = &self.pod_information {
+                    return Ok(next_command
+                        .process_command_execute(
+                            &self.context.client,
+                            &self.context.resource,
+                            &current_command,
+                            &pod_info.get_all_pods(None),
+                        )
+                        .await?);
                 }
+
+            // if no next command check if cluster is stopped
+            } else if Some(ClusterStatus::Stopped) == status.cluster_status {
+                info!("Cluster is stopped. Waiting for next command!");
+                return Ok(ReconcileFunctionAction::Done);
             }
         }
 
@@ -698,11 +695,6 @@ impl SparkState {
         if let Some(status) = &self.status {
             // command running
             if let Some(current_command) = &status.current_command {
-                info!(
-                    "Command '{}' of type '{}' finished...",
-                    current_command.command_ref, current_command.command_type,
-                );
-
                 let current_command = command_utils::get_command_from_ref(
                     &self.context.client,
                     &current_command.command_type,
@@ -711,11 +703,9 @@ impl SparkState {
                 )
                 .await?;
 
-                current_command
+                return Ok(current_command
                     .process_command_finalize(&self.context.client, &mut self.context.resource)
-                    .await?;
-
-                return Ok(ReconcileFunctionAction::Continue);
+                    .await?);
             }
         }
 
