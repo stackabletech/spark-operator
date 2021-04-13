@@ -154,7 +154,7 @@ impl CommandType {
 
         finalize_current_command(client, cluster, &ClusterStatus::Running).await?;
 
-        // TODO: set label "done" to command to avoid retrieving it via list
+        // TODO: set label "done" to command to avoid retrieving it via list_commands
         // (for now label selector is not available in list_commands so we need to check
         // the label when retrieving all commands ourselves)
         match self {
@@ -257,6 +257,7 @@ async fn update_command_label<T>(client: &Client, command: &T) -> OperatorResult
 where
     T: Meta + Clone + DeserializeOwned,
 {
+    // TODO: check if label exists first? Will be obsolete with label selector in list_commands
     let mut labels = HashMap::new();
     labels.insert(
         COMMAND_STATUS_LABEL.to_string(),

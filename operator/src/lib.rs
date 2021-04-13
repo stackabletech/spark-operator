@@ -631,7 +631,6 @@ impl SparkState {
                     while current_count > spec_pod_count {
                         let pod = pods.get(0).unwrap();
                         self.context.client.delete(pod).await?;
-                        // TODO: delete configmaps?
                         debug!("Deleting {} pod '{}'", node_type.as_str(), Meta::name(pod));
                         current_count -= 1;
                         applied_changes = true;
