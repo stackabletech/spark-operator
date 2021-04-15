@@ -15,7 +15,7 @@ use stackable_operator::reconcile::ReconcileFunctionAction;
 use std::time::Duration;
 use tracing::info;
 
-const COMMAND_STATUS_LABEL: &str = "status";
+const COMMAND_STATUS_LABEL: &str = "spark.stackable.tect/status";
 const COMMAND_STATUS_VALUE: &str = "done";
 
 /// Collection of all required commands defined in the crd crate.
@@ -115,6 +115,10 @@ impl CommandType {
         cluster: &mut SparkCluster,
         current_command: &CurrentCommand,
     ) -> OperatorResult<ReconcileFunctionAction> {
+        // the "Stop" command requires special treatment here. We do not want to finalize that
+        // command after the reconcile for pods (which would result in pods being created again
+        // even though the cluster should be stopped). So we finish the "Stop" command here after
+        // all pods are terminated and update the status label in the command.
         if let CommandType::Stop(stop) = self {
             finalize_current_command(client, cluster, &ClusterStatus::Stopped).await?;
             update_command_label(client, stop).await?;

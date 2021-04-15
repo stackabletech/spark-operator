@@ -198,7 +198,6 @@ spec:
                   type: string
                 currentCommand:
                   type: object
-                  nullable: true
                   properties:
                     commandRef:
                       type: string
