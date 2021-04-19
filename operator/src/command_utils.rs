@@ -15,7 +15,7 @@ use stackable_operator::reconcile::ReconcileFunctionAction;
 use std::time::Duration;
 use tracing::info;
 
-const COMMAND_STATUS_LABEL: &str = "spark.stackable.tect/status";
+const COMMAND_STATUS_LABEL: &str = "spark.stackable.tech/status";
 const COMMAND_STATUS_VALUE: &str = "done";
 
 /// Collection of all required commands defined in the crd crate.
@@ -195,7 +195,8 @@ async fn finalize_current_command(
     // client.json_patch(cluster, patch).await
 
     // TODO: Now we replace the whole status just to remove the current_command.
-    // I tried json_patch delete / replace as well (check commented code above), did not work. Any suggestions?
+    // json_patch delete / replace did not work (check commented code above). If i used it no
+    // errors appeared but nothing was deleted / replaced either. Needs investigation.
     if let Some(status) = &mut cluster.status {
         status.current_command = None;
         status.cluster_status = Some(cluster_status.clone());
