@@ -1,24 +1,33 @@
 //! This module provides all required CRD definitions and additional helper methods.
 pub mod commands;
-mod error;
-
-pub use commands::{Restart, Start, Stop};
+pub mod error;
 
 pub use crate::error::CrdError;
-use derivative::Derivative;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
+pub use commands::{Restart, Start, Stop};
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, LabelSelector};
 use kube::CustomResource;
+use schemars::gen::SchemaGenerator;
+use schemars::schema::Schema;
 use schemars::JsonSchema;
 use semver::{SemVerError, Version};
 use serde::{Deserialize, Serialize};
+use serde_json::{from_value, json};
 use stackable_operator::Crd;
-use std::collections::hash_map::DefaultHasher;
+use stackable_spark_common::constants::{
+    SPARK_AUTHENTICATE_SECRET, SPARK_EVENT_LOG_DIR, SPARK_HISTORY_FS_LOG_DIRECTORY,
+    SPARK_HISTORY_STORE_PATH, SPARK_HISTORY_UI_PORT, SPARK_MASTER_PORT_ENV,
+    SPARK_MASTER_WEBUI_PORT, SPARK_PORT_MAX_RETRIES, SPARK_WORKER_CORES, SPARK_WORKER_MEMORY,
+    SPARK_WORKER_PORT, SPARK_WORKER_WEBUI_PORT,
+};
 use std::collections::HashMap;
 use std::fmt;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::str::FromStr;
+use strum::IntoEnumIterator;
+use strum_macros::Display;
+use strum_macros::EnumIter;
 
-#[derive(Clone, CustomResource, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[derive(Clone, CustomResource, Debug, Deserialize, JsonSchema, Serialize)]
 #[kube(
     group = "spark.stackable.tech",
     version = "v1",
@@ -29,152 +38,229 @@ use std::str::FromStr;
 #[kube(status = "SparkClusterStatus")]
 #[serde(rename_all = "camelCase")]
 pub struct SparkClusterSpec {
-    pub master: SparkNode,
-    pub worker: SparkNode,
-    pub history_server: Option<SparkNode>,
+    pub masters: NodeGroup<MasterConfig>,
+    pub workers: NodeGroup<WorkerConfig>,
+    pub history_servers: Option<NodeGroup<HistoryServerConfig>>,
     pub version: SparkVersion,
     pub secret: Option<String>,
     pub log_dir: Option<String>,
     pub max_port_retries: Option<usize>,
 }
 
-impl SparkClusterSpec {
-    /// Collect hashed selectors from master, worker and history server
-    ///
-    /// # Arguments
-    /// * `cluster_name` - unique cluster identifier to avoid hashing collisions of selectors
-    ///
-    pub fn get_hashed_selectors(
-        &self,
-        cluster_name: &str,
-    ) -> HashMap<SparkNodeType, HashMap<String, SparkNodeSelector>> {
-        let mut hashed_selectors: HashMap<SparkNodeType, HashMap<String, SparkNodeSelector>> =
-            HashMap::new();
-
-        hashed_selectors.insert(
-            SparkNodeType::Master,
-            self.master
-                .get_hashed_selectors(SparkNodeType::Master, cluster_name),
-        );
-
-        hashed_selectors.insert(
-            SparkNodeType::Worker,
-            self.worker
-                .get_hashed_selectors(SparkNodeType::Worker, cluster_name),
-        );
-
-        if let Some(history_server) = &self.history_server {
-            hashed_selectors.insert(
-                SparkNodeType::HistoryServer,
-                history_server.get_hashed_selectors(SparkNodeType::HistoryServer, cluster_name),
-            );
-        }
-
-        hashed_selectors
-    }
-
-    /// Get count of all specified instances in all nodes (master, worker, history-server)
-    pub fn get_all_instances(&self) -> usize {
-        let mut instances = 0;
-        instances += self.master.get_instances();
-        instances += self.worker.get_instances();
-        if let Some(history_server) = &self.history_server {
-            instances += history_server.get_instances();
-        }
-
-        instances
-    }
-}
-
-/// A spark node consists of a list of selectors and optional common properties that is shared for every node
-#[derive(Clone, Debug, Hash, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
-pub struct SparkNode {
-    pub selectors: Vec<SparkNodeSelector>,
-    // TODO: options
-    // TODO: master -> use Option<T>
-    // TODO: worker -> use Option<T>
-    // TODO: history_server -> use Option<T>
-}
-
-#[derive(Derivative, Clone, Debug, Default, Deserialize, Eq, JsonSchema, Serialize)]
-#[derivative(Hash, PartialEq)]
+#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SparkNodeSelector {
-    // common options
-    pub node_name: String,
-    // we need to ignore instances from hashing -> if we scale up or down, the hash
-    // for the selectors changes and the operator removes all nodes and rebuilds them
-    #[derivative(Hash = "ignore", PartialEq = "ignore")]
-    pub instances: usize,
-    pub config: Option<Vec<ConfigOption>>,
-    pub env: Option<Vec<ConfigOption>>,
+pub struct NodeGroup<T> {
+    pub selectors: HashMap<String, SelectorAndConfig<T>>,
+}
 
-    // master options
+#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SelectorAndConfig<T> {
+    pub instances: u16,
+    pub instances_per_node: u8,
+    pub config: Option<T>,
+    #[schemars(schema_with = "schema")]
+    pub selector: Option<LabelSelector>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MasterConfig {
     pub master_port: Option<usize>,
     pub master_web_ui_port: Option<usize>,
-    // worker options
+    pub spark_defaults: Option<Vec<ConfigOption>>,
+    pub env_sh: Option<Vec<ConfigOption>>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkerConfig {
     pub cores: Option<usize>,
     pub memory: Option<String>,
     pub worker_port: Option<usize>,
     pub worker_web_ui_port: Option<usize>,
-    // history-server options
+    pub spark_defaults: Option<Vec<ConfigOption>>,
+    pub env_sh: Option<Vec<ConfigOption>>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryServerConfig {
     pub store_path: Option<String>,
     pub history_ui_port: Option<usize>,
+    pub spark_defaults: Option<Vec<ConfigOption>>,
+    pub env_sh: Option<Vec<ConfigOption>>,
 }
 
-impl SparkNode {
-    /// Collects all selectors provided in a node (master, worker, history-server) and hashes them
+pub trait Config {
+    /// Get all required configuration options for spark-defaults.conf
+    /// - from spec
+    /// - from selector
+    /// - from user config properties
     ///
     /// # Arguments
-    /// * `node_type` - SparkNodeType (master/worker/history-server)
-    /// * `cluster_name` - Name of the cluster they belong to (otherwise different named clusters can have identical selector hashes)
+    /// * `spec` - SparkCluster spec for common properties
     ///
-    pub fn get_hashed_selectors(
-        &self,
-        node_type: SparkNodeType,
-        cluster_name: &str,
-    ) -> HashMap<String, SparkNodeSelector> {
-        let mut hashed_selectors: HashMap<String, SparkNodeSelector> = HashMap::new();
-        for selector in &self.selectors {
-            let mut hasher = DefaultHasher::new();
-            selector.hash(&mut hasher);
-            node_type.as_str().hash(&mut hasher);
-            cluster_name.hash(&mut hasher);
-            hashed_selectors.insert(hasher.finish().to_string(), selector.clone());
+    fn get_spark_defaults_conf(&self, spec: &SparkClusterSpec) -> HashMap<String, String>;
+
+    /// Get all required configuration options for spark-env.sh
+    /// - from selector
+    /// - from user config properties
+    ///
+    fn get_spark_env_sh(&self) -> HashMap<String, String>;
+}
+
+impl Config for MasterConfig {
+    fn get_spark_defaults_conf(&self, spec: &SparkClusterSpec) -> HashMap<String, String> {
+        let mut config = HashMap::new();
+
+        if let Some(log_dir) = &spec.log_dir {
+            config.insert(SPARK_EVENT_LOG_DIR.to_string(), log_dir.to_string());
         }
-        hashed_selectors
+
+        if let Some(secret) = &spec.secret {
+            config.insert(SPARK_AUTHENTICATE_SECRET.to_string(), secret.to_string());
+        }
+
+        add_common_spark_defaults(&mut config, spec);
+        add_user_defined_config_properties(&mut config, &self.spark_defaults);
+        config
     }
 
-    /// Returns the sum of all requested instance counts across all selectors.
-    pub fn get_instances(&self) -> usize {
-        let mut instances: usize = 0;
-        for selector in &self.selectors {
-            instances += selector.instances;
+    fn get_spark_env_sh(&self) -> HashMap<String, String> {
+        let mut config = HashMap::new();
+
+        if let Some(port) = &self.master_port {
+            config.insert(SPARK_MASTER_PORT_ENV.to_string(), port.to_string());
         }
-        instances
+        if let Some(web_ui_port) = &self.master_web_ui_port {
+            config.insert(SPARK_MASTER_WEBUI_PORT.to_string(), web_ui_port.to_string());
+        }
+
+        add_user_defined_config_properties(&mut config, &self.env_sh);
+        config
     }
 }
 
-#[derive(Clone, Debug, Hash, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+impl Config for WorkerConfig {
+    fn get_spark_defaults_conf(&self, spec: &SparkClusterSpec) -> HashMap<String, String> {
+        let mut config = HashMap::new();
+
+        if let Some(log_dir) = &spec.log_dir {
+            config.insert(SPARK_EVENT_LOG_DIR.to_string(), log_dir.to_string());
+        }
+
+        if let Some(secret) = &spec.secret {
+            config.insert(SPARK_AUTHENTICATE_SECRET.to_string(), secret.to_string());
+        }
+
+        add_common_spark_defaults(&mut config, spec);
+        add_user_defined_config_properties(&mut config, &self.spark_defaults);
+        config
+    }
+
+    fn get_spark_env_sh(&self) -> HashMap<String, String> {
+        let mut config = HashMap::new();
+
+        if let Some(cores) = &self.cores {
+            config.insert(SPARK_WORKER_CORES.to_string(), cores.to_string());
+        }
+        if let Some(memory) = &self.memory {
+            config.insert(SPARK_WORKER_MEMORY.to_string(), memory.to_string());
+        }
+        if let Some(port) = &self.worker_port {
+            config.insert(SPARK_WORKER_PORT.to_string(), port.to_string());
+        }
+        if let Some(web_ui_port) = &self.worker_web_ui_port {
+            config.insert(SPARK_WORKER_WEBUI_PORT.to_string(), web_ui_port.to_string());
+        }
+
+        add_user_defined_config_properties(&mut config, &self.env_sh);
+        config
+    }
+}
+
+impl Config for HistoryServerConfig {
+    fn get_spark_defaults_conf(&self, spec: &SparkClusterSpec) -> HashMap<String, String> {
+        let mut config = HashMap::new();
+
+        if let Some(log_dir) = &spec.log_dir {
+            config.insert(
+                SPARK_HISTORY_FS_LOG_DIRECTORY.to_string(),
+                log_dir.to_string(),
+            );
+        }
+
+        if let Some(store_path) = &self.store_path {
+            config.insert(SPARK_HISTORY_STORE_PATH.to_string(), store_path.to_string());
+        }
+        if let Some(port) = &self.history_ui_port {
+            config.insert(SPARK_HISTORY_UI_PORT.to_string(), port.to_string());
+        }
+
+        add_common_spark_defaults(&mut config, spec);
+        add_user_defined_config_properties(&mut config, &self.spark_defaults);
+        config
+    }
+
+    fn get_spark_env_sh(&self) -> HashMap<String, String> {
+        let mut config = HashMap::new();
+        add_user_defined_config_properties(&mut config, &self.env_sh);
+        config
+    }
+}
+
+fn add_common_spark_defaults(config: &mut HashMap<String, String>, spec: &SparkClusterSpec) {
+    if let Some(secret) = &spec.secret {
+        config.insert(SPARK_AUTHENTICATE_SECRET.to_string(), secret.to_string());
+    }
+
+    // maximum port retries if taken
+    if let Some(max_port_retries) = &spec.max_port_retries {
+        config.insert(
+            SPARK_PORT_MAX_RETRIES.to_string(),
+            max_port_retries.to_string(),
+        );
+    }
+}
+
+fn add_user_defined_config_properties(
+    config: &mut HashMap<String, String>,
+    config_properties: &Option<Vec<ConfigOption>>,
+) {
+    if let Some(conf) = config_properties {
+        for config_option in conf {
+            config.insert(config_option.name.clone(), config_option.value.clone());
+        }
+    }
+}
+
+#[derive(
+    Clone,
+    Debug,
+    EnumIter,
+    Hash,
+    Deserialize,
+    Eq,
+    JsonSchema,
+    PartialEq,
+    Serialize,
+    strum_macros::Display,
+    strum_macros::EnumString,
+)]
 pub enum SparkNodeType {
+    #[serde(rename = "master")]
+    #[strum(serialize = "master")]
     Master,
+    #[serde(rename = "slave")]
+    #[strum(serialize = "slave")]
     Worker,
+    #[serde(rename = "history-server")]
+    #[strum(serialize = "history-server")]
     HistoryServer,
 }
 
-const MASTER: &str = "master";
-const WORKER: &str = "slave";
-const HISTORY_SERVER: &str = "history-server";
-
 impl SparkNodeType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            SparkNodeType::Master { .. } => MASTER,
-            SparkNodeType::Worker { .. } => WORKER,
-            SparkNodeType::HistoryServer { .. } => HISTORY_SERVER,
-        }
-    }
-
     /// Returns the container start command for a spark node
     /// Right now works only for images using hadoop2.7
     /// # Arguments
@@ -185,29 +271,8 @@ impl SparkNodeType {
         format!(
             "spark-{}-bin-hadoop2.7/sbin/start-{}.sh",
             version,
-            self.as_str()
+            self.to_string()
         )
-    }
-}
-
-impl FromStr for SparkNodeType {
-    type Err = CrdError;
-
-    fn from_str(input: &str) -> Result<SparkNodeType, Self::Err> {
-        match input {
-            MASTER => Ok(SparkNodeType::Master),
-            WORKER => Ok(SparkNodeType::Worker),
-            HISTORY_SERVER => Ok(SparkNodeType::HistoryServer),
-            _ => Err(CrdError::InvalidNodeType {
-                node_type: input.to_string(),
-            }),
-        }
-    }
-}
-
-impl fmt::Display for SparkNodeType {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.as_str())
     }
 }
 
@@ -296,9 +361,58 @@ impl SparkVersion {
     }
 }
 
+pub fn schema(_: &mut SchemaGenerator) -> Schema {
+    from_value(json!({
+      "description": "A label selector is a label query over a set of resources. The result of matchLabels and matchExpressions are ANDed. An empty label selector matches all objects. A null label selector matches no objects.",
+      "properties": {
+        "matchExpressions": {
+          "description": "matchExpressions is a list of label selector requirements. The requirements are ANDed.",
+          "items": {
+            "description": "A label selector requirement is a selector that contains values, a key, and an operator that relates the key and values.",
+            "properties": {
+              "key": {
+                "description": "key is the label key that the selector applies to.",
+                "type": "string",
+                "x-kubernetes-patch-merge-key": "key",
+                "x-kubernetes-patch-strategy": "merge"
+              },
+              "operator": {
+                "description": "operator represents a key's relationship to a set of values. Valid operators are In, NotIn, Exists and DoesNotExist.",
+                "type": "string"
+              },
+              "values": {
+                "description": "values is an array of string values. If the operator is In or NotIn, the values array must be non-empty. If the operator is Exists or DoesNotExist, the values array must be empty. This array is replaced during a strategic merge patch.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "key",
+              "operator"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "matchLabels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels map is equivalent to an element of matchExpressions, whose key field is \"key\", the operator is \"In\", and the values array contains only \"value\". The requirements are ANDed.",
+          "type": "object"
+        }
+      },
+      "type": "object"
+    })).unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use schemars::gen::SchemaGenerator;
+    use stackable_operator::conditions::schema;
     use stackable_spark_test_utils::cluster::{Load, TestSparkCluster};
 
     fn setup() -> SparkCluster {
@@ -311,6 +425,21 @@ mod tests {
             instances += selector.instances;
         }
         instances
+    }
+
+    #[test]
+    fn print_crd() {
+        let schema = KafkaCluster::crd();
+        let string_schema = serde_yaml::to_string(&schema).unwrap();
+        println!("KafkaCluster CRD:\n{}\n", string_schema);
+    }
+
+    #[test]
+    fn print_schema() {
+        let schema = schema(&mut SchemaGenerator::default());
+
+        let string_schema = serde_yaml::to_string(&schema).unwrap();
+        println!("LabelSelector Schema:\n{}\n", string_schema);
     }
 
     #[test]

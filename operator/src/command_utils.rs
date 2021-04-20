@@ -1,8 +1,7 @@
 use k8s_openapi::api::core::v1::Pod;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
-use k8s_openapi::Resource;
-use kube::api::{Meta, PostParams};
 use kube::Api;
+use kube::Resource;
 use serde::de::DeserializeOwned;
 use serde_json::json;
 use stackable_operator::client::Client;
@@ -11,6 +10,7 @@ use stackable_spark_crd::{ClusterStatus, CurrentCommand, Restart, SparkCluster, 
 use std::collections::HashMap;
 use std::fmt::Debug;
 
+use kube::api::PostParams;
 use stackable_operator::reconcile::ReconcileFunctionAction;
 use std::time::Duration;
 use tracing::info;
@@ -33,18 +33,18 @@ impl CommandType {
     /// Return the meta name for logging purposes
     pub fn get_name(&self) -> String {
         match self {
-            CommandType::Restart(restart) => Meta::name(restart),
-            CommandType::Start(start) => Meta::name(start),
-            CommandType::Stop(stop) => Meta::name(stop),
+            CommandType::Restart(restart) => restart.name(),
+            CommandType::Start(start) => start.name(),
+            CommandType::Stop(stop) => stop.name(),
         }
     }
 
     /// Return the type/kind
     pub fn get_type(&self) -> String {
         match self {
-            CommandType::Restart(restart) => restart.kind.clone(),
-            CommandType::Start(start) => start.kind.clone(),
-            CommandType::Stop(stop) => stop.kind.clone(),
+            CommandType::Restart(restart) => restart.kind(),
+            CommandType::Start(start) => start.kind(),
+            CommandType::Stop(stop) => stop.kind(),
         }
     }
 
@@ -201,11 +201,11 @@ async fn finalize_current_command(
         status.current_command = None;
         status.cluster_status = Some(cluster_status.clone());
 
-        let api: Api<SparkCluster> = client.get_api(Meta::namespace(cluster).as_deref());
+        let api: Api<SparkCluster> = client.get_api(cluster.namespace().as_deref());
 
         return Ok(api
             .replace_status(
-                &Meta::name(cluster),
+                &cluster.name(),
                 &PostParams {
                     dry_run: false,
                     field_manager: None,
@@ -260,7 +260,7 @@ async fn update_current_command(
 ///
 async fn update_command_label<T>(client: &Client, command: &T) -> OperatorResult<T>
 where
-    T: Meta + Clone + DeserializeOwned,
+    T: Resource + Clone + DeserializeOwned,
 {
     // TODO: check if label exists first? Will be obsolete with label selector in list_commands
     let mut labels = HashMap::new();
@@ -379,7 +379,7 @@ async fn collect_commands(client: &Client) -> OperatorResult<Vec<CommandType>> {
 // TODO: will be obsolete with label selector in list_commands
 fn is_command_done<T>(command: &T) -> bool
 where
-    T: Meta,
+    T: Resource,
 {
     if let Some(labels) = &command.meta().labels {
         if labels.get(COMMAND_STATUS_LABEL) == Some(&COMMAND_STATUS_VALUE.to_string()) {
