@@ -20,11 +20,7 @@ use stackable_spark_common::constants::{
     SPARK_WORKER_PORT, SPARK_WORKER_WEBUI_PORT,
 };
 use std::collections::HashMap;
-use std::fmt;
 use std::hash::Hash;
-use std::str::FromStr;
-use strum::IntoEnumIterator;
-use strum_macros::Display;
 use strum_macros::EnumIter;
 
 #[derive(Clone, CustomResource, Debug, Deserialize, JsonSchema, Serialize)]
@@ -53,6 +49,44 @@ pub struct NodeGroup<T> {
     pub selectors: HashMap<String, SelectorAndConfig<T>>,
 }
 
+impl SparkClusterSpec {
+    pub fn get_config(
+        &self,
+        node_type: &SparkNodeType,
+        role_group: &str,
+    ) -> Option<Box<dyn Config>> {
+        match node_type {
+            SparkNodeType::Master => {
+                if let Some(selector) = self.masters.selectors.get(role_group) {
+                    if let Some(config) = &selector.config {
+                        return Some(Box::new(config.clone()));
+                    }
+                }
+            }
+            SparkNodeType::Worker => {
+                if let Some(selector) = self.workers.selectors.get(role_group) {
+                    if let Some(config) = &selector.config {
+                        return Some(Box::new(config.clone()));
+                    }
+                }
+            }
+            SparkNodeType::HistoryServer => {
+                if let Some(history_servers) = &self.history_servers {
+                    {
+                        if let Some(selector) = history_servers.selectors.get(role_group) {
+                            if let Some(config) = &selector.config {
+                                return Some(Box::new(config.clone()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SelectorAndConfig<T> {
@@ -66,10 +100,10 @@ pub struct SelectorAndConfig<T> {
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MasterConfig {
-    pub master_port: Option<usize>,
-    pub master_web_ui_port: Option<usize>,
+    pub master_port: Option<u16>,
+    pub master_web_ui_port: Option<u16>,
     pub spark_defaults: Option<Vec<ConfigOption>>,
-    pub env_sh: Option<Vec<ConfigOption>>,
+    pub spark_env_sh: Option<Vec<ConfigOption>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
@@ -77,19 +111,19 @@ pub struct MasterConfig {
 pub struct WorkerConfig {
     pub cores: Option<usize>,
     pub memory: Option<String>,
-    pub worker_port: Option<usize>,
-    pub worker_web_ui_port: Option<usize>,
+    pub worker_port: Option<u16>,
+    pub worker_web_ui_port: Option<u16>,
     pub spark_defaults: Option<Vec<ConfigOption>>,
-    pub env_sh: Option<Vec<ConfigOption>>,
+    pub spark_env_sh: Option<Vec<ConfigOption>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryServerConfig {
     pub store_path: Option<String>,
-    pub history_ui_port: Option<usize>,
+    pub history_ui_port: Option<u16>,
     pub spark_defaults: Option<Vec<ConfigOption>>,
-    pub env_sh: Option<Vec<ConfigOption>>,
+    pub spark_env_sh: Option<Vec<ConfigOption>>,
 }
 
 pub trait Config {
@@ -137,7 +171,7 @@ impl Config for MasterConfig {
             config.insert(SPARK_MASTER_WEBUI_PORT.to_string(), web_ui_port.to_string());
         }
 
-        add_user_defined_config_properties(&mut config, &self.env_sh);
+        add_user_defined_config_properties(&mut config, &self.spark_env_sh);
         config
     }
 }
@@ -175,7 +209,7 @@ impl Config for WorkerConfig {
             config.insert(SPARK_WORKER_WEBUI_PORT.to_string(), web_ui_port.to_string());
         }
 
-        add_user_defined_config_properties(&mut config, &self.env_sh);
+        add_user_defined_config_properties(&mut config, &self.spark_env_sh);
         config
     }
 }
@@ -205,7 +239,7 @@ impl Config for HistoryServerConfig {
 
     fn get_spark_env_sh(&self) -> HashMap<String, String> {
         let mut config = HashMap::new();
-        add_user_defined_config_properties(&mut config, &self.env_sh);
+        add_user_defined_config_properties(&mut config, &self.spark_env_sh);
         config
     }
 }
@@ -236,9 +270,9 @@ fn add_user_defined_config_properties(
 }
 
 #[derive(
+    EnumIter,
     Clone,
     Debug,
-    EnumIter,
     Hash,
     Deserialize,
     Eq,
@@ -419,19 +453,11 @@ mod tests {
         TestSparkCluster::load()
     }
 
-    fn get_instances(node: &SparkNode) -> usize {
-        let mut instances = 0;
-        for selector in &node.selectors {
-            instances += selector.instances;
-        }
-        instances
-    }
-
     #[test]
     fn print_crd() {
-        let schema = KafkaCluster::crd();
+        let schema = SparkCluster::crd();
         let string_schema = serde_yaml::to_string(&schema).unwrap();
-        println!("KafkaCluster CRD:\n{}\n", string_schema);
+        println!("SparkCluster CRD:\n{}\n", string_schema);
     }
 
     #[test]
@@ -442,78 +468,16 @@ mod tests {
         println!("LabelSelector Schema:\n{}\n", string_schema);
     }
 
-    #[test]
-    fn test_spec_hashed_selectors() {
-        let cluster: SparkCluster = setup();
-        let spec: &SparkClusterSpec = &cluster.spec;
-        let cluster_name = &cluster.metadata.name.unwrap();
-
-        let all_spec_hashed_selectors = spec.get_hashed_selectors(cluster_name);
-        if spec.history_server.is_some() {
-            // master + worker + history
-            assert_eq!(all_spec_hashed_selectors.len(), 3);
-        } else {
-            // master + worker
-            assert_eq!(all_spec_hashed_selectors.len(), 2);
-        }
-    }
-
-    #[test]
-    fn test_get_all_instances() {
-        let spec: &SparkClusterSpec = &setup().spec;
-        let all_instances = spec.get_all_instances();
-        let mut calculated_instances = 0;
-        calculated_instances += spec.master.get_instances();
-        calculated_instances += spec.worker.get_instances();
-        if let Some(history) = &spec.history_server {
-            calculated_instances += history.get_instances();
-        }
-        assert_eq!(all_instances, calculated_instances)
-    }
-
-    #[test]
-    fn test_get_instances() {
-        let spec: &SparkClusterSpec = &setup().spec;
-
-        assert_eq!(spec.master.get_instances(), get_instances(&spec.master));
-        assert_eq!(spec.worker.get_instances(), get_instances(&spec.worker));
-        if let Some(history) = &spec.history_server {
-            assert_eq!(history.get_instances(), get_instances(history));
-        }
-    }
-
-    #[test]
-    fn test_spark_node_type_as_str() {
-        assert_eq!(SparkNodeType::Master.as_str(), MASTER);
-        assert_eq!(SparkNodeType::Worker.as_str(), WORKER);
-        assert_eq!(SparkNodeType::HistoryServer.as_str(), HISTORY_SERVER);
-    }
-
-    #[test]
-    fn test_spark_node_type_from_str() {
-        assert_eq!(
-            SparkNodeType::from_str(MASTER).unwrap(),
-            SparkNodeType::Master
-        );
-        assert_eq!(
-            SparkNodeType::from_str(WORKER).unwrap(),
-            SparkNodeType::Worker
-        );
-        assert_eq!(
-            SparkNodeType::from_str(HISTORY_SERVER).unwrap(),
-            SparkNodeType::HistoryServer
-        );
-
-        let bad_node = "not_a_node";
-        let res = SparkNodeType::from_str(bad_node);
-
-        assert_eq!(
-            res,
-            Err(CrdError::InvalidNodeType {
-                node_type: bad_node.to_string()
-            })
-        );
-    }
+    // #[test]
+    // fn test_get_instances() {
+    //     let spec: &SparkClusterSpec = &setup().spec;
+    //
+    //     assert_eq!(spec.master.get_instances(), get_instances(&spec.master));
+    //     assert_eq!(spec.worker.get_instances(), get_instances(&spec.worker));
+    //     if let Some(history) = &spec.history_server {
+    //         assert_eq!(history.get_instances(), get_instances(history));
+    //     }
+    // }
 
     #[test]
     fn test_spark_node_type_get_command() {
@@ -525,7 +489,7 @@ mod tests {
             format!(
                 "spark-{}-bin-hadoop2.7/sbin/start-{}.sh",
                 &version.to_string(),
-                MASTER
+                SparkNodeType::Master.to_string()
             )
         );
     }

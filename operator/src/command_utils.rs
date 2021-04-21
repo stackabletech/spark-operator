@@ -42,9 +42,9 @@ impl CommandType {
     /// Return the type/kind
     pub fn get_type(&self) -> String {
         match self {
-            CommandType::Restart(restart) => restart.kind(),
-            CommandType::Start(start) => start.kind(),
-            CommandType::Stop(stop) => stop.kind(),
+            CommandType::Restart(_) => Restart::kind(&()).to_string(),
+            CommandType::Start(_) => Start::kind(&()).to_string(),
+            CommandType::Stop(_) => Stop::kind(&()).to_string(),
         }
     }
 
@@ -260,7 +260,8 @@ async fn update_current_command(
 ///
 async fn update_command_label<T>(client: &Client, command: &T) -> OperatorResult<T>
 where
-    T: Resource + Clone + DeserializeOwned,
+    T: Resource + Clone + Debug + DeserializeOwned,
+    <T as kube::Resource>::DynamicType: Default,
 {
     // TODO: check if label exists first? Will be obsolete with label selector in list_commands
     let mut labels = HashMap::new();
@@ -292,26 +293,28 @@ pub async fn get_command_from_ref(
     command: &str,
     namespace: Option<&str>,
 ) -> OperatorResult<CommandType> {
-    // TODO: adapt ::KIND for kube-rs changes on 0.52
-    match command_type {
-        Restart::KIND => Ok(CommandType::Restart(
+    if command_type == Restart::kind(&()) {
+        Ok(CommandType::Restart(
             client
                 .get::<stackable_spark_crd::Restart>(command, namespace)
                 .await?,
-        )),
-        Start::KIND => Ok(CommandType::Start(
+        ))
+    } else if command_type == Start::kind(&()) {
+        Ok(CommandType::Start(
             client
                 .get::<stackable_spark_crd::Start>(command, namespace)
                 .await?,
-        )),
-        Stop::KIND => Ok(CommandType::Stop(
+        ))
+    } else if command_type == Stop::kind(&()) {
+        Ok(CommandType::Stop(
             client
                 .get::<stackable_spark_crd::Stop>(command, namespace)
                 .await?,
-        )),
-        _ => Err(stackable_operator::error::Error::MissingCustomResource {
+        ))
+    } else {
+        Err(stackable_operator::error::Error::MissingCustomResource {
             name: command.to_string(),
-        }),
+        })
     }
 }
 
