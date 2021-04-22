@@ -13,8 +13,8 @@ spec:
         instances: 1
         instancesPerNode: 1
         config:
-          masterPort: 9999
-          masterWebUiPort: 11111
+          masterPort: 7078
+          masterWebUiPort: 8081
       default2:
         selector:
           matchLabels:
@@ -22,8 +22,8 @@ spec:
         instances: 1
         instancesPerNode: 1
         config:
-          masterPort: 9998
-          masterWebUiPort: 11110
+          masterPort: 7079
+          masterWebUiPort: 8082
   workers:
     selectors:
       1core1g:
@@ -35,6 +35,8 @@ spec:
         config:
           cores: 1
           memory: "1g"
+          workerPort: 3031
+          workerWebUiPort: 8083
       2core2g:
         selector:
           matchLabels:
@@ -44,6 +46,8 @@ spec:
         config:
           cores: 2
           memory: "2g"
+          workerPort: 3032
+          workerWebUiPort: 8084
   historyServers:
     selectors:
       default:
@@ -52,4 +56,6 @@ spec:
             kubernetes.io/hostname: mdesktop
         instances: 1
         instancesPerNode: 1
+        config:
+          historyWebUiPort: 18081
 

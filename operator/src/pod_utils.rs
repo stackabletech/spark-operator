@@ -37,7 +37,7 @@ pub fn build_pod(
     node_name: &str,
     role_group: &str,
     node_type: &SparkNodeType,
-    master_urls: &Vec<String>,
+    master_urls: &[String],
 ) -> Result<Pod, Error> {
     let cluster_name = &resource.name();
     let pod_name = create_pod_name(cluster_name, role_group, &node_type.to_string());
@@ -77,7 +77,7 @@ fn build_containers(
     spec: &SparkClusterSpec,
     node_type: &SparkNodeType,
     pod_name: &str,
-    master_urls: &Vec<String>,
+    master_urls: &[String],
 ) -> (Vec<Container>, Vec<Volume>) {
     let image_name = format!("spark:{}", &spec.version.to_string());
 
@@ -163,7 +163,7 @@ fn build_labels(
     role_group: &str,
     name: &str,
     version: &str,
-    master_urls: &Vec<String>,
+    master_urls: &[String],
 ) -> BTreeMap<String, String> {
     let mut labels = BTreeMap::new();
     labels.insert(String::from(APP_COMPONENT_LABEL), node_type.to_string());
@@ -198,7 +198,7 @@ pub fn create_pod_name(cluster_name: &str, role_group: &str, node_type: &str) ->
 /// # Arguments
 /// * `master_node` - SparkNode master to retrieve master urls for pod label hash
 ///
-pub fn get_hashed_master_urls(master_urls: &Vec<String>) -> String {
+pub fn get_hashed_master_urls(master_urls: &[String]) -> String {
     let mut hasher = DefaultHasher::new();
     for url in master_urls {
         url.hash(&mut hasher);
@@ -206,7 +206,7 @@ pub fn get_hashed_master_urls(master_urls: &Vec<String>) -> String {
     hasher.finish().to_string()
 }
 
-pub fn filter_pods_for_type(pods: &Vec<Pod>, node_type: &SparkNodeType) -> Vec<Pod> {
+pub fn filter_pods_for_type(pods: &[Pod], node_type: &SparkNodeType) -> Vec<Pod> {
     let mut filtered_pods = Vec::new();
 
     for pod in pods {
@@ -228,7 +228,7 @@ pub fn filter_pods_for_type(pods: &Vec<Pod>, node_type: &SparkNodeType) -> Vec<P
 /// # Arguments
 /// * `master` - Master SparkNode containing the required node_name and port settings
 ///
-pub fn get_master_urls(pods: &Vec<Pod>, spec: &SparkClusterSpec) -> Vec<String> {
+pub fn get_master_urls(pods: &[Pod], spec: &SparkClusterSpec) -> Vec<String> {
     let mut master_urls = Vec::new();
 
     for pod in pods {

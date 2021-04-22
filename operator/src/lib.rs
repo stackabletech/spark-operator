@@ -20,7 +20,9 @@ use stackable_operator::controller::{Controller, ControllerStrategy, Reconciliat
 use stackable_operator::error::OperatorResult;
 use stackable_operator::k8s_utils;
 use stackable_operator::k8s_utils::LabelOptionalValueMap;
-use stackable_operator::labels::{APP_COMPONENT_LABEL, APP_INSTANCE_LABEL, APP_ROLE_GROUP_LABEL};
+use stackable_operator::labels::{
+    APP_COMPONENT_LABEL, APP_INSTANCE_LABEL, APP_ROLE_GROUP_LABEL, APP_VERSION_LABEL,
+};
 use stackable_operator::reconcile::{
     ContinuationStrategy, ReconcileFunctionAction, ReconcileResult, ReconciliationContext,
 };
@@ -311,7 +313,14 @@ impl SparkState {
         let mut mandatory_labels = BTreeMap::new();
 
         mandatory_labels.insert(String::from(APP_COMPONENT_LABEL), Some(roles));
-        mandatory_labels.insert(String::from(APP_INSTANCE_LABEL), None);
+        mandatory_labels.insert(
+            String::from(APP_INSTANCE_LABEL),
+            Some(vec![self.context.resource.name()]),
+        );
+        mandatory_labels.insert(
+            String::from(APP_VERSION_LABEL),
+            Some(vec![self.context.resource.spec.version.to_string()]),
+        );
         mandatory_labels
     }
 
@@ -418,12 +427,17 @@ impl SparkState {
                     let master_pods =
                         filter_pods_for_type(&self.existing_pods, &SparkNodeType::Master);
 
+                    let master_urls =
+                        get_master_urls(master_pods.as_slice(), &self.context.resource.spec);
+
+                    debug!("Found master urls: {:?}", master_urls);
+
                     let pod = pod_utils::build_pod(
                         &self.context.resource,
                         &node_name,
                         role_group,
                         &node_type,
-                        &get_master_urls(&master_pods, &self.context.resource.spec),
+                        &master_urls,
                     )?;
 
                     self.context.client.create(&pod).await?;

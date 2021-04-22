@@ -17,10 +17,7 @@ use std::collections::{BTreeMap, HashMap};
 /// * `node_type` - SparkNodeType (master/worker/history-server)
 /// * `master_urls` - List of master urls in format <node_name>:<port>
 ///
-pub fn adapt_worker_command(
-    node_type: &SparkNodeType,
-    master_urls: &Vec<String>,
-) -> Option<String> {
+pub fn adapt_worker_command(node_type: &SparkNodeType, master_urls: &[String]) -> Option<String> {
     let mut adapted_command: String = String::new();
     // only for workers
     if node_type != &SparkNodeType::Worker {

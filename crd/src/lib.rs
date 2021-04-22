@@ -15,13 +15,15 @@ use serde_json::{from_value, json};
 use stackable_operator::Crd;
 use stackable_spark_common::constants::{
     SPARK_AUTHENTICATE_SECRET, SPARK_EVENT_LOG_DIR, SPARK_HISTORY_FS_LOG_DIRECTORY,
-    SPARK_HISTORY_STORE_PATH, SPARK_HISTORY_UI_PORT, SPARK_MASTER_PORT_ENV,
+    SPARK_HISTORY_STORE_PATH, SPARK_HISTORY_WEBUI_PORT, SPARK_MASTER_PORT_ENV,
     SPARK_MASTER_WEBUI_PORT, SPARK_PORT_MAX_RETRIES, SPARK_WORKER_CORES, SPARK_WORKER_MEMORY,
     SPARK_WORKER_PORT, SPARK_WORKER_WEBUI_PORT,
 };
 use std::collections::HashMap;
 use std::hash::Hash;
 use strum_macros::EnumIter;
+
+const DEFAULT_LOG_DIR: &str = "/tmp";
 
 #[derive(Clone, CustomResource, Debug, Deserialize, JsonSchema, Serialize)]
 #[kube(
@@ -58,25 +60,27 @@ impl SparkClusterSpec {
         match node_type {
             SparkNodeType::Master => {
                 if let Some(selector) = self.masters.selectors.get(role_group) {
-                    if let Some(config) = &selector.config {
-                        return Some(Box::new(config.clone()));
-                    }
+                    return Some(Box::new(selector.config.clone().unwrap_or(MasterConfig {
+                        ..MasterConfig::default()
+                    })));
                 }
             }
             SparkNodeType::Worker => {
                 if let Some(selector) = self.workers.selectors.get(role_group) {
-                    if let Some(config) = &selector.config {
-                        return Some(Box::new(config.clone()));
-                    }
+                    return Some(Box::new(selector.config.clone().unwrap_or(WorkerConfig {
+                        ..WorkerConfig::default()
+                    })));
                 }
             }
             SparkNodeType::HistoryServer => {
                 if let Some(history_servers) = &self.history_servers {
                     {
                         if let Some(selector) = history_servers.selectors.get(role_group) {
-                            if let Some(config) = &selector.config {
-                                return Some(Box::new(config.clone()));
-                            }
+                            return Some(Box::new(selector.config.clone().unwrap_or(
+                                HistoryServerConfig {
+                                    ..HistoryServerConfig::default()
+                                },
+                            )));
                         }
                     }
                 }
@@ -97,7 +101,7 @@ pub struct SelectorAndConfig<T> {
     pub selector: Option<LabelSelector>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MasterConfig {
     pub master_port: Option<u16>,
@@ -106,7 +110,7 @@ pub struct MasterConfig {
     pub spark_env_sh: Option<Vec<ConfigOption>>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkerConfig {
     pub cores: Option<usize>,
@@ -117,11 +121,11 @@ pub struct WorkerConfig {
     pub spark_env_sh: Option<Vec<ConfigOption>>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryServerConfig {
     pub store_path: Option<String>,
-    pub history_ui_port: Option<u16>,
+    pub history_web_ui_port: Option<u16>,
     pub spark_defaults: Option<Vec<ConfigOption>>,
     pub spark_env_sh: Option<Vec<ConfigOption>>,
 }
@@ -161,7 +165,7 @@ impl Config for MasterConfig {
     fn get_spark_defaults_conf(&self, spec: &SparkClusterSpec) -> HashMap<String, String> {
         let mut config = HashMap::new();
 
-        let log_dir = spec.log_dir.as_deref().unwrap_or("/tmp");
+        let log_dir = spec.log_dir.as_deref().unwrap_or(DEFAULT_LOG_DIR);
         config.insert(SPARK_EVENT_LOG_DIR.to_string(), log_dir.to_string());
 
         if let Some(secret) = &spec.secret {
@@ -192,7 +196,7 @@ impl Config for WorkerConfig {
     fn get_spark_defaults_conf(&self, spec: &SparkClusterSpec) -> HashMap<String, String> {
         let mut config = HashMap::new();
 
-        let log_dir = spec.log_dir.as_deref().unwrap_or("/tmp");
+        let log_dir = spec.log_dir.as_deref().unwrap_or(DEFAULT_LOG_DIR);
         config.insert(SPARK_EVENT_LOG_DIR.to_string(), log_dir.to_string());
 
         if let Some(secret) = &spec.secret {
@@ -229,7 +233,7 @@ impl Config for HistoryServerConfig {
     fn get_spark_defaults_conf(&self, spec: &SparkClusterSpec) -> HashMap<String, String> {
         let mut config = HashMap::new();
 
-        let log_dir = spec.log_dir.as_deref().unwrap_or("/tmp");
+        let log_dir = spec.log_dir.as_deref().unwrap_or(DEFAULT_LOG_DIR);
         config.insert(
             SPARK_HISTORY_FS_LOG_DIRECTORY.to_string(),
             log_dir.to_string(),
@@ -238,8 +242,8 @@ impl Config for HistoryServerConfig {
         if let Some(store_path) = &self.store_path {
             config.insert(SPARK_HISTORY_STORE_PATH.to_string(), store_path.to_string());
         }
-        if let Some(port) = &self.history_ui_port {
-            config.insert(SPARK_HISTORY_UI_PORT.to_string(), port.to_string());
+        if let Some(port) = &self.history_web_ui_port {
+            config.insert(SPARK_HISTORY_WEBUI_PORT.to_string(), port.to_string());
         }
 
         add_common_spark_defaults(&mut config, spec);
@@ -259,13 +263,11 @@ fn add_common_spark_defaults(config: &mut HashMap<String, String>, spec: &SparkC
         config.insert(SPARK_AUTHENTICATE_SECRET.to_string(), secret.to_string());
     }
 
-    // maximum port retries if taken
-    if let Some(max_port_retries) = &spec.max_port_retries {
-        config.insert(
-            SPARK_PORT_MAX_RETRIES.to_string(),
-            max_port_retries.to_string(),
-        );
-    }
+    let max_port_retries = &spec.max_port_retries.unwrap_or(0);
+    config.insert(
+        SPARK_PORT_MAX_RETRIES.to_string(),
+        max_port_retries.to_string(),
+    );
 }
 
 fn add_user_defined_config_properties(

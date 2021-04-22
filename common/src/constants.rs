@@ -38,7 +38,7 @@ pub const SPARK_WORKER_MEMORY: &str = "SPARK_WORKER_MEMORY";
 /// Worker specific parameter: Set the worker port in environment variables.
 pub const SPARK_WORKER_PORT: &str = "SPARK_WORKER_PORT";
 /// Worker specific parameter: Set the worker web ui port in environment variables.
-pub const SPARK_WORKER_WEBUI_PORT: &str = "SPARK_MASTER_WEBUI_PORT";
+pub const SPARK_WORKER_WEBUI_PORT: &str = "SPARK_WORKER_WEBUI_PORT";
 /// HistoryServer specific parameter: Set directory where to search for logs. Normally should
 /// match the 'SPARK_EVENT_LOG_DIR' set on master and worker nodes
 pub const SPARK_HISTORY_FS_LOG_DIRECTORY: &str = "spark.history.fs.logDirectory";
@@ -46,4 +46,4 @@ pub const SPARK_HISTORY_FS_LOG_DIRECTORY: &str = "spark.history.fs.logDirectory"
 /// the data will be kept in memory and is lost after restarts.
 pub const SPARK_HISTORY_STORE_PATH: &str = "spark.history.store.path";
 /// HistoryServer specific parameter: Set HistoryServer web ui port to access the common logs.
-pub const SPARK_HISTORY_UI_PORT: &str = "spark.history.ui.port";
+pub const SPARK_HISTORY_WEBUI_PORT: &str = "spark.history.ui.port";

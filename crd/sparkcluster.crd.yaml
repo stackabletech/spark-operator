@@ -29,7 +29,7 @@ spec:
                           config:
                             nullable: true
                             properties:
-                              historyUiPort:
+                              historyWebUiPort:
                                 format: uint16
                                 minimum: 0.0
                                 nullable: true
