@@ -126,7 +126,7 @@ pub struct HistoryServerConfig {
     pub spark_env_sh: Option<Vec<ConfigOption>>,
 }
 
-pub trait Config {
+pub trait Config: Send + Sync {
     /// Get all required configuration options for spark-defaults.conf
     /// - from spec
     /// - from selector
@@ -144,13 +144,25 @@ pub trait Config {
     fn get_spark_env_sh(&self) -> HashMap<String, String>;
 }
 
+impl<T: ?Sized> Config for Box<T>
+where
+    T: Config,
+{
+    fn get_spark_defaults_conf(&self, spec: &SparkClusterSpec) -> HashMap<String, String> {
+        (**self).get_spark_defaults_conf(&spec)
+    }
+
+    fn get_spark_env_sh(&self) -> HashMap<String, String> {
+        (**self).get_spark_env_sh()
+    }
+}
+
 impl Config for MasterConfig {
     fn get_spark_defaults_conf(&self, spec: &SparkClusterSpec) -> HashMap<String, String> {
         let mut config = HashMap::new();
 
-        if let Some(log_dir) = &spec.log_dir {
-            config.insert(SPARK_EVENT_LOG_DIR.to_string(), log_dir.to_string());
-        }
+        let log_dir = spec.log_dir.as_deref().unwrap_or("/tmp");
+        config.insert(SPARK_EVENT_LOG_DIR.to_string(), log_dir.to_string());
 
         if let Some(secret) = &spec.secret {
             config.insert(SPARK_AUTHENTICATE_SECRET.to_string(), secret.to_string());
@@ -180,9 +192,8 @@ impl Config for WorkerConfig {
     fn get_spark_defaults_conf(&self, spec: &SparkClusterSpec) -> HashMap<String, String> {
         let mut config = HashMap::new();
 
-        if let Some(log_dir) = &spec.log_dir {
-            config.insert(SPARK_EVENT_LOG_DIR.to_string(), log_dir.to_string());
-        }
+        let log_dir = spec.log_dir.as_deref().unwrap_or("/tmp");
+        config.insert(SPARK_EVENT_LOG_DIR.to_string(), log_dir.to_string());
 
         if let Some(secret) = &spec.secret {
             config.insert(SPARK_AUTHENTICATE_SECRET.to_string(), secret.to_string());
@@ -218,12 +229,11 @@ impl Config for HistoryServerConfig {
     fn get_spark_defaults_conf(&self, spec: &SparkClusterSpec) -> HashMap<String, String> {
         let mut config = HashMap::new();
 
-        if let Some(log_dir) = &spec.log_dir {
-            config.insert(
-                SPARK_HISTORY_FS_LOG_DIRECTORY.to_string(),
-                log_dir.to_string(),
-            );
-        }
+        let log_dir = spec.log_dir.as_deref().unwrap_or("/tmp");
+        config.insert(
+            SPARK_HISTORY_FS_LOG_DIRECTORY.to_string(),
+            log_dir.to_string(),
+        );
 
         if let Some(store_path) = &self.store_path {
             config.insert(SPARK_HISTORY_STORE_PATH.to_string(), store_path.to_string());

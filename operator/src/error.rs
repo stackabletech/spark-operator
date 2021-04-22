@@ -24,9 +24,6 @@ pub enum Error {
         source: semver::SemVerError,
     },
 
-    #[error("Error during reconciliation: {0}")]
-    ReconcileError(String),
-
     #[error("Pod contains invalid node type: {source}")]
     InvalidNodeType {
         #[from]

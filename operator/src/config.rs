@@ -5,9 +5,7 @@ use k8s_openapi::api::core::v1::{ConfigMap, EnvVar};
 use stackable_operator::config_map::create_config_map;
 use stackable_operator::error::OperatorResult;
 use stackable_spark_common::constants::*;
-use stackable_spark_crd::{
-    Config, ConfigOption, MasterConfig, NodeGroup, SparkCluster, SparkNodeType,
-};
+use stackable_spark_crd::{Config, SparkCluster, SparkNodeType};
 use std::collections::{BTreeMap, HashMap};
 
 /// The worker start command needs to be extended with all known master nodes and ports.
@@ -17,11 +15,11 @@ use std::collections::{BTreeMap, HashMap};
 ///
 /// # Arguments
 /// * `node_type` - SparkNodeType (master/worker/history-server)
-/// * `master` - Master SparkNode containing the required settings
+/// * `master_urls` - List of master urls in format <node_name>:<port>
 ///
 pub fn adapt_worker_command(
     node_type: &SparkNodeType,
-    masters: &NodeGroup<MasterConfig>,
+    master_urls: &Vec<String>,
 ) -> Option<String> {
     let mut adapted_command: String = String::new();
     // only for workers
@@ -29,7 +27,6 @@ pub fn adapt_worker_command(
         return None;
     }
 
-    let master_urls = get_master_urls(masters);
     for url in master_urls {
         if adapted_command.is_empty() {
             adapted_command.push_str("spark://");
@@ -40,69 +37,6 @@ pub fn adapt_worker_command(
     }
 
     Some(adapted_command)
-}
-
-/// The master port can be configured and needs to be checked in config / env or general options.
-/// Defaults to 7077 if no port is specified.
-///
-/// # Arguments
-/// * `master` - Master SparkNode containing the required node_name and port settings
-///
-pub fn get_master_urls(master: &NodeGroup<MasterConfig>) -> Vec<String> {
-    let mut master_urls = vec![];
-    // get all available master selectors
-    for selector in master.selectors.values() {
-        // check in conf properties and env variables for port
-        // conf properties have higher priority than env variables
-        if let Some(config) = &selector.config {
-            if let Some(port) = get_master_port(SPARK_MASTER_PORT_CONF, &config.spark_defaults) {
-                master_urls.push(create_master_url("", &port.to_string()));
-                continue;
-            } else if let Some(port) = get_master_port(SPARK_MASTER_PORT_ENV, &config.spark_env_sh)
-            {
-                master_urls.push(create_master_url("", &port.to_string()));
-                continue;
-            } else if let Some(port) = &config.master_port {
-                master_urls.push(create_master_url("", &port.to_string()));
-                continue;
-            }
-        }
-
-        // TODO: default to default value in product conf
-        //master_urls.push(create_master_url(&selector.node_name, "7077"));
-    }
-
-    master_urls
-}
-
-/// Create master url in format: <node_name>:<port>
-///
-/// # Arguments
-/// * `node_name` - Master node_name / host name
-/// * `port` - Port on which the master is running
-///
-fn create_master_url(node_name: &str, port: &str) -> String {
-    format!("{}:{}", node_name, port)
-}
-
-/// Search for a master port in config properties or env variables
-///
-/// # Arguments
-/// * `option_name` - Name of the option to look for e.g. "SPARK_MASTER_PORT"
-/// * `options` - Vec of config properties or env variables
-///
-fn get_master_port(
-    option_name: &str,
-    user_defined_options: &Option<Vec<ConfigOption>>,
-) -> Option<String> {
-    if let Some(options) = user_defined_options {
-        for option in options {
-            if option.name == option_name {
-                return Some(option.value.clone());
-            }
-        }
-    }
-    None
 }
 
 /// The SPARK_CONFIG_DIR and SPARK_NO_DAEMONIZE must be provided as env variable in the container.
@@ -152,16 +86,21 @@ pub fn create_config_map_name(pod_name: &str) -> String {
 /// # Arguments
 /// * `resource` - SparkCluster
 ///
-pub fn create_config_maps<T>(
+pub fn create_config_map_with_data<T>(
     resource: &SparkCluster,
-    config: T,
-    pod_name: &str,
+    config: Option<T>,
+    cm_name: &str,
 ) -> OperatorResult<ConfigMap>
 where
     T: Config,
 {
-    let spark_defaults = config.get_spark_defaults_conf(&resource.spec);
-    let spark_env_sh = config.get_spark_env_sh();
+    let mut spark_defaults = HashMap::new();
+    let mut spark_env_sh = HashMap::new();
+
+    if let Some(conf) = config {
+        spark_defaults = conf.get_spark_defaults_conf(&resource.spec);
+        spark_env_sh = conf.get_spark_env_sh();
+    }
 
     let conf = convert_map_to_string(&spark_defaults, " ");
     let env = convert_map_to_string(&spark_env_sh, "=");
@@ -170,7 +109,6 @@ where
     data.insert(SPARK_DEFAULTS_CONF.to_string(), conf);
     data.insert(SPARK_ENV_SH.to_string(), env);
 
-    let cm_name = create_config_map_name(pod_name);
     let cm = create_config_map(resource, &cm_name, data)?;
 
     Ok(cm)

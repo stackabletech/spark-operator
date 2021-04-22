@@ -5,7 +5,8 @@ mod pod_utils;
 
 use crate::error::Error;
 
-use crate::config::{create_config_map_name, create_config_maps};
+use crate::config::{create_config_map_name, create_config_map_with_data};
+use crate::pod_utils::{filter_pods_for_type, get_master_urls};
 use async_trait::async_trait;
 use k8s_openapi::api::core::v1::{ConfigMap, Node, Pod};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
@@ -35,7 +36,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 use strum::IntoEnumIterator;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 type SparkReconcileResult = ReconcileResult<error::Error>;
 
@@ -314,35 +315,36 @@ impl SparkState {
         mandatory_labels
     }
 
-    async fn create_config_map<T>(&self, name: &str, config: T) -> Result<(), Error>
+    async fn create_config_map<T>(&self, cm_name: &str, config: Option<T>) -> Result<(), Error>
     where
         T: Config,
     {
         match self
             .context
             .client
-            .get::<ConfigMap>(name, Some(&"default".to_string()))
+            .get::<ConfigMap>(cm_name, Some(&self.context.namespace()))
             .await
         {
             // TODO: check and compare content
             Ok(_) => {
-                debug!("ConfigMap [{}] already exists, skipping creation!", name);
+                debug!("ConfigMap [{}] already exists, skipping creation!", cm_name);
                 return Ok(());
             }
             Err(e) => {
                 // TODO: This is shit, but works for now. If there is an actual error in comms with
                 //   K8S, it will most probably also occur further down and be properly handled
-                debug!("Error getting ConfigMap [{}]: [{:?}]", name, e);
+                debug!("Error getting ConfigMap [{}]: [{:?}]", cm_name, e);
             }
         }
 
-        let config_map = create_config_maps(&self.context.resource, config, name)?;
+        let config_map = create_config_map_with_data(&self.context.resource, config, cm_name)?;
 
         self.context.client.create(&config_map).await?;
         Ok(())
     }
 
     async fn create_missing_pods(&mut self, node_type: &SparkNodeType) -> SparkReconcileResult {
+        let mut changes_applied = false;
         // The iteration happens in two stages here, to accommodate the way our operators think
         // about nodes and roles.
         // The hierarchy is:
@@ -357,13 +359,13 @@ impl SparkState {
                     role_group,
                     &node_type.to_string(),
                 );
+
                 let cm_name = create_config_map_name(&pod_name);
                 debug!("pod_name: [{}], cm_name: [{}]", pod_name, cm_name);
 
                 // extract config
-                if let Some(config) = self.context.resource.spec.get_config(node_type, role_group) {
-                    //self.create_config_map(&cm_name, *config).await?;
-                }
+                let config = self.context.resource.spec.get_config(node_type, role_group);
+                self.create_config_map(&cm_name, config).await?;
 
                 debug!(
                     "Identify missing pods for [{}] role and group [{}]",
@@ -413,15 +415,25 @@ impl SparkState {
                         role_group
                     );
 
+                    let master_pods =
+                        filter_pods_for_type(&self.existing_pods, &SparkNodeType::Master);
+
                     let pod = pod_utils::build_pod(
                         &self.context.resource,
                         &node_name,
                         role_group,
                         &node_type,
+                        &get_master_urls(&master_pods, &self.context.resource.spec),
                     )?;
 
                     self.context.client.create(&pod).await?;
+                    changes_applied = true;
                 }
+            }
+            // we do this here to make sure pods of each role are started after each other
+            // master > worker > history server
+            if changes_applied {
+                return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
             }
         }
         Ok(ReconcileFunctionAction::Continue)
@@ -434,30 +446,31 @@ impl SparkState {
     /// Available master urls are hashed and stored as label in the worker pod. If the label differs
     /// from the spec, we need to replace (delete and and) the workers in a rolling fashion.
     pub async fn check_worker_master_urls(&self) -> SparkReconcileResult {
-        // if let Some(pod_info) = &self.pod_information {
-        //     let worker_pods = pod_info.get_all_pods(Some(SparkNodeType::Worker));
-        //     for pod in &worker_pods {
-        //         if let Some(labels) = &pod.metadata.labels {
-        //             if let Some(label_hashed_master_urls) =
-        //                 labels.get(pod_utils::MASTER_URLS_HASH_LABEL)
-        //             {
-        //                 let current_hashed_master_urls =
-        //                     pod_utils::get_hashed_master_urls(&self.context.resource.spec.masters);
-        //                 if label_hashed_master_urls != &current_hashed_master_urls {
-        //                     debug!(
-        //                         "Pod [{}] has an outdated '{}' [{}] - required is [{}], deleting it",
-        //                         &pod.name(),
-        //                         pod_utils::MASTER_URLS_HASH_LABEL,
-        //                         label_hashed_master_urls,
-        //                         current_hashed_master_urls,
-        //                     );
-        //                     self.context.client.delete(pod).await?;
-        //                     return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
-        //                 }
-        //             }
-        //         }
-        //     }
-        // }
+        let worker_pods = filter_pods_for_type(&self.existing_pods, &SparkNodeType::Worker);
+        let master_pods = filter_pods_for_type(&self.existing_pods, &SparkNodeType::Master);
+
+        for pod in &worker_pods {
+            if let Some(labels) = &pod.metadata.labels {
+                if let Some(label_hashed_master_urls) =
+                    labels.get(pod_utils::MASTER_URLS_HASH_LABEL)
+                {
+                    let current_hashed_master_urls = pod_utils::get_hashed_master_urls(
+                        &get_master_urls(&master_pods, &self.context.resource.spec),
+                    );
+                    if label_hashed_master_urls != &current_hashed_master_urls {
+                        debug!(
+                            "Pod [{}] has an outdated '{}' [{}] - required is [{}], deleting it",
+                            &pod.name(),
+                            pod_utils::MASTER_URLS_HASH_LABEL,
+                            label_hashed_master_urls,
+                            current_hashed_master_urls,
+                        );
+                        self.context.client.delete(pod).await?;
+                        return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
+                    }
+                }
+            }
+        }
         Ok(ReconcileFunctionAction::Continue)
     }
 

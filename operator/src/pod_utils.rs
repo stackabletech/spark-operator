@@ -10,7 +10,8 @@ use stackable_operator::labels::{
     APP_COMPONENT_LABEL, APP_INSTANCE_LABEL, APP_ROLE_GROUP_LABEL, APP_VERSION_LABEL,
 };
 use stackable_operator::metadata;
-use stackable_spark_crd::{MasterConfig, NodeGroup, SparkCluster, SparkClusterSpec, SparkNodeType};
+use stackable_spark_common::constants::{SPARK_MASTER_PORT_CONF, SPARK_MASTER_PORT_ENV};
+use stackable_spark_crd::{Config, SparkCluster, SparkClusterSpec, SparkNodeType};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
@@ -36,11 +37,11 @@ pub fn build_pod(
     node_name: &str,
     role_group: &str,
     node_type: &SparkNodeType,
+    master_urls: &Vec<String>,
 ) -> Result<Pod, Error> {
     let cluster_name = &resource.name();
     let pod_name = create_pod_name(cluster_name, role_group, &node_type.to_string());
-    let (containers, volumes) =
-        build_containers(&resource.spec, node_type, cluster_name, &pod_name);
+    let (containers, volumes) = build_containers(&resource.spec, node_type, &pod_name, master_urls);
 
     Ok(Pod {
         metadata: metadata::build_metadata(
@@ -50,6 +51,7 @@ pub fn build_pod(
                 role_group,
                 cluster_name,
                 &resource.spec.version.to_string(),
+                master_urls,
             )),
             resource,
             true,
@@ -70,20 +72,18 @@ pub fn build_pod(
 /// # Arguments
 /// * `spec` - SparkClusterSpec to get some options like version or log_dir
 /// * `node_type` - SparkNodeType (master/worker/history-server)
-/// * `cluster_name` - Current cluster name
-/// * `hash` - NodeSelector hash
 ///
 fn build_containers(
     spec: &SparkClusterSpec,
     node_type: &SparkNodeType,
-    cluster_name: &str,
     pod_name: &str,
+    master_urls: &Vec<String>,
 ) -> (Vec<Container>, Vec<Volume>) {
     let image_name = format!("spark:{}", &spec.version.to_string());
 
     let mut command = vec![node_type.get_command(&spec.version.to_string())];
     // adapt worker command with master url(s)
-    if let Some(master_urls) = config::adapt_worker_command(node_type, &spec.masters) {
+    if let Some(master_urls) = config::adapt_worker_command(node_type, master_urls) {
         command.push(master_urls);
     }
 
@@ -105,14 +105,14 @@ fn build_containers(
 /// Create a volume to store the spark config files and optional an event volume for spark logs
 ///
 /// # Arguments
-/// * `configmap_name` - ConfigMap name where the required spark configuration files (spark-defaults.conf and spark-env.sh) are located
+/// * `cm_name` - ConfigMap name where the required spark configuration files (spark-defaults.conf and spark-env.sh) are located
 /// * `log_dir` - Event/Log dir for SparkNodes. History Server reads these logs to offer metrics
 ///
-fn create_volumes(configmap_name: &str, log_dir: Option<String>) -> Vec<Volume> {
+fn create_volumes(cm_name: &str, log_dir: Option<String>) -> Vec<Volume> {
     let mut volumes = vec![Volume {
         name: CONFIG_VOLUME.to_string(),
         config_map: Some(ConfigMapVolumeSource {
-            name: Some(configmap_name.to_string()),
+            name: Some(cm_name.to_string()),
             ..ConfigMapVolumeSource::default()
         }),
         ..Volume::default()
@@ -163,6 +163,7 @@ fn build_labels(
     role_group: &str,
     name: &str,
     version: &str,
+    master_urls: &Vec<String>,
 ) -> BTreeMap<String, String> {
     let mut labels = BTreeMap::new();
     labels.insert(String::from(APP_COMPONENT_LABEL), node_type.to_string());
@@ -175,11 +176,19 @@ fn build_labels(
         labels.insert(
             MASTER_URLS_HASH_LABEL.to_string(),
             //  TODO: retrieve all master pods and get nodes + selector
-            "123".to_string(), //get_hashed_master_urls(master_node),
+            get_hashed_master_urls(master_urls),
         );
     }
 
     labels
+}
+
+/// All pod names follow a simple pattern: <spark_cluster_name>-<role_group>-<node_type>
+///
+/// # Arguments
+///
+pub fn create_pod_name(cluster_name: &str, role_group: &str, node_type: &str) -> String {
+    format!("{}-{}-{}", cluster_name, role_group, node_type).to_lowercase()
 }
 
 /// Get all master urls and hash them. This is required to keep track of which workers
@@ -189,8 +198,7 @@ fn build_labels(
 /// # Arguments
 /// * `master_node` - SparkNode master to retrieve master urls for pod label hash
 ///
-pub fn get_hashed_master_urls(masters: &NodeGroup<MasterConfig>) -> String {
-    let master_urls = config::get_master_urls(masters);
+pub fn get_hashed_master_urls(master_urls: &Vec<String>) -> String {
     let mut hasher = DefaultHasher::new();
     for url in master_urls {
         url.hash(&mut hasher);
@@ -198,12 +206,80 @@ pub fn get_hashed_master_urls(masters: &NodeGroup<MasterConfig>) -> String {
     hasher.finish().to_string()
 }
 
-/// All pod names follow a simple pattern: <spark_cluster_name>-<role_group>-<node_type>
+pub fn filter_pods_for_type(pods: &Vec<Pod>, node_type: &SparkNodeType) -> Vec<Pod> {
+    let mut filtered_pods = Vec::new();
+
+    for pod in pods {
+        if let Some(labels) = &pod.metadata.labels {
+            if let Some(component) = labels.get(APP_COMPONENT_LABEL) {
+                if component == &node_type.to_string() {
+                    filtered_pods.push(pod.clone());
+                }
+            }
+        }
+    }
+
+    filtered_pods
+}
+
+/// The master port can be configured and needs to be checked in config / env or general options.
+/// Defaults to 7077 if no port is specified.
 ///
 /// # Arguments
+/// * `master` - Master SparkNode containing the required node_name and port settings
 ///
-pub fn create_pod_name(cluster_name: &str, role_group: &str, node_type: &str) -> String {
-    format!("{}-{}-{}", cluster_name, role_group, node_type).to_lowercase()
+pub fn get_master_urls(pods: &Vec<Pod>, spec: &SparkClusterSpec) -> Vec<String> {
+    let mut master_urls = Vec::new();
+
+    for pod in pods {
+        if let Some(labels) = &pod.metadata.labels {
+            if let (Some(component), Some(role_group)) = (
+                labels.get(APP_COMPONENT_LABEL),
+                labels.get(APP_ROLE_GROUP_LABEL),
+            ) {
+                if component != &SparkNodeType::Master.to_string() {
+                    continue;
+                }
+
+                if let (Some(config), Some(pod_spec)) = (
+                    spec.get_config(&SparkNodeType::Master, role_group),
+                    &pod.spec,
+                ) {
+                    let port = get_master_port(config, spec);
+
+                    if let Some(node_name) = &pod_spec.node_name {
+                        master_urls.push(create_master_url(node_name, &port))
+                    }
+                }
+            }
+        }
+    }
+
+    master_urls
+}
+
+fn get_master_port(config: Box<dyn Config>, spec: &SparkClusterSpec) -> String {
+    return if let Some(spark_defaults_port) = config
+        .get_spark_defaults_conf(spec)
+        .get(SPARK_MASTER_PORT_CONF)
+    {
+        spark_defaults_port.clone()
+    } else if let Some(spark_env_port) = config.get_spark_env_sh().get(SPARK_MASTER_PORT_ENV) {
+        spark_env_port.clone()
+    } else {
+        // TODO: extract default / recommended from product config
+        "7077".to_string()
+    };
+}
+
+/// Create master url in format: <node_name>:<port>
+///
+/// # Arguments
+/// * `node_name` - Master node_name / host name
+/// * `port` - Port on which the master is running
+///
+fn create_master_url(node_name: &str, port: &str) -> String {
+    format!("{}:{}", node_name, port)
 }
 
 #[cfg(test)]

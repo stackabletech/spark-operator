@@ -15,17 +15,35 @@ spec:
         config:
           masterPort: 9999
           masterWebUiPort: 11111
-  workers:
-    selectors:
-      default:
+      default2:
         selector:
           matchLabels:
             kubernetes.io/hostname: mdesktop
-        instances: 2
-        instancesPerNode: 2
+        instances: 1
+        instancesPerNode: 1
+        config:
+          masterPort: 9998
+          masterWebUiPort: 11110
+  workers:
+    selectors:
+      1core1g:
+        selector:
+          matchLabels:
+            kubernetes.io/hostname: mdesktop
+        instances: 1
+        instancesPerNode: 1
         config:
           cores: 1
           memory: "1g"
+      2core2g:
+        selector:
+          matchLabels:
+            kubernetes.io/hostname: mdesktop
+        instances: 1
+        instancesPerNode: 1
+        config:
+          cores: 2
+          memory: "2g"
   historyServers:
     selectors:
       default:
