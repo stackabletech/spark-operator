@@ -14,10 +14,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{from_value, json};
 use stackable_operator::Crd;
 use stackable_spark_common::constants::{
-    SPARK_AUTHENTICATE_SECRET, SPARK_EVENT_LOG_DIR, SPARK_HISTORY_FS_LOG_DIRECTORY,
-    SPARK_HISTORY_STORE_PATH, SPARK_HISTORY_WEBUI_PORT, SPARK_MASTER_PORT_ENV,
-    SPARK_MASTER_WEBUI_PORT, SPARK_PORT_MAX_RETRIES, SPARK_WORKER_CORES, SPARK_WORKER_MEMORY,
-    SPARK_WORKER_PORT, SPARK_WORKER_WEBUI_PORT,
+    SPARK_DEFAULTS_AUTHENTICATE_SECRET, SPARK_DEFAULTS_EVENT_LOG_DIR,
+    SPARK_DEFAULTS_HISTORY_FS_LOG_DIRECTORY, SPARK_DEFAULTS_HISTORY_STORE_PATH,
+    SPARK_DEFAULTS_HISTORY_WEBUI_PORT, SPARK_DEFAULTS_PORT_MAX_RETRIES, SPARK_ENV_MASTER_PORT,
+    SPARK_ENV_MASTER_WEBUI_PORT, SPARK_ENV_WORKER_CORES, SPARK_ENV_WORKER_MEMORY,
+    SPARK_ENV_WORKER_PORT, SPARK_ENV_WORKER_WEBUI_PORT,
 };
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -148,6 +149,8 @@ pub trait Config: Send + Sync {
     fn get_spark_env_sh(&self) -> HashMap<String, String>;
 }
 
+/// This is a workaround to properly access the methods of the Config trait
+/// TODO: suggestions how to improve?
 impl<T: ?Sized> Config for Box<T>
 where
     T: Config,
@@ -166,10 +169,16 @@ impl Config for MasterConfig {
         let mut config = HashMap::new();
 
         let log_dir = spec.log_dir.as_deref().unwrap_or(DEFAULT_LOG_DIR);
-        config.insert(SPARK_EVENT_LOG_DIR.to_string(), log_dir.to_string());
+        config.insert(
+            SPARK_DEFAULTS_EVENT_LOG_DIR.to_string(),
+            log_dir.to_string(),
+        );
 
         if let Some(secret) = &spec.secret {
-            config.insert(SPARK_AUTHENTICATE_SECRET.to_string(), secret.to_string());
+            config.insert(
+                SPARK_DEFAULTS_AUTHENTICATE_SECRET.to_string(),
+                secret.to_string(),
+            );
         }
 
         add_common_spark_defaults(&mut config, spec);
@@ -181,10 +190,13 @@ impl Config for MasterConfig {
         let mut config = HashMap::new();
 
         if let Some(port) = &self.master_port {
-            config.insert(SPARK_MASTER_PORT_ENV.to_string(), port.to_string());
+            config.insert(SPARK_ENV_MASTER_PORT.to_string(), port.to_string());
         }
         if let Some(web_ui_port) = &self.master_web_ui_port {
-            config.insert(SPARK_MASTER_WEBUI_PORT.to_string(), web_ui_port.to_string());
+            config.insert(
+                SPARK_ENV_MASTER_WEBUI_PORT.to_string(),
+                web_ui_port.to_string(),
+            );
         }
 
         add_user_defined_config_properties(&mut config, &self.spark_env_sh);
@@ -197,10 +209,16 @@ impl Config for WorkerConfig {
         let mut config = HashMap::new();
 
         let log_dir = spec.log_dir.as_deref().unwrap_or(DEFAULT_LOG_DIR);
-        config.insert(SPARK_EVENT_LOG_DIR.to_string(), log_dir.to_string());
+        config.insert(
+            SPARK_DEFAULTS_EVENT_LOG_DIR.to_string(),
+            log_dir.to_string(),
+        );
 
         if let Some(secret) = &spec.secret {
-            config.insert(SPARK_AUTHENTICATE_SECRET.to_string(), secret.to_string());
+            config.insert(
+                SPARK_DEFAULTS_AUTHENTICATE_SECRET.to_string(),
+                secret.to_string(),
+            );
         }
 
         add_common_spark_defaults(&mut config, spec);
@@ -212,16 +230,19 @@ impl Config for WorkerConfig {
         let mut config = HashMap::new();
 
         if let Some(cores) = &self.cores {
-            config.insert(SPARK_WORKER_CORES.to_string(), cores.to_string());
+            config.insert(SPARK_ENV_WORKER_CORES.to_string(), cores.to_string());
         }
         if let Some(memory) = &self.memory {
-            config.insert(SPARK_WORKER_MEMORY.to_string(), memory.to_string());
+            config.insert(SPARK_ENV_WORKER_MEMORY.to_string(), memory.to_string());
         }
         if let Some(port) = &self.worker_port {
-            config.insert(SPARK_WORKER_PORT.to_string(), port.to_string());
+            config.insert(SPARK_ENV_WORKER_PORT.to_string(), port.to_string());
         }
         if let Some(web_ui_port) = &self.worker_web_ui_port {
-            config.insert(SPARK_WORKER_WEBUI_PORT.to_string(), web_ui_port.to_string());
+            config.insert(
+                SPARK_ENV_WORKER_WEBUI_PORT.to_string(),
+                web_ui_port.to_string(),
+            );
         }
 
         add_user_defined_config_properties(&mut config, &self.spark_env_sh);
@@ -235,15 +256,21 @@ impl Config for HistoryServerConfig {
 
         let log_dir = spec.log_dir.as_deref().unwrap_or(DEFAULT_LOG_DIR);
         config.insert(
-            SPARK_HISTORY_FS_LOG_DIRECTORY.to_string(),
+            SPARK_DEFAULTS_HISTORY_FS_LOG_DIRECTORY.to_string(),
             log_dir.to_string(),
         );
 
         if let Some(store_path) = &self.store_path {
-            config.insert(SPARK_HISTORY_STORE_PATH.to_string(), store_path.to_string());
+            config.insert(
+                SPARK_DEFAULTS_HISTORY_STORE_PATH.to_string(),
+                store_path.to_string(),
+            );
         }
         if let Some(port) = &self.history_web_ui_port {
-            config.insert(SPARK_HISTORY_WEBUI_PORT.to_string(), port.to_string());
+            config.insert(
+                SPARK_DEFAULTS_HISTORY_WEBUI_PORT.to_string(),
+                port.to_string(),
+            );
         }
 
         add_common_spark_defaults(&mut config, spec);
@@ -260,12 +287,15 @@ impl Config for HistoryServerConfig {
 
 fn add_common_spark_defaults(config: &mut HashMap<String, String>, spec: &SparkClusterSpec) {
     if let Some(secret) = &spec.secret {
-        config.insert(SPARK_AUTHENTICATE_SECRET.to_string(), secret.to_string());
+        config.insert(
+            SPARK_DEFAULTS_AUTHENTICATE_SECRET.to_string(),
+            secret.to_string(),
+        );
     }
 
     let max_port_retries = &spec.max_port_retries.unwrap_or(0);
     config.insert(
-        SPARK_PORT_MAX_RETRIES.to_string(),
+        SPARK_DEFAULTS_PORT_MAX_RETRIES.to_string(),
         max_port_retries.to_string(),
     );
 }
@@ -479,17 +509,6 @@ mod tests {
         let string_schema = serde_yaml::to_string(&schema).unwrap();
         println!("LabelSelector Schema:\n{}\n", string_schema);
     }
-
-    // #[test]
-    // fn test_get_instances() {
-    //     let spec: &SparkClusterSpec = &setup().spec;
-    //
-    //     assert_eq!(spec.master.get_instances(), get_instances(&spec.master));
-    //     assert_eq!(spec.worker.get_instances(), get_instances(&spec.worker));
-    //     if let Some(history) = &spec.history_server {
-    //         assert_eq!(history.get_instances(), get_instances(history));
-    //     }
-    // }
 
     #[test]
     fn test_spark_node_type_get_command() {

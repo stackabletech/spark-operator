@@ -10,7 +10,7 @@ use stackable_operator::labels::{
     APP_COMPONENT_LABEL, APP_INSTANCE_LABEL, APP_ROLE_GROUP_LABEL, APP_VERSION_LABEL,
 };
 use stackable_operator::metadata;
-use stackable_spark_common::constants::{SPARK_MASTER_PORT_CONF, SPARK_MASTER_PORT_ENV};
+use stackable_spark_common::constants::{SPARK_DEFAULTS_MASTER_PORT, SPARK_ENV_MASTER_PORT};
 use stackable_spark_crd::{Config, SparkCluster, SparkClusterSpec, SparkNodeType};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::BTreeMap;
@@ -27,10 +27,10 @@ const EVENT_VOLUME: &str = "event-volume";
 ///
 /// # Arguments
 /// * `resource` - SparkCluster
-/// * `spec` - SparkClusterSpec to get some options like version or log_dir
-/// * `node_type` - SparkNodeType (master/worker/history-server)
 /// * `node_name` - Specific node_name (host) of the pod
-/// * `hash` - NodeSelector hash
+/// * `role_group` - The role group of the selector
+/// * `node_type` - The cluster node type (e.g. master, worker, history-server)
+/// * `master_urls` - Slice of all known master urls
 ///
 pub fn build_pod(
     resource: &SparkCluster,
@@ -71,7 +71,9 @@ pub fn build_pod(
 ///
 /// # Arguments
 /// * `spec` - SparkClusterSpec to get some options like version or log_dir
-/// * `node_type` - SparkNodeType (master/worker/history-server)
+/// * `node_type` - The cluster node type (e.g. master, worker, history-server)
+/// * `pod_name` - The name of the pod
+/// * `master_urls` - Slice of all known master urls
 ///
 fn build_containers(
     spec: &SparkClusterSpec,
@@ -102,7 +104,7 @@ fn build_containers(
     (containers, volumes)
 }
 
-/// Create a volume to store the spark config files and optional an event volume for spark logs
+/// Create a volume to store the spark config files and optional an event volume for spark logs.
 ///
 /// # Arguments
 /// * `cm_name` - ConfigMap name where the required spark configuration files (spark-defaults.conf and spark-env.sh) are located
@@ -128,7 +130,7 @@ fn create_volumes(cm_name: &str, log_dir: Option<String>) -> Vec<Volume> {
     volumes
 }
 
-/// Create volume mounts for the spark config files and optional an event dir for spark logs
+/// Create volume mounts for the spark config files and optional an event dir for spark logs.
 ///
 /// # Arguments
 /// * `log_dir` - Event/Log dir for SparkNodes. History Server reads these logs to offer metrics
@@ -155,27 +157,32 @@ fn create_volume_mounts(log_dir: &Option<String>) -> Vec<VolumeMount> {
 /// connected to which masters. This is accomplished by hashing known master urls
 /// and comparing to the pods. If the hash from pod and selector differ, that means
 /// we had changes (added / removed) masters and therefore restart the workers.
+/// Furthermore labels for component, role group, instance and version are provided.
 ///
 /// # Arguments
+/// * `node_type` - The cluster node type (e.g. master, worker, history-server)
+/// * `role_group` - The role group of the selector
+/// * `cluster_name` - The name of the cluster as specified in the custom resource
+/// * `version` - The current cluster version
+/// * `master_urls` - Slice of all known master urls
 ///
 fn build_labels(
     node_type: &SparkNodeType,
     role_group: &str,
-    name: &str,
+    cluster_name: &str,
     version: &str,
     master_urls: &[String],
 ) -> BTreeMap<String, String> {
     let mut labels = BTreeMap::new();
     labels.insert(String::from(APP_COMPONENT_LABEL), node_type.to_string());
     labels.insert(String::from(APP_ROLE_GROUP_LABEL), role_group.to_string());
-    labels.insert(String::from(APP_INSTANCE_LABEL), name.to_string());
+    labels.insert(String::from(APP_INSTANCE_LABEL), cluster_name.to_string());
 
     labels.insert(APP_VERSION_LABEL.to_string(), version.to_string());
 
     if node_type == &SparkNodeType::Worker {
         labels.insert(
             MASTER_URLS_HASH_LABEL.to_string(),
-            //  TODO: retrieve all master pods and get nodes + selector
             get_hashed_master_urls(master_urls),
         );
     }
@@ -183,9 +190,12 @@ fn build_labels(
     labels
 }
 
-/// All pod names follow a simple pattern: <spark_cluster_name>-<role_group>-<node_type>
+/// All pod names follow a simple pattern: <cluster_name>-<role_group>-<node_type>
 ///
 /// # Arguments
+/// * `cluster_name` - The name of the cluster as specified in the custom resource
+/// * `role_group` - The role group of the selector
+/// * `node_type` - The cluster node type (e.g. master, worker, history-server)
 ///
 pub fn create_pod_name(cluster_name: &str, role_group: &str, node_type: &str) -> String {
     format!("{}-{}-{}", cluster_name, role_group, node_type).to_lowercase()
@@ -196,7 +206,7 @@ pub fn create_pod_name(cluster_name: &str, role_group: &str, node_type: &str) ->
 /// and we need to restart the worker pods to keep them up to date with all known masters.
 ///
 /// # Arguments
-/// * `master_node` - SparkNode master to retrieve master urls for pod label hash
+/// * `master_urls` - Slice of all known master urls
 ///
 pub fn get_hashed_master_urls(master_urls: &[String]) -> String {
     let mut hasher = DefaultHasher::new();
@@ -206,6 +216,12 @@ pub fn get_hashed_master_urls(master_urls: &[String]) -> String {
     hasher.finish().to_string()
 }
 
+/// Filter all existing pods for the specified spark node type.
+///
+/// # Arguments
+/// * `pods` - Slice of all existing pods
+/// * `node_type` - The cluster node type (e.g. master, worker, history-server)
+///
 pub fn filter_pods_for_type(pods: &[Pod], node_type: &SparkNodeType) -> Vec<Pod> {
     let mut filtered_pods = Vec::new();
 
@@ -222,11 +238,13 @@ pub fn filter_pods_for_type(pods: &[Pod], node_type: &SparkNodeType) -> Vec<Pod>
     filtered_pods
 }
 
-/// The master port can be configured and needs to be checked in config / env or general options.
-/// Defaults to 7077 if no port is specified.
+/// Filter all existing pods for master node type and retrieve the selector config
+/// for the given role_group. Extract the nodeName from the pod and the specified port
+/// from the config to create the master urls for each pod.
 ///
 /// # Arguments
-/// * `master` - Master SparkNode containing the required node_name and port settings
+/// * `pods` - Slice of all existing pods
+/// * `spec` - The spark cluster spec
 ///
 pub fn get_master_urls(pods: &[Pod], spec: &SparkClusterSpec) -> Vec<String> {
     let mut master_urls = Vec::new();
@@ -258,13 +276,20 @@ pub fn get_master_urls(pods: &[Pod], spec: &SparkClusterSpec) -> Vec<String> {
     master_urls
 }
 
+/// Search for the selected master port in the master config
+/// Priority is: spark_defaults.conf > spark_env.sh > default port
+///
+/// # Arguments
+/// * `config` - The custom resource config of the specified master
+/// * `spec` - The spark cluster spec
+///
 fn get_master_port(config: Box<dyn Config>, spec: &SparkClusterSpec) -> String {
     return if let Some(spark_defaults_port) = config
         .get_spark_defaults_conf(spec)
-        .get(SPARK_MASTER_PORT_CONF)
+        .get(SPARK_DEFAULTS_MASTER_PORT)
     {
         spark_defaults_port.clone()
-    } else if let Some(spark_env_port) = config.get_spark_env_sh().get(SPARK_MASTER_PORT_ENV) {
+    } else if let Some(spark_env_port) = config.get_spark_env_sh().get(SPARK_ENV_MASTER_PORT) {
         spark_env_port.clone()
     } else {
         // TODO: extract default / recommended from product config

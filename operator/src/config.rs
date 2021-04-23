@@ -14,8 +14,8 @@ use std::collections::{BTreeMap, HashMap};
 /// spark://<master-node-name-1>:<master-port-1>,<master-node-name-2>:<master-port-2>
 ///
 /// # Arguments
-/// * `node_type` - SparkNodeType (master/worker/history-server)
-/// * `master_urls` - List of master urls in format <node_name>:<port>
+/// * `node_type` - The cluster node type (e.g. master, worker, history-server)
+/// * `master_urls` - Slice of master urls in format <node_name>:<port>
 ///
 pub fn adapt_worker_command(node_type: &SparkNodeType, master_urls: &[String]) -> Option<String> {
     let mut adapted_command: String = String::new();
@@ -69,10 +69,10 @@ fn convert_map_to_string(map: &HashMap<String, String>, assignment: &str) -> Str
     data
 }
 
-/// All config map names follow a simple pattern: <pod_name>-<config>
-/// That means multiple pods of one selector share one and the same config map
+/// All config map names follow a simple pattern: <pod_name>-<config>.
 ///
 /// # Arguments
+/// * `pod_name` - The name of the pod the config map belongs to
 ///
 pub fn create_config_map_name(pod_name: &str) -> String {
     format!("{}-config", pod_name)
@@ -82,6 +82,8 @@ pub fn create_config_map_name(pod_name: &str) -> String {
 ///
 /// # Arguments
 /// * `resource` - SparkCluster
+/// * `config` - The custom resource config
+/// * `cm_name` - The desired config map name
 ///
 pub fn create_config_map_with_data<T>(
     resource: &SparkCluster,

@@ -306,6 +306,7 @@ impl SparkState {
         eligible_nodes_map
     }
 
+    /// Required labels for pods. Pods without any of these will deleted and replaced.
     pub fn get_deletion_labels(&self) -> BTreeMap<String, Option<Vec<String>>> {
         let roles = SparkNodeType::iter()
             .map(|role| role.to_string())
@@ -445,6 +446,8 @@ impl SparkState {
                 }
             }
             // we do this here to make sure pods of each role are started after each other
+            // roles start in rolling fashion
+            // pods of each role start non rolling
             // master > worker > history server
             if changes_applied {
                 return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
@@ -629,18 +632,18 @@ impl ControllerStrategy for SparkStrategy {
 
         eligible_nodes.insert(
             SparkNodeType::Master,
-            bla(&context.client, &cluster_spec.masters).await?,
+            get_nodes_that_fit_selectors(&context.client, &cluster_spec.masters).await?,
         );
 
         eligible_nodes.insert(
             SparkNodeType::Worker,
-            bla(&context.client, &cluster_spec.workers).await?,
+            get_nodes_that_fit_selectors(&context.client, &cluster_spec.workers).await?,
         );
 
         if let Some(history_servers) = &cluster_spec.history_servers {
             eligible_nodes.insert(
                 SparkNodeType::HistoryServer,
-                bla(&context.client, &history_servers).await?,
+                get_nodes_that_fit_selectors(&context.client, &history_servers).await?,
             );
         }
 
@@ -652,7 +655,7 @@ impl ControllerStrategy for SparkStrategy {
     }
 }
 
-async fn bla<T>(
+async fn get_nodes_that_fit_selectors<T>(
     client: &Client,
     group: &NodeGroup<T>,
 ) -> OperatorResult<HashMap<String, Vec<Node>>> {
