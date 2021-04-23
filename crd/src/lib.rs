@@ -487,32 +487,110 @@ pub fn schema(_: &mut SchemaGenerator) -> Schema {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use schemars::gen::SchemaGenerator;
-    use stackable_operator::conditions::schema;
-    use stackable_spark_test_utils::cluster::{Load, TestSparkCluster};
+    use stackable_spark_common::constants::SPARK_DEFAULTS_MASTER_PORT;
+    use stackable_spark_test_utils::cluster::{Data, Load, TestSparkCluster};
 
     fn setup() -> SparkCluster {
         TestSparkCluster::load()
     }
 
     #[test]
-    fn print_crd() {
-        let schema = SparkCluster::crd();
-        let string_schema = serde_yaml::to_string(&schema).unwrap();
-        println!("SparkCluster CRD:\n{}\n", string_schema);
+    fn test_get_spark_defaults_master() {
+        let spec: SparkClusterSpec = setup().spec;
+
+        let master_1_config = spec
+            .get_config(
+                &SparkNodeType::Master,
+                TestSparkCluster::MASTER_1_ROLE_GROUP,
+            )
+            .unwrap();
+
+        let spark_defaults = master_1_config.get_spark_defaults_conf(&spec);
+
+        assert_eq!(
+            spark_defaults.get(SPARK_DEFAULTS_MASTER_PORT),
+            Some(&TestSparkCluster::MASTER_1_CONFIG_PORT.to_string())
+        );
+
+        assert_eq!(
+            spark_defaults.get(SPARK_DEFAULTS_EVENT_LOG_DIR),
+            Some(&TestSparkCluster::CLUSTER_LOG_DIR.to_string())
+        );
+
+        assert_eq!(
+            spark_defaults.get(SPARK_DEFAULTS_PORT_MAX_RETRIES),
+            Some(&TestSparkCluster::CLUSTER_MAX_PORT_RETRIES.to_string())
+        );
+
+        assert_eq!(
+            spark_defaults.get(SPARK_DEFAULTS_AUTHENTICATE_SECRET),
+            Some(&TestSparkCluster::CLUSTER_SECRET.to_string())
+        );
     }
 
     #[test]
-    fn print_schema() {
-        let schema = schema(&mut SchemaGenerator::default());
+    fn test_get_spark_env_master() {
+        let spec: SparkClusterSpec = setup().spec;
 
-        let string_schema = serde_yaml::to_string(&schema).unwrap();
-        println!("LabelSelector Schema:\n{}\n", string_schema);
+        let master_1_config = spec
+            .get_config(
+                &SparkNodeType::Master,
+                TestSparkCluster::MASTER_1_ROLE_GROUP,
+            )
+            .unwrap();
+
+        let spark_env = master_1_config.get_spark_env_sh();
+
+        assert_eq!(
+            spark_env.get(SPARK_ENV_MASTER_PORT),
+            Some(&TestSparkCluster::MASTER_1_ENV_PORT.to_string())
+        );
+
+        assert_eq!(
+            spark_env.get(SPARK_ENV_MASTER_WEBUI_PORT),
+            Some(&TestSparkCluster::MASTER_1_WEB_UI_PORT.to_string())
+        );
+    }
+
+    #[test]
+    fn test_get_spark_env_worker() {
+        let spec: SparkClusterSpec = setup().spec;
+
+        let master_1_config = spec
+            .get_config(
+                &SparkNodeType::Worker,
+                TestSparkCluster::WORKER_1_ROLE_GROUP,
+            )
+            .unwrap();
+
+        let spark_env = master_1_config.get_spark_env_sh();
+
+        println!("{:?}", spark_env);
+
+        assert_eq!(
+            spark_env.get(SPARK_ENV_WORKER_PORT),
+            Some(&TestSparkCluster::WORKER_1_PORT.to_string())
+        );
+
+        assert_eq!(
+            spark_env.get(SPARK_ENV_WORKER_WEBUI_PORT),
+            Some(&TestSparkCluster::WORKER_1_WEBUI_PORT.to_string())
+        );
+
+        assert_eq!(
+            spark_env.get(SPARK_ENV_WORKER_MEMORY),
+            Some(&TestSparkCluster::WORKER_1_ENV_MEMORY.to_string())
+        );
+
+        assert_eq!(
+            spark_env.get(SPARK_ENV_WORKER_CORES),
+            Some(&TestSparkCluster::WORKER_1_CORES.to_string())
+        );
     }
 
     #[test]
     fn test_spark_node_type_get_command() {
-        let spec: &SparkClusterSpec = &setup().spec;
+        let spec: SparkClusterSpec = setup().spec;
         let version = &spec.version;
 
         assert_eq!(

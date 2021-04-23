@@ -6,32 +6,48 @@ spec:
   group: command.spark.stackable.tech
   names:
     kind: Stop
-    singular: stop
     plural: stops
-    listKind: StopList
+    shortNames: []
+    singular: stop
   scope: Namespaced
   versions:
-    - name: v1
-      served: true
-      storage: true
+    - additionalPrinterColumns: []
+      name: v1
       schema:
         openAPIV3Schema:
-          type: object
+          description: "Auto-generated derived type for StopCommandSpec via `CustomResource`"
           properties:
             spec:
-              type: object
               properties:
                 name:
                   type: string
+              required:
+                - name
+              type: object
             status:
               nullable: true
-              type: object
               properties:
-                startedAt:
-                  type: string
                 finishedAt:
+                  nullable: true
                   type: string
                 message:
+                  enum:
+                    - Enqueued
+                    - Started
+                    - Running
+                    - Finished
+                    - Error
+                  nullable: true
                   type: string
+                startedAt:
+                  nullable: true
+                  type: string
+              type: object
+          required:
+            - spec
+          title: Stop
+          type: object
+      served: true
+      storage: true
       subresources:
-        status: { }
+        status: {}

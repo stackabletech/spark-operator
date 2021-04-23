@@ -9,7 +9,7 @@ spec:
   maxPortRetries: 0
   masters:
     selectors:
-      default:
+      master_1:
         selector:
           matchLabels:
             kubernetes.io/hostname: master_node_1
@@ -18,13 +18,13 @@ spec:
         config:
           masterPort: 7078
           masterWebUiPort: 8081
-          spark_defaults:
+          sparkDefaults:
             - name: "spark.master.port"
               value: "10001"
-          spark_env_sh:
+          sparkEnvSh:
             - name: "SPARK_MASTER_PORT"
               value: "10002"
-      default2:
+      master_2:
         selector:
           matchLabels:
             kubernetes.io/hostname: master_node_2
@@ -33,7 +33,7 @@ spec:
         config:
           masterPort: 7079
           masterWebUiPort: 8082
-      default3:
+      master_3:
         selector:
           matchLabels:
             kubernetes.io/hostname: master_node_3
@@ -52,7 +52,7 @@ spec:
           memory: "2g"
           workerPort: 3031
           workerWebUiPort: 8083
-          env:
+          sparkEnvSh:
             - name: "SPARK_WORKER_MEMORY"
               value: "1g"
       2core3g:

@@ -1444,6 +1444,7 @@ dependencies = [
 name = "stackable-spark-operator-server"
 version = "0.1.0-nightly"
 dependencies = [
+ "serde_yaml",
  "stackable-operator",
  "stackable-spark-crd",
  "stackable-spark-operator",
