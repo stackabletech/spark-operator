@@ -488,24 +488,22 @@ pub fn schema(_: &mut SchemaGenerator) -> Schema {
 mod tests {
     use super::*;
     use stackable_spark_common::constants::SPARK_DEFAULTS_MASTER_PORT;
-    use stackable_spark_test_utils::cluster::{Data, Load, TestSparkCluster};
-
-    fn setup() -> SparkCluster {
-        TestSparkCluster::load()
-    }
+    use stackable_spark_test_utils::cluster::{Data, TestSparkCluster};
 
     #[test]
     fn test_get_spark_defaults_master() {
-        let spec: SparkClusterSpec = setup().spec;
+        let mut spark_cluster: SparkCluster = stackable_spark_test_utils::setup_test_cluster();
+        spark_cluster.metadata.uid = Some("12345".to_string());
 
-        let master_1_config = spec
+        let master_1_config = spark_cluster
+            .spec
             .get_config(
                 &SparkNodeType::Master,
                 TestSparkCluster::MASTER_1_ROLE_GROUP,
             )
             .unwrap();
 
-        let spark_defaults = master_1_config.get_spark_defaults_conf(&spec);
+        let spark_defaults = master_1_config.get_spark_defaults_conf(&spark_cluster.spec);
 
         assert_eq!(
             spark_defaults.get(SPARK_DEFAULTS_MASTER_PORT),
@@ -530,9 +528,11 @@ mod tests {
 
     #[test]
     fn test_get_spark_env_master() {
-        let spec: SparkClusterSpec = setup().spec;
+        let mut spark_cluster: SparkCluster = stackable_spark_test_utils::setup_test_cluster();
+        spark_cluster.metadata.uid = Some("12345".to_string());
 
-        let master_1_config = spec
+        let master_1_config = spark_cluster
+            .spec
             .get_config(
                 &SparkNodeType::Master,
                 TestSparkCluster::MASTER_1_ROLE_GROUP,
@@ -554,9 +554,11 @@ mod tests {
 
     #[test]
     fn test_get_spark_env_worker() {
-        let spec: SparkClusterSpec = setup().spec;
+        let mut spark_cluster: SparkCluster = stackable_spark_test_utils::setup_test_cluster();
+        spark_cluster.metadata.uid = Some("12345".to_string());
 
-        let master_1_config = spec
+        let master_1_config = spark_cluster
+            .spec
             .get_config(
                 &SparkNodeType::Worker,
                 TestSparkCluster::WORKER_1_ROLE_GROUP,
@@ -564,8 +566,6 @@ mod tests {
             .unwrap();
 
         let spark_env = master_1_config.get_spark_env_sh();
-
-        println!("{:?}", spark_env);
 
         assert_eq!(
             spark_env.get(SPARK_ENV_WORKER_PORT),
@@ -590,8 +590,9 @@ mod tests {
 
     #[test]
     fn test_spark_node_type_get_command() {
-        let spec: SparkClusterSpec = setup().spec;
-        let version = &spec.version;
+        let mut spark_cluster: SparkCluster = stackable_spark_test_utils::setup_test_cluster();
+        spark_cluster.metadata.uid = Some("12345".to_string());
+        let version = &spark_cluster.spec.version;
 
         assert_eq!(
             SparkNodeType::Master.get_command(&version.to_string()),

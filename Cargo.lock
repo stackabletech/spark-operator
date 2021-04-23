@@ -1455,8 +1455,12 @@ dependencies = [
 name = "stackable-spark-test-utils"
 version = "0.1.0"
 dependencies = [
+ "k8s-openapi",
+ "kube",
  "serde",
  "serde_yaml",
+ "stackable-spark-crd",
+ "stackable-spark-operator",
 ]
 
 [[package]]

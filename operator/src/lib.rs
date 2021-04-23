@@ -1,7 +1,7 @@
 mod command_utils;
 mod config;
 mod error;
-mod pod_utils;
+pub mod pod_utils;
 
 use crate::error::Error;
 
