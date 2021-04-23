@@ -463,4 +463,10 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn test_filter_pods_for_type() {
+        let pods = stackable_spark_test_utils::create_master_pods();
+        assert_eq!(pods.len(), 3);
+    }
 }
