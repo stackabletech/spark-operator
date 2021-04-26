@@ -206,7 +206,7 @@ spec:
                       type: string
                     startedAt:
                       type: string
-                clusterStatus:
+                clusterExecutionStatus:
                   enum:
                     - Stopped
                     - Running

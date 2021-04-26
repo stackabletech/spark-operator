@@ -230,11 +230,11 @@ pub struct SparkClusterStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_command: Option<CurrentCommand>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cluster_status: Option<ClusterStatus>,
+    pub cluster_execution_status: Option<ClusterExecutionStatus>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
-pub enum ClusterStatus {
+pub enum ClusterExecutionStatus {
     Stopped,
     Running,
 }

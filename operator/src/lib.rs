@@ -25,7 +25,7 @@ use stackable_operator::reconcile::{
 use stackable_operator::{finalizer, reconcile};
 use stackable_spark_crd::commands::{Restart, Start, Stop};
 use stackable_spark_crd::{
-    ClusterStatus, CurrentCommand, SparkCluster, SparkClusterSpec, SparkClusterStatus,
+    ClusterExecutionStatus, CurrentCommand, SparkCluster, SparkClusterSpec, SparkClusterStatus,
     SparkNodeSelector, SparkNodeType, SparkVersion,
 };
 
@@ -563,7 +563,7 @@ impl SparkState {
                 }
 
             // if no next command check if cluster is stopped
-            } else if Some(ClusterStatus::Stopped) == status.cluster_status {
+            } else if Some(ClusterExecutionStatus::Stopped) == status.cluster_execution_status {
                 info!("Cluster is stopped. Waiting for next command!");
                 return Ok(ReconcileFunctionAction::Done);
             }
