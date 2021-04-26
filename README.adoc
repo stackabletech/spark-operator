@@ -1,4 +1,4 @@
-= Stackable Spark Operator
+= Stackable Operator for Apache Spark
 
 This is an operator for Kubernetes that can manage https://spark.apache.org/[Apache Spark] clusters.
 
