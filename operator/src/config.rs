@@ -196,8 +196,6 @@ mod tests {
             .unwrap()
             .get_spark_env_sh();
 
-        println!("{:?}", spark_env_sh);
-
         assert!(spark_env_sh.contains_key(constants::SPARK_ENV_WORKER_PORT));
         assert_eq!(
             spark_env_sh.get(constants::SPARK_ENV_WORKER_PORT),
