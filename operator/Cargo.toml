@@ -8,7 +8,6 @@ edition = "2018"
 stackable-spark-common = { path = "../common" }
 stackable-spark-crd = { path = "../crd" }
 stackable-operator = { git = "https://github.com/stackabletech/operator-rs.git", branch = "main" }
-product-config = { git = "https://github.com/stackabletech/product-config.git", branch = "start" }
 
 async-trait = "0.1"
 futures = "0.3"
