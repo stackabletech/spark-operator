@@ -30,7 +30,7 @@ use stackable_operator::role_utils;
 use stackable_operator::role_utils::RoleGroup;
 use stackable_spark_crd::commands::{Restart, Start, Stop};
 use stackable_spark_crd::{
-    ClusterStatus, Config, CurrentCommand, NodeGroup, SparkCluster, SparkClusterStatus,
+    ClusterExecutionStatus, Config, CurrentCommand, NodeGroup, SparkCluster, SparkClusterStatus,
     SparkNodeType, SparkVersion,
 };
 use std::collections::{BTreeMap, HashMap};
@@ -274,7 +274,7 @@ impl SparkState {
                     .await?);
 
             // if no next command check if cluster is stopped
-            } else if Some(ClusterStatus::Stopped) == status.cluster_status {
+            } else if Some(ClusterExecutionStatus::Stopped) == status.cluster_execution_status {
                 info!("Cluster is stopped. Waiting for next command!");
                 return Ok(ReconcileFunctionAction::Done);
             }

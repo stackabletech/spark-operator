@@ -7,7 +7,7 @@ use serde_json::json;
 use stackable_operator::client::Client;
 use stackable_operator::error::OperatorResult;
 use stackable_spark_crd::{
-    ClusterExecutionStatus, ClusterStatus, CurrentCommand, Restart, SparkCluster, Start, Stop,
+    ClusterExecutionStatus, CurrentCommand, Restart, SparkCluster, Start, Stop,
 };
 use std::collections::HashMap;
 use std::fmt::Debug;

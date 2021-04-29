@@ -1,14 +1,15 @@
 [package]
 name = "stackable-spark-operator"
+description = "Stackable Spark Operator"
 version = "0.1.0"
 authors = ["Malte Sander <malte.sander.it@gmail.com>"]
 edition = "2018"
+license = "Apache-2.0"
 
 [dependencies]
 stackable-spark-common = { path = "../common" }
 stackable-spark-crd = { path = "../crd" }
 stackable-operator = { git = "https://github.com/stackabletech/operator-rs.git", branch = "main" }
-product-config = { git = "https://github.com/stackabletech/product-config.git", branch = "start" }
 
 async-trait = "0.1"
 futures = "0.3"
@@ -25,8 +26,6 @@ thiserror = "1.0"
 tracing = "0.1"
 semver = "0.11"
 chrono = "0.4"
-
-uuid = { version = "0.8", features = ["v4"] }
 
 [dev-dependencies]
 stackable-spark-test-utils = { path = "../test_utils" }
