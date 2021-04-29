@@ -1,4 +1,4 @@
-#![feature(backtrace)]
+mod command_utils;
 mod config;
 mod error;
 mod pod_utils;
@@ -18,21 +18,23 @@ use stackable_operator::client::Client;
 use stackable_operator::conditions::ConditionStatus;
 use stackable_operator::controller::{Controller, ControllerStrategy, ReconciliationState};
 use stackable_operator::error::OperatorResult;
+use stackable_operator::pod_utils as operator_pod_utils;
 use stackable_operator::reconcile::{
     ReconcileFunctionAction, ReconcileResult, ReconciliationContext,
 };
-use stackable_operator::{finalizer, podutils};
+use stackable_operator::{finalizer, reconcile};
+use stackable_spark_crd::commands::{Restart, Start, Stop};
 use stackable_spark_crd::{
-    SparkCluster, SparkClusterSpec, SparkClusterStatus, SparkNodeSelector, SparkNodeType,
-    SparkVersion,
+    ClusterExecutionStatus, CurrentCommand, SparkCluster, SparkClusterSpec, SparkClusterStatus,
+    SparkNodeSelector, SparkNodeType, SparkVersion,
 };
+
+use kube_runtime::controller::ReconcilerAction;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::time::Duration;
-
-const FINALIZER_NAME: &str = "spark.stackable.tech/cleanup";
 
 type SparkReconcileResult = ReconcileResult<error::Error>;
 
@@ -126,7 +128,7 @@ fn get_pods_for_node(hashed: &HashMap<String, Vec<Pod>>) -> Vec<Pod> {
 }
 
 impl SparkState {
-    async fn set_upgrading_condition(
+    async fn set_installing_condition(
         &self,
         conditions: &[Condition],
         message: &str,
@@ -140,7 +142,7 @@ impl SparkState {
                 message.to_string(),
                 reason.to_string(),
                 status,
-                "Upgrading".to_string(),
+                "Installing".to_string(),
             )
             .await?;
 
@@ -202,7 +204,7 @@ impl SparkState {
                     spec_version
                 );
                 self.status = self
-                    .set_upgrading_condition(
+                    .set_installing_condition(
                         &status.conditions,
                         &format!("Initial installation to version [{:?}]", spec_version),
                         "InitialInstallation",
@@ -225,7 +227,7 @@ impl SparkState {
                 }
                 // We do this here to update the observedGeneration if needed
                 self.status = self
-                    .set_upgrading_condition(
+                    .set_installing_condition(
                         &status.conditions,
                         &format!("Initial installation to version [{:?}]", spec_version),
                         "InitialInstallation",
@@ -265,7 +267,7 @@ impl SparkState {
                 trace!("{}", message);
 
                 self.status = self
-                    .set_upgrading_condition(
+                    .set_installing_condition(
                         &status.conditions,
                         &message,
                         &reason,
@@ -291,7 +293,7 @@ impl SparkState {
                 );
 
                 self.status = self
-                    .set_upgrading_condition(
+                    .set_installing_condition(
                         &status.conditions,
                         &message,
                         "",
@@ -491,7 +493,7 @@ impl SparkState {
                 terminated_pods.push(Meta::name(pod));
             }
 
-            if !podutils::is_pod_running_and_ready(pod) {
+            if !operator_pod_utils::is_pod_running_and_ready(pod) {
                 started_pods.push(Meta::name(pod));
             }
         }
@@ -514,6 +516,60 @@ impl SparkState {
         }
 
         true
+    }
+
+    /// Process available / running commands. If current_command in the status is set, we have
+    /// a running command. If it is not set, but commands are available, start the oldest command.
+    /// If no command is running, no command is waiting and the cluster_status field is "Stopped",
+    /// abort the reconcile action.
+    pub async fn process_commands(&mut self) -> SparkReconcileResult {
+        if let Some(status) = &self.status {
+            // if a current_command is available we are currently processing that command
+            if let Some(current_command) = &status.current_command {
+                let running_command = command_utils::get_command_from_ref(
+                    &self.context.client,
+                    &current_command.command_type,
+                    &current_command.command_ref,
+                    Meta::namespace(&self.context.resource).as_deref(),
+                )
+                .await?;
+
+                return Ok(running_command
+                    .process_command_running(
+                        &self.context.client,
+                        &mut self.context.resource,
+                        current_command,
+                    )
+                    .await?);
+            // if no current commands are running, check if any commands are available
+            } else if let Some(next_command) =
+                command_utils::get_next_command(&self.context.client).await?
+            {
+                let current_command = CurrentCommand {
+                    command_ref: next_command.get_name(),
+                    command_type: next_command.get_type(),
+                    started_at: command_utils::get_current_timestamp(),
+                };
+
+                if let Some(pod_info) = &self.pod_information {
+                    return Ok(next_command
+                        .process_command_execute(
+                            &self.context.client,
+                            &self.context.resource,
+                            &current_command,
+                            &pod_info.get_all_pods(None),
+                        )
+                        .await?);
+                }
+
+            // if no next command check if cluster is stopped
+            } else if Some(ClusterExecutionStatus::Stopped) == status.cluster_execution_status {
+                info!("Cluster is stopped. Waiting for next command!");
+                return Ok(ReconcileFunctionAction::Done);
+            }
+        }
+
+        Ok(ReconcileFunctionAction::Continue)
     }
 
     /// Reconcile the cluster according to provided spec. Start with master nodes and continue to worker and history-server nodes.
@@ -575,7 +631,6 @@ impl SparkState {
                     while current_count > spec_pod_count {
                         let pod = pods.get(0).unwrap();
                         self.context.client.delete(pod).await?;
-                        // TODO: delete configmaps?
                         debug!("Deleting {} pod '{}'", node_type.as_str(), Meta::name(pod));
                         current_count -= 1;
                         applied_changes = true;
@@ -585,7 +640,7 @@ impl SparkState {
                 while current_count < spec_pod_count {
                     let pod = self.create_pod(selector, node_type, hash).await?;
                     self.create_config_maps(node_type, selector, hash).await?;
-                    info!("Creating {} pod '{}'", node_type.as_str(), Meta::name(&pod));
+                    debug!("Creating {} pod '{}'", node_type.as_str(), Meta::name(&pod));
                     current_count += 1;
                     applied_changes = true;
                 }
@@ -616,7 +671,7 @@ impl SparkState {
                         let current_hashed_master_urls =
                             pod_utils::get_hashed_master_urls(&self.spec.master);
                         if label_hashed_master_urls != &current_hashed_master_urls {
-                            info!(
+                            debug!(
                                 "Pod [{}] has an outdated '{}' [{}] - required is [{}], deleting it",
                                 Meta::name(pod),
                                 pod_utils::MASTER_URLS_HASH_LABEL,
@@ -633,11 +688,35 @@ impl SparkState {
         Ok(ReconcileFunctionAction::Continue)
     }
 
+    /// After pod reconcile, if a command has startedAt but no finishedAt timestamp, set finishedAt
+    /// timestamp and finalize command.
+    pub async fn finalize_commands(&mut self) -> SparkReconcileResult {
+        if let Some(status) = &self.status {
+            // if a current_command is available we are currently
+            // processing that command and are finished here.
+            if let Some(current_command) = &status.current_command {
+                let current_command = command_utils::get_command_from_ref(
+                    &self.context.client,
+                    &current_command.command_type,
+                    &current_command.command_ref,
+                    self.context.resource.namespace().as_deref(),
+                )
+                .await?;
+
+                return Ok(current_command
+                    .process_command_finalize(&self.context.client, &mut self.context.resource)
+                    .await?);
+            }
+        }
+
+        Ok(ReconcileFunctionAction::Continue)
+    }
+
     /// Process the cluster status version for upgrades/downgrades.
+    /// If we reach here it means all pods must be running on target_version.
+    /// We can now set current_version to target_version (if target_version was set),
+    /// and target_version to None.
     pub async fn process_version(&mut self) -> SparkReconcileResult {
-        // If we reach here it means all pods must be running on target_version.
-        // We can now set current_version to target_version (if target_version was set) and
-        // target_version to None
         if let Some(status) = &self.status.clone() {
             if let Some(target_version) = &status.target_version {
                 info!(
@@ -651,7 +730,7 @@ impl SparkState {
                     .await?
                     .status;
                 self.status = self
-                    .set_upgrading_condition(
+                    .set_installing_condition(
                         &status.conditions,
                         &format!(
                             "No change required [{:?}] is still the current_version",
@@ -734,6 +813,8 @@ impl ReconciliationState for SparkState {
                 .await?
                 .then(self.check_pods_up_and_running())
                 .await?
+                .then(self.process_commands())
+                .await?
                 .then(self.reconcile_cluster(&SparkNodeType::Master))
                 .await?
                 .then(self.reconcile_cluster(&SparkNodeType::Worker))
@@ -741,6 +822,8 @@ impl ReconciliationState for SparkState {
                 .then(self.reconcile_cluster(&SparkNodeType::HistoryServer))
                 .await?
                 .then(self.check_worker_master_urls())
+                .await?
+                .then(self.finalize_commands())
                 .await?
                 .then(self.process_version())
                 .await
@@ -763,8 +846,15 @@ impl ControllerStrategy for SparkStrategy {
     type State = SparkState;
     type Error = error::Error;
 
-    fn finalizer_name(&self) -> String {
-        FINALIZER_NAME.to_string()
+    fn error_policy(&self) -> ReconcilerAction {
+        let reconcile_after_error_sec = 30;
+        error!(
+            "Reconciliation error: requeuing after {} seconds!",
+            reconcile_after_error_sec
+        );
+        reconcile::create_requeuing_reconciler_action(Duration::from_secs(
+            reconcile_after_error_sec,
+        ))
     }
 
     async fn init_reconcile_state(
@@ -787,12 +877,20 @@ pub async fn create_controller(client: Client) {
     let spark_api: Api<SparkCluster> = client.get_all_api();
     let pods_api: Api<Pod> = client.get_all_api();
     let config_maps_api: Api<ConfigMap> = client.get_all_api();
+    let cmd_restart_api: Api<Restart> = client.get_all_api();
+    let cmd_start_api: Api<Start> = client.get_all_api();
+    let cmd_stop_api: Api<Stop> = client.get_all_api();
 
     let controller = Controller::new(spark_api)
         .owns(pods_api, ListParams::default())
-        .owns(config_maps_api, ListParams::default());
+        .owns(config_maps_api, ListParams::default())
+        .owns(cmd_restart_api, ListParams::default())
+        .owns(cmd_start_api, ListParams::default())
+        .owns(cmd_stop_api, ListParams::default());
 
     let strategy = SparkStrategy::new();
 
-    controller.run(client, strategy).await;
+    controller
+        .run(client, strategy, Duration::from_secs(10))
+        .await;
 }

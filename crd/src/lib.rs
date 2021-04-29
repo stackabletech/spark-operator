@@ -1,5 +1,8 @@
 //! This module provides all required CRD definitions and additional helper methods.
+pub mod commands;
 mod error;
+
+pub use commands::{Restart, Start, Stop};
 
 pub use crate::error::CrdError;
 use derivative::Derivative;
@@ -224,6 +227,24 @@ pub struct SparkClusterStatus {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schemars(schema_with = "stackable_operator::conditions::schema")]
     pub conditions: Vec<Condition>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_command: Option<CurrentCommand>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cluster_execution_status: Option<ClusterExecutionStatus>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+pub enum ClusterExecutionStatus {
+    Stopped,
+    Running,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, JsonSchema, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CurrentCommand {
+    pub command_ref: String,
+    pub command_type: String,
+    pub started_at: String,
 }
 
 impl Crd for SparkCluster {

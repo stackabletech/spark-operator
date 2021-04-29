@@ -1,0 +1,6 @@
+apiVersion: command.spark.stackable.tech/v1
+kind: Restart
+metadata:
+  name: spark-cluster-command-restart
+spec:
+  name: "spark-cluster"
