@@ -6,7 +6,9 @@ use serde::de::DeserializeOwned;
 use serde_json::json;
 use stackable_operator::client::Client;
 use stackable_operator::error::OperatorResult;
-use stackable_spark_crd::{ClusterStatus, CurrentCommand, Restart, SparkCluster, Start, Stop};
+use stackable_spark_crd::{
+    ClusterExecutionStatus, ClusterStatus, CurrentCommand, Restart, SparkCluster, Start, Stop,
+};
 use std::collections::HashMap;
 use std::fmt::Debug;
 
@@ -85,18 +87,33 @@ impl CommandType {
                 for pod in pods {
                     client.delete(pod).await?;
                 }
-                update_cluster_status(client, &updated_cluster, &ClusterStatus::Running).await?;
+                update_cluster_execution_status(
+                    client,
+                    &updated_cluster,
+                    &ClusterExecutionStatus::Running,
+                )
+                .await?;
                 Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)))
             }
             CommandType::Start(_) => {
-                update_cluster_status(client, &updated_cluster, &ClusterStatus::Running).await?;
+                update_cluster_execution_status(
+                    client,
+                    &updated_cluster,
+                    &ClusterExecutionStatus::Running,
+                )
+                .await?;
                 Ok(ReconcileFunctionAction::Continue)
             }
             CommandType::Stop(_) => {
                 for pod in pods {
                     client.delete(pod).await?;
                 }
-                update_cluster_status(client, &updated_cluster, &ClusterStatus::Stopped).await?;
+                update_cluster_execution_status(
+                    client,
+                    &updated_cluster,
+                    &ClusterExecutionStatus::Stopped,
+                )
+                .await?;
                 Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)))
             }
         };
@@ -120,7 +137,7 @@ impl CommandType {
         // even though the cluster should be stopped). So we finish the "Stop" command here after
         // all pods are terminated and update the status label in the command.
         if let CommandType::Stop(stop) = self {
-            finalize_current_command(client, cluster, &ClusterStatus::Stopped).await?;
+            finalize_current_command(client, cluster, &ClusterExecutionStatus::Stopped).await?;
             update_command_label(client, stop).await?;
 
             info!(
@@ -156,7 +173,7 @@ impl CommandType {
             self.get_name()
         );
 
-        finalize_current_command(client, cluster, &ClusterStatus::Running).await?;
+        finalize_current_command(client, cluster, &ClusterExecutionStatus::Running).await?;
 
         // TODO: set label "done" to command to avoid retrieving it via list_commands
         // (for now label selector is not available in list_commands so we need to check
@@ -186,7 +203,7 @@ impl CommandType {
 async fn finalize_current_command(
     client: &Client,
     cluster: &mut SparkCluster,
-    cluster_status: &ClusterStatus,
+    cluster_execution_status: &ClusterExecutionStatus,
 ) -> OperatorResult<SparkCluster> {
     // let patch = json_patch::Patch(vec![PatchOperation::Remove(RemoveOperation {
     //     path: "/status/currentCommand".to_string(),
@@ -199,7 +216,7 @@ async fn finalize_current_command(
     // errors appeared but nothing was deleted / replaced either. Needs investigation.
     if let Some(status) = &mut cluster.status {
         status.current_command = None;
-        status.cluster_status = Some(cluster_status.clone());
+        status.cluster_execution_status = Some(cluster_execution_status.clone());
 
         let api: Api<SparkCluster> = client.get_api(cluster.namespace().as_deref());
 
@@ -225,13 +242,16 @@ async fn finalize_current_command(
 /// * `cluster` - Spark cluster custom resource
 /// * `cluster_status` - Desired cluster status to be set
 ///
-async fn update_cluster_status(
+async fn update_cluster_execution_status(
     client: &Client,
     cluster: &SparkCluster,
-    cluster_status: &ClusterStatus,
+    cluster_execution_status: &ClusterExecutionStatus,
 ) -> OperatorResult<SparkCluster> {
     client
-        .merge_patch_status(cluster, &json!({ "clusterStatus": cluster_status }))
+        .merge_patch_status(
+            cluster,
+            &json!({ "clusterExecutionStatus": cluster_execution_status }),
+        )
         .await
 }
 
