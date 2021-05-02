@@ -1,6 +1,6 @@
 [package]
 name = "stackable-spark-operator"
-description = "Stackable Spark Operator"
+description = "Kubernetes Operator library to handle Apache Spark custom resources"
 version = "0.1.0"
 authors = ["Malte Sander <malte.sander.it@gmail.com>"]
 edition = "2018"

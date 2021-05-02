@@ -6,12 +6,10 @@ pub use crate::error::CrdError;
 pub use commands::{Restart, Start, Stop};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, LabelSelector};
 use kube::CustomResource;
-use schemars::gen::SchemaGenerator;
-use schemars::schema::Schema;
 use schemars::JsonSchema;
 use semver::{SemVerError, Version};
 use serde::{Deserialize, Serialize};
-use serde_json::{from_value, json};
+use stackable_operator::label_selector::schema;
 use stackable_operator::Crd;
 use stackable_spark_common::constants::{
     SPARK_DEFAULTS_AUTHENTICATE_SECRET, SPARK_DEFAULTS_EVENT_LOG_DIR,
@@ -435,53 +433,6 @@ impl SparkVersion {
         let to_version = Version::parse(&to.to_string())?;
         Ok(to_version < from_version)
     }
-}
-
-pub fn schema(_: &mut SchemaGenerator) -> Schema {
-    from_value(json!({
-      "description": "A label selector is a label query over a set of resources. The result of matchLabels and matchExpressions are ANDed. An empty label selector matches all objects. A null label selector matches no objects.",
-      "properties": {
-        "matchExpressions": {
-          "description": "matchExpressions is a list of label selector requirements. The requirements are ANDed.",
-          "items": {
-            "description": "A label selector requirement is a selector that contains values, a key, and an operator that relates the key and values.",
-            "properties": {
-              "key": {
-                "description": "key is the label key that the selector applies to.",
-                "type": "string",
-                "x-kubernetes-patch-merge-key": "key",
-                "x-kubernetes-patch-strategy": "merge"
-              },
-              "operator": {
-                "description": "operator represents a key's relationship to a set of values. Valid operators are In, NotIn, Exists and DoesNotExist.",
-                "type": "string"
-              },
-              "values": {
-                "description": "values is an array of string values. If the operator is In or NotIn, the values array must be non-empty. If the operator is Exists or DoesNotExist, the values array must be empty. This array is replaced during a strategic merge patch.",
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              }
-            },
-            "required": [
-              "key",
-              "operator"
-            ],
-            "type": "object"
-          },
-          "type": "array"
-        },
-        "matchLabels": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "description": "matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels map is equivalent to an element of matchExpressions, whose key field is \"key\", the operator is \"In\", and the values array contains only \"value\". The requirements are ANDed.",
-          "type": "object"
-        }
-      },
-      "type": "object"
-    })).unwrap()
 }
 
 #[cfg(test)]
