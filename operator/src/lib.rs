@@ -329,25 +329,34 @@ impl SparkState {
     where
         T: Config,
     {
+        let config_map = create_config_map_with_data(&self.context.resource, config, cm_name)?;
+
         match self
             .context
             .client
             .get::<ConfigMap>(cm_name, Some(&self.context.namespace()))
             .await
         {
-            // TODO: check and compare content
-            Ok(_) => {
-                debug!("ConfigMap [{}] already exists, skipping creation!", cm_name);
-                return Ok(());
+            Ok(existing_config_map) => {
+                if existing_config_map.data == config_map.data {
+                    debug!(
+                        "ConfigMap [{}] already exists with identical data, skipping creation!",
+                        cm_name
+                    );
+                    return Ok(());
+                } else {
+                    debug!(
+                        "ConfigMap [{}] already exists, but differs, recreating it!",
+                        cm_name
+                    );
+                }
             }
             Err(e) => {
-                // TODO: This is shit, but works for now. If there is an actual error in comms with
+                // TODO: This is shit, but works for now. If there is an actual error in comes with
                 //   K8S, it will most probably also occur further down and be properly handled
                 debug!("Error getting ConfigMap [{}]: [{:?}]", cm_name, e);
             }
         }
-
-        let config_map = create_config_map_with_data(&self.context.resource, config, cm_name)?;
 
         self.context.client.create(&config_map).await?;
         Ok(())

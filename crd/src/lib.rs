@@ -18,7 +18,7 @@ use stackable_spark_common::constants::{
     SPARK_ENV_MASTER_WEBUI_PORT, SPARK_ENV_WORKER_CORES, SPARK_ENV_WORKER_MEMORY,
     SPARK_ENV_WORKER_PORT, SPARK_ENV_WORKER_WEBUI_PORT,
 };
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::hash::Hash;
 use strum_macros::EnumIter;
 
@@ -138,13 +138,13 @@ pub trait Config: Send + Sync {
     /// # Arguments
     /// * `spec` - SparkCluster spec for common properties
     ///
-    fn get_spark_defaults_conf(&self, spec: &SparkClusterSpec) -> HashMap<String, String>;
+    fn get_spark_defaults_conf(&self, spec: &SparkClusterSpec) -> BTreeMap<String, String>;
 
     /// Get all required configuration options for spark-env.sh
     /// - from selector
     /// - from user config properties
     ///
-    fn get_spark_env_sh(&self) -> HashMap<String, String>;
+    fn get_spark_env_sh(&self) -> BTreeMap<String, String>;
 }
 
 /// This is a workaround to properly access the methods of the Config trait
@@ -153,18 +153,18 @@ impl<T: ?Sized> Config for Box<T>
 where
     T: Config,
 {
-    fn get_spark_defaults_conf(&self, spec: &SparkClusterSpec) -> HashMap<String, String> {
+    fn get_spark_defaults_conf(&self, spec: &SparkClusterSpec) -> BTreeMap<String, String> {
         (**self).get_spark_defaults_conf(&spec)
     }
 
-    fn get_spark_env_sh(&self) -> HashMap<String, String> {
+    fn get_spark_env_sh(&self) -> BTreeMap<String, String> {
         (**self).get_spark_env_sh()
     }
 }
 
 impl Config for MasterConfig {
-    fn get_spark_defaults_conf(&self, spec: &SparkClusterSpec) -> HashMap<String, String> {
-        let mut config = HashMap::new();
+    fn get_spark_defaults_conf(&self, spec: &SparkClusterSpec) -> BTreeMap<String, String> {
+        let mut config = BTreeMap::new();
 
         let log_dir = spec.log_dir.as_deref().unwrap_or(DEFAULT_LOG_DIR);
         config.insert(
@@ -184,8 +184,8 @@ impl Config for MasterConfig {
         config
     }
 
-    fn get_spark_env_sh(&self) -> HashMap<String, String> {
-        let mut config = HashMap::new();
+    fn get_spark_env_sh(&self) -> BTreeMap<String, String> {
+        let mut config = BTreeMap::new();
 
         if let Some(port) = &self.master_port {
             config.insert(SPARK_ENV_MASTER_PORT.to_string(), port.to_string());
@@ -203,8 +203,8 @@ impl Config for MasterConfig {
 }
 
 impl Config for WorkerConfig {
-    fn get_spark_defaults_conf(&self, spec: &SparkClusterSpec) -> HashMap<String, String> {
-        let mut config = HashMap::new();
+    fn get_spark_defaults_conf(&self, spec: &SparkClusterSpec) -> BTreeMap<String, String> {
+        let mut config = BTreeMap::new();
 
         let log_dir = spec.log_dir.as_deref().unwrap_or(DEFAULT_LOG_DIR);
         config.insert(
@@ -224,8 +224,8 @@ impl Config for WorkerConfig {
         config
     }
 
-    fn get_spark_env_sh(&self) -> HashMap<String, String> {
-        let mut config = HashMap::new();
+    fn get_spark_env_sh(&self) -> BTreeMap<String, String> {
+        let mut config = BTreeMap::new();
 
         if let Some(cores) = &self.cores {
             config.insert(SPARK_ENV_WORKER_CORES.to_string(), cores.to_string());
@@ -249,8 +249,8 @@ impl Config for WorkerConfig {
 }
 
 impl Config for HistoryServerConfig {
-    fn get_spark_defaults_conf(&self, spec: &SparkClusterSpec) -> HashMap<String, String> {
-        let mut config = HashMap::new();
+    fn get_spark_defaults_conf(&self, spec: &SparkClusterSpec) -> BTreeMap<String, String> {
+        let mut config = BTreeMap::new();
 
         let log_dir = spec.log_dir.as_deref().unwrap_or(DEFAULT_LOG_DIR);
         config.insert(
@@ -276,14 +276,14 @@ impl Config for HistoryServerConfig {
         config
     }
 
-    fn get_spark_env_sh(&self) -> HashMap<String, String> {
-        let mut config = HashMap::new();
+    fn get_spark_env_sh(&self) -> BTreeMap<String, String> {
+        let mut config = BTreeMap::new();
         add_user_defined_config_properties(&mut config, &self.spark_env_sh);
         config
     }
 }
 
-fn add_common_spark_defaults(config: &mut HashMap<String, String>, spec: &SparkClusterSpec) {
+fn add_common_spark_defaults(config: &mut BTreeMap<String, String>, spec: &SparkClusterSpec) {
     if let Some(secret) = &spec.secret {
         config.insert(
             SPARK_DEFAULTS_AUTHENTICATE_SECRET.to_string(),
@@ -299,7 +299,7 @@ fn add_common_spark_defaults(config: &mut HashMap<String, String>, spec: &SparkC
 }
 
 fn add_user_defined_config_properties(
-    config: &mut HashMap<String, String>,
+    config: &mut BTreeMap<String, String>,
     config_properties: &Option<Vec<ConfigOption>>,
 ) {
     if let Some(conf) = config_properties {

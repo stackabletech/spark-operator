@@ -6,7 +6,7 @@ use stackable_operator::config_map::create_config_map;
 use stackable_operator::error::OperatorResult;
 use stackable_spark_common::constants::*;
 use stackable_spark_crd::{Config, SparkCluster, SparkNodeType};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 /// The worker start command needs to be extended with all known master nodes and ports.
 /// The required URLs for the starting command are in format: '<master-node-name>:<master-port'
@@ -61,7 +61,7 @@ pub fn create_required_startup_env() -> Vec<EnvVar> {
 /// * `map` - Map containing option_name:option_value pairs
 /// * `assignment` - Used character to assign option_value to option_name (e.g. "=", " ", ":" ...)
 ///
-fn convert_map_to_string(map: &HashMap<String, String>, assignment: &str) -> String {
+fn convert_map_to_string(map: &BTreeMap<String, String>, assignment: &str) -> String {
     let mut data = String::new();
     for (key, value) in map {
         data.push_str(format!("{}{}{}\n", key, assignment, value).as_str());
@@ -93,8 +93,8 @@ pub fn create_config_map_with_data<T>(
 where
     T: Config,
 {
-    let mut spark_defaults = HashMap::new();
-    let mut spark_env_sh = HashMap::new();
+    let mut spark_defaults = BTreeMap::new();
+    let mut spark_env_sh = BTreeMap::new();
 
     if let Some(conf) = config {
         spark_defaults = conf.get_spark_defaults_conf(&resource.spec);
