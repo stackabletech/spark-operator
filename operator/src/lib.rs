@@ -6,7 +6,7 @@ pub mod pod_utils;
 use crate::error::Error;
 
 use crate::config::{create_config_map_name, create_config_map_with_data};
-use crate::pod_utils::{filter_pods_for_type, get_master_urls};
+use crate::pod_utils::filter_pods_for_type;
 use async_trait::async_trait;
 use k8s_openapi::api::core::v1::{ConfigMap, Node, Pod};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
@@ -437,8 +437,10 @@ impl SparkState {
                     let master_pods =
                         filter_pods_for_type(&self.existing_pods, &SparkNodeType::Master);
 
-                    let master_urls =
-                        get_master_urls(master_pods.as_slice(), &self.context.resource.spec);
+                    let master_urls = stackable_spark_crd::get_master_urls(
+                        master_pods.as_slice(),
+                        &self.context.resource.spec,
+                    );
 
                     debug!("Found master urls: {:?}", master_urls);
 
@@ -480,9 +482,11 @@ impl SparkState {
                 if let Some(label_hashed_master_urls) =
                     labels.get(pod_utils::MASTER_URLS_HASH_LABEL)
                 {
-                    let current_hashed_master_urls = pod_utils::get_hashed_master_urls(
-                        &get_master_urls(&master_pods, &self.context.resource.spec),
-                    );
+                    let current_hashed_master_urls =
+                        pod_utils::get_hashed_master_urls(&stackable_spark_crd::get_master_urls(
+                            &master_pods,
+                            &self.context.resource.spec,
+                        ));
                     if label_hashed_master_urls != &current_hashed_master_urls {
                         debug!(
                             "Pod [{}] has an outdated '{}' [{}] - required is [{}], deleting it",
