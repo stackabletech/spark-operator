@@ -325,6 +325,10 @@ impl SparkState {
         mandatory_labels
     }
 
+    /// Create or update a config map.
+    /// - Create if no config map of that name exists
+    /// - Update if config map exists but the content differs
+    /// - Do nothing if the config map exists and the content is identical
     async fn create_config_map<T>(&self, cm_name: &str, config: Option<T>) -> Result<(), Error>
     where
         T: Config,
@@ -338,27 +342,31 @@ impl SparkState {
             .await
         {
             Ok(existing_config_map) => {
-                if existing_config_map.data == config_map.data {
-                    debug!(
-                        "ConfigMap [{}] already exists with identical data, skipping creation!",
-                        cm_name
-                    );
-                    return Ok(());
-                } else {
-                    debug!(
-                        "ConfigMap [{}] already exists, but differs, recreating it!",
-                        cm_name
-                    );
+                if let (Some(existing_config_map_data), Some(new_config_map_data)) =
+                    (existing_config_map.data.as_ref(), config_map.data.as_ref())
+                {
+                    if existing_config_map_data == new_config_map_data {
+                        debug!(
+                            "ConfigMap [{}] already exists with identical data, skipping creation!",
+                            cm_name
+                        );
+                    } else {
+                        debug!(
+                            "ConfigMap [{}] already exists, but differs, recreating it!",
+                            cm_name
+                        );
+                        self.context.client.update(&config_map).await?;
+                    }
                 }
             }
             Err(e) => {
                 // TODO: This is shit, but works for now. If there is an actual error in comes with
                 //   K8S, it will most probably also occur further down and be properly handled
                 debug!("Error getting ConfigMap [{}]: [{:?}]", cm_name, e);
+                self.context.client.create(&config_map).await?;
             }
         }
 
-        self.context.client.create(&config_map).await?;
         Ok(())
     }
 
