@@ -1,5 +1,6 @@
 //! This module contains all Pod related methods.
 use crate::config;
+use crate::config::create_config_map_name;
 use crate::error::Error;
 use k8s_openapi::api::core::v1::{
     ConfigMapVolumeSource, Container, Pod, PodSpec, Volume, VolumeMount,
@@ -13,7 +14,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 
-///
+/// Value for the APP_NAME_LABEL label key
 pub const APP_NAME: &str = "spark";
 /// Pod label which indicates the known master urls for a worker pod
 pub const MASTER_URLS_HASH_LABEL: &str = "spark.stackable.tech/masterUrls";
@@ -39,8 +40,24 @@ pub fn build_pod(
     master_urls: &[String],
 ) -> Result<Pod, Error> {
     let cluster_name = &resource.name();
-    let pod_name = create_pod_name(cluster_name, role_group, &node_type.to_string());
-    let (containers, volumes) = build_containers(&resource.spec, node_type, &pod_name, master_urls);
+
+    // we use the node_name in the pod name; otherwise pod names are not unique
+    let pod_name = create_pod_name(
+        cluster_name,
+        role_group,
+        &node_type.to_string(),
+        Some(node_name),
+    );
+
+    // we do not attach the node_name to the config map name
+    let cm_name = create_config_map_name(&create_pod_name(
+        cluster_name,
+        role_group,
+        &node_type.to_string(),
+        None,
+    ));
+
+    let (containers, volumes) = build_containers(&resource.spec, node_type, &cm_name, master_urls);
 
     Ok(Pod {
         metadata: metadata::build_metadata(
@@ -71,13 +88,13 @@ pub fn build_pod(
 /// # Arguments
 /// * `spec` - SparkClusterSpec to get some options like version or log_dir
 /// * `node_type` - The cluster node type (e.g. master, worker, history-server)
-/// * `pod_name` - The name of the pod
+/// * `cm_name` - The name of the config map
 /// * `master_urls` - Slice of all known master urls
 ///
 fn build_containers(
     spec: &SparkClusterSpec,
     node_type: &SparkNodeType,
-    pod_name: &str,
+    cm_name: &str,
     master_urls: &[String],
 ) -> (Vec<Container>, Vec<Volume>) {
     let image_name = format!("spark:{}", &spec.version.to_string());
@@ -97,7 +114,6 @@ fn build_containers(
         ..Container::default()
     }];
 
-    let cm_name = config::create_config_map_name(pod_name);
     let volumes = create_volumes(&cm_name, spec.log_dir.clone());
 
     (containers, volumes)
@@ -199,15 +215,27 @@ fn build_labels(
     labels
 }
 
-/// All pod names follow a simple pattern: <cluster_name>-<role_group>-<node_type>
+/// All pod names follow a simple pattern: spark-<cluster_name>-<role_group>-<node_type>-<node_name>
 ///
 /// # Arguments
 /// * `cluster_name` - The name of the cluster as specified in the custom resource
 /// * `role_group` - The role group of the selector
 /// * `node_type` - The cluster node type (e.g. master, worker, history-server)
+/// * `node_name` - The node or host name
 ///
-pub fn create_pod_name(cluster_name: &str, role_group: &str, node_type: &str) -> String {
-    format!("{}-{}-{}", cluster_name, role_group, node_type).to_lowercase()
+pub fn create_pod_name(
+    cluster_name: &str,
+    role_group: &str,
+    node_type: &str,
+    node_name: Option<&str>,
+) -> String {
+    let mut pod_name = format!("spark-{}-{}-{}", cluster_name, role_group, node_type);
+
+    if let Some(name) = node_name {
+        pod_name.push_str(&format!("-{}", name));
+    }
+
+    pod_name.to_lowercase()
 }
 
 /// Get all master urls and hash them. This is required to keep track of which workers

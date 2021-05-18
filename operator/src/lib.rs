@@ -341,23 +341,21 @@ impl SparkState {
             .get::<ConfigMap>(cm_name, Some(&self.context.namespace()))
             .await
         {
-            Ok(existing_config_map) => {
-                if let (Some(existing_config_map_data), Some(new_config_map_data)) =
-                    (existing_config_map.data.as_ref(), config_map.data.as_ref())
-                {
-                    if existing_config_map_data == new_config_map_data {
-                        debug!(
-                            "ConfigMap [{}] already exists with identical data, skipping creation!",
-                            cm_name
-                        );
-                    } else {
-                        debug!(
-                            "ConfigMap [{}] already exists, but differs, recreating it!",
-                            cm_name
-                        );
-                        self.context.client.update(&config_map).await?;
-                    }
-                }
+            Ok(ConfigMap {
+                data: existing_config_map_data,
+                ..
+            }) if existing_config_map_data == config_map.data => {
+                debug!(
+                    "ConfigMap [{}] already exists with identical data, skipping creation!",
+                    cm_name
+                );
+            }
+            Ok(_) => {
+                debug!(
+                    "ConfigMap [{}] already exists, but differs, updating it!",
+                    cm_name
+                );
+                self.context.client.update(&config_map).await?;
             }
             Err(e) => {
                 // TODO: This is shit, but works for now. If there is an actual error in comes with
@@ -380,11 +378,12 @@ impl SparkState {
         //      - Individual nodes
         if let Some(nodes_for_role) = self.eligible_nodes.get(&node_type) {
             for (role_group, nodes) in nodes_for_role {
-                // Create config map for this role group
+                // Create config map for this role group (without node_name)
                 let pod_name = pod_utils::create_pod_name(
                     &self.context.name(),
                     role_group,
                     &node_type.to_string(),
+                    None,
                 );
 
                 let cm_name = create_config_map_name(&pod_name);

@@ -3,4 +3,4 @@ kind: Restart
 metadata:
   name: spark-cluster-command-restart
 spec:
-  name: "spark-cluster"
+  name: "simple"
