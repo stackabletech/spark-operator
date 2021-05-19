@@ -1,81 +1,35 @@
-= Stackable Operator for Apache Spark
-
-This is a Kubernetes Operator to manage Apache Spark clusters.
-
-It is written by https://www.stackable.de[Stackable] in Rust, and it is supposed to be used with the https://github.com/stackabletech/agent[Stackable Agent] instead of the Kubernetes kubelet.
-
-== Building
-
-This operator is written in Rust.
-It is developed against the latest Rust release (1.50.0-nightly at the time of writing this).
-
-NOTE: This requires Rust nightly due to the use of the `backtrace` feature.
-
-    cargo build
-
-== Configuration Options
+= Usage
 
 The cluster can be configured via a YAML file.
-Each node type (Master, Worker, History-Server) can have multiple instances within multiple selectors.
+Each node type (Master, Worker, History Server) can have multiple instances within multiple selectors.
 Multiple instances in the same selector can lead to port duplicates which results in the affected node
-to increase the port one by one (if max_port_retries is not set to 0). Keep that in mind when e.g. running multiple masters without specified ports
+to increase the port one by one. Keep that in mind when e.g. running multiple masters without specified ports
 on the same node.
 
     apiVersion: spark.stackable.tech/v1
     kind: SparkCluster
     metadata:
     name: spark-cluster
-    spec:
-      version: "3.0.1"
-      masters:
-      selectors:
-        default:
-          selector:
-            matchLabels:
-              kubernetes.io/hostname: master-node
-          instances: 1
-          instancesPerNode: 1
-          config:
-            masterPort: 7078
-            masterWebUiPort: 8081
-      workers:
-        selectors:
-          1core1g:
-            selector:
-              matchLabels:
-                kubernetes.io/hostname: worker-1-node
-            instances: 1
-            instancesPerNode: 1
-            config:
-              cores: 1
-              memory: "1g"
-              workerPort: 3031
-              workerWebUiPort: 8083
-          2core2g:
-            selector:
-              matchLabels:
-                kubernetes.io/hostname: worker-2-node
-            instances: 1
-            instancesPerNode: 1
-            config:
+      spec:
+        master:
+          selectors:
+            - nodeName: "some_master_node"
+              instances: 1
+        worker:
+          selectors:
+            - nodeName: "some_worker_node"
+              instances: 1
               cores: 2
               memory: "2g"
-              workerPort: 3032
-              workerWebUiPort: 8084
-      historyServers:
-        selectors:
-          default:
-            selector:
-              matchLabels:
-                kubernetes.io/hostname: history-server-node
-            instances: 1
-            instancesPerNode: 1
-            config:
-              historyWebUiPort: 18081
+        historyServer:
+          selectors:
+            - nodeName: "some_history_server_node"
+              instances: 1
+      version: "3.0.1"
+      secret: "my_secret"
+      logDir: "/tmp/spark-events"
 
-
-
-=== Structure
+== Structure
 
 There are three levels of configuration:
 
@@ -91,7 +45,7 @@ There are three levels of configuration:
 |Options provided in the selector are limited to one specific node of a node type (Master, Worker, History-Server) and apply to one physical machine.
 |===
 
-=== Common shared options
+== Common shared options
 [cols="1,1,1,1"]
 |===
 |Name
@@ -120,11 +74,11 @@ There are three levels of configuration:
 |spark.port.maxRetries
 |===
 
-=== Node type options
+== Node type options
 T.b.d.
 
-=== Selector specific options
-==== Master
+== Selector specific options
+=== Master
 [cols="1,1,1,1"]
 |===
 |Name
@@ -142,7 +96,8 @@ T.b.d.
 |Port for the master web UI (default: 8080).
 |SPARK_MASTER_WEBUI_PORT
 |===
-==== Worker
+
+=== Worker
 [cols="1,1,1,1"]
 |===
 |Name
@@ -171,7 +126,7 @@ T.b.d.
 |SPARK_WORKER_MEMORY
 |===
 
-==== History Server
+=== History Server
 [cols="1,1,1,1"]
 |===
 |Name
@@ -189,6 +144,3 @@ T.b.d.
 |The port to which the web interface of the history server binds (default: 18080).
 |spark.history.ui.port
 |===
-
-The docs can be found in the `docs` subdirectory, and they are published together with docs for all other Stackable products at https://docs.stackable.tech.
-
