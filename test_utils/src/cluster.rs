@@ -16,41 +16,44 @@ where
 
 /// Contains object definitions that should match the provided file data
 pub trait Data {
-    const MASTER_SELECTOR_1_NODE_NAME: &'static str;
-    const MASTER_SELECTOR_1_INSTANCES: usize;
-    const MASTER_SELECTOR_1_PORT: usize;
-    const MASTER_SELECTOR_1_WEB_UI_PORT: usize;
-    const MASTER_SELECTOR_1_CONFIG_PORT: usize;
-    const MASTER_SELECTOR_1_ENV_PORT: usize;
+    const MASTER_1_NODE_NAME: &'static str;
+    const MASTER_1_INSTANCES: usize;
+    const MASTER_1_PORT: u16;
+    const MASTER_1_WEB_UI_PORT: u16;
+    const MASTER_1_CONFIG_PORT: usize;
+    const MASTER_1_ENV_PORT: usize;
+    const MASTER_1_ROLE_GROUP: &'static str;
 
-    const MASTER_SELECTOR_2_NODE_NAME: &'static str;
-    const MASTER_SELECTOR_2_INSTANCES: usize;
-    const MASTER_SELECTOR_2_PORT: usize;
-    const MASTER_SELECTOR_2_WEB_UI_PORT: usize;
-    const MASTER_SELECTOR_2_ENV_PORT: usize;
+    const MASTER_2_NODE_NAME: &'static str;
+    const MASTER_2_INSTANCES: usize;
+    const MASTER_2_PORT: u16;
+    const MASTER_2_WEB_UI_PORT: u16;
+    const MASTER_2_ROLE_GROUP: &'static str;
 
-    const MASTER_SELECTOR_3_NODE_NAME: &'static str;
-    const MASTER_SELECTOR_3_INSTANCES: usize;
-    const MASTER_SELECTOR_3_PORT: usize;
+    const MASTER_3_NODE_NAME: &'static str;
+    const MASTER_3_INSTANCES: usize;
+    const MASTER_3_ROLE_GROUP: &'static str;
 
-    const MASTER_SELECTOR_4_NODE_NAME: &'static str;
-    const MASTER_SELECTOR_4_INSTANCES: usize;
+    const WORKER_1_NODE_NAME: &'static str;
+    const WORKER_1_INSTANCES: usize;
+    const WORKER_1_CORES: usize;
+    const WORKER_1_MEMORY: &'static str;
+    const WORKER_1_ENV_MEMORY: &'static str;
+    const WORKER_1_PORT: u16;
+    const WORKER_1_WEBUI_PORT: u16;
+    const WORKER_1_ROLE_GROUP: &'static str;
 
-    const WORKER_SELECTOR_1_NODE_NAME: &'static str;
-    const WORKER_SELECTOR_1_INSTANCES: usize;
-    const WORKER_SELECTOR_1_CORES: usize;
-    const WORKER_SELECTOR_1_MEMORY: &'static str;
-    const WORKER_SELECTOR_1_ENV_MEMORY: &'static str;
+    const WORKER_2_NODE_NAME: &'static str;
+    const WORKER_2_INSTANCES: usize;
+    const WORKER_2_CORES: usize;
+    const WORKER_2_MEMORY: &'static str;
+    const WORKER_2_PORT: u16;
+    const WORKER_2_WEBUI_PORT: u16;
+    const WORKER_2_ROLE_GROUP: &'static str;
 
-    const WORKER_SELECTOR_2_NODE_NAME: &'static str;
-    const WORKER_SELECTOR_2_INSTANCES: usize;
-    const WORKER_SELECTOR_2_CORES: usize;
-    const WORKER_SELECTOR_2_MEMORY: &'static str;
-
-    const HISTORY_SERVER_SELECTOR_2_NODE_NAME: &'static str;
-    const HISTORY_SERVER_SELECTOR_2_INSTANCES: usize;
-    const HISTORY_SERVER_SELECTOR_2_CORES: usize;
-    const HISTORY_SERVER_SELECTOR_2_MEMORY: &'static str;
+    const HISTORY_SERVER_NODE_NAME: &'static str;
+    const HISTORY_SERVER_INSTANCES: usize;
+    const HISTORY_SERVER_ROLE_GROUP: &'static str;
 
     const CLUSTER_VERSION: &'static str;
     const CLUSTER_SECRET: &'static str;
@@ -73,41 +76,44 @@ where
 }
 
 impl Data for TestSparkCluster {
-    const MASTER_SELECTOR_1_NODE_NAME: &'static str = "master_node_1";
-    const MASTER_SELECTOR_1_INSTANCES: usize = 1;
-    const MASTER_SELECTOR_1_PORT: usize = 10000;
-    const MASTER_SELECTOR_1_WEB_UI_PORT: usize = 10100;
-    const MASTER_SELECTOR_1_CONFIG_PORT: usize = 10001;
-    const MASTER_SELECTOR_1_ENV_PORT: usize = 10002;
+    const MASTER_1_NODE_NAME: &'static str = "master_node_1";
+    const MASTER_1_INSTANCES: usize = 1;
+    const MASTER_1_PORT: u16 = 7078;
+    const MASTER_1_WEB_UI_PORT: u16 = 8081;
+    const MASTER_1_CONFIG_PORT: usize = 10001;
+    const MASTER_1_ENV_PORT: usize = 10002;
+    const MASTER_1_ROLE_GROUP: &'static str = "master_1";
 
-    const MASTER_SELECTOR_2_NODE_NAME: &'static str = "master_node_2";
-    const MASTER_SELECTOR_2_INSTANCES: usize = 2;
-    const MASTER_SELECTOR_2_PORT: usize = 10000;
-    const MASTER_SELECTOR_2_WEB_UI_PORT: usize = 10000;
-    const MASTER_SELECTOR_2_ENV_PORT: usize = 10002;
+    const MASTER_2_NODE_NAME: &'static str = "master_node_2";
+    const MASTER_2_INSTANCES: usize = 2;
+    const MASTER_2_PORT: u16 = 7079;
+    const MASTER_2_WEB_UI_PORT: u16 = 8082;
+    const MASTER_2_ROLE_GROUP: &'static str = "master_2";
 
-    const MASTER_SELECTOR_3_NODE_NAME: &'static str = "master_node_3";
-    const MASTER_SELECTOR_3_INSTANCES: usize = 1;
-    const MASTER_SELECTOR_3_PORT: usize = 30000;
+    const MASTER_3_NODE_NAME: &'static str = "master_node_3";
+    const MASTER_3_INSTANCES: usize = 1;
+    const MASTER_3_ROLE_GROUP: &'static str = "master_3";
 
-    const MASTER_SELECTOR_4_NODE_NAME: &'static str = "master_node_4";
-    const MASTER_SELECTOR_4_INSTANCES: usize = 1;
+    const WORKER_1_NODE_NAME: &'static str = "worker_node_1";
+    const WORKER_1_INSTANCES: usize = 1;
+    const WORKER_1_CORES: usize = 1;
+    const WORKER_1_MEMORY: &'static str = "2g";
+    const WORKER_1_ENV_MEMORY: &'static str = "1g";
+    const WORKER_1_PORT: u16 = 3031;
+    const WORKER_1_WEBUI_PORT: u16 = 8083;
+    const WORKER_1_ROLE_GROUP: &'static str = "1core1g";
 
-    const WORKER_SELECTOR_1_NODE_NAME: &'static str = "worker_node_1";
-    const WORKER_SELECTOR_1_INSTANCES: usize = 1;
-    const WORKER_SELECTOR_1_CORES: usize = 1;
-    const WORKER_SELECTOR_1_MEMORY: &'static str = "1g";
-    const WORKER_SELECTOR_1_ENV_MEMORY: &'static str = "3g";
+    const WORKER_2_NODE_NAME: &'static str = "worker_node_2";
+    const WORKER_2_INSTANCES: usize = 1;
+    const WORKER_2_CORES: usize = 2;
+    const WORKER_2_MEMORY: &'static str = "3g";
+    const WORKER_2_PORT: u16 = 3032;
+    const WORKER_2_WEBUI_PORT: u16 = 8084;
+    const WORKER_2_ROLE_GROUP: &'static str = "2core3g";
 
-    const WORKER_SELECTOR_2_NODE_NAME: &'static str = "worker_node_2";
-    const WORKER_SELECTOR_2_INSTANCES: usize = 2;
-    const WORKER_SELECTOR_2_CORES: usize = 2;
-    const WORKER_SELECTOR_2_MEMORY: &'static str = "2g";
-
-    const HISTORY_SERVER_SELECTOR_2_NODE_NAME: &'static str = "history_server_node_1";
-    const HISTORY_SERVER_SELECTOR_2_INSTANCES: usize = 1;
-    const HISTORY_SERVER_SELECTOR_2_CORES: usize = 2;
-    const HISTORY_SERVER_SELECTOR_2_MEMORY: &'static str = "2g";
+    const HISTORY_SERVER_NODE_NAME: &'static str = "history_server_node_1";
+    const HISTORY_SERVER_INSTANCES: usize = 1;
+    const HISTORY_SERVER_ROLE_GROUP: &'static str = "default";
 
     const CLUSTER_VERSION: &'static str = "3.0.1";
     const CLUSTER_SECRET: &'static str = "secret";

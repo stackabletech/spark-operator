@@ -1,130 +1,51 @@
 mod command_utils;
 mod config;
 mod error;
-mod pod_utils;
+pub mod pod_utils;
 
 use crate::error::Error;
 
-use kube::Api;
-use tracing::{debug, error, info, trace};
-
-use k8s_openapi::api::core::v1::{ConfigMap, Pod};
-use kube::api::{ListParams, Meta};
-use serde_json::json;
-
+use crate::config::{create_config_map_name, create_config_map_with_data};
+use crate::pod_utils::filter_pods_for_type;
 use async_trait::async_trait;
+use k8s_openapi::api::core::v1::{ConfigMap, Node, Pod};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
+use kube::api::ListParams;
+use kube::Api;
+use kube::Resource;
+use serde_json::json;
 use stackable_operator::client::Client;
 use stackable_operator::conditions::ConditionStatus;
 use stackable_operator::controller::{Controller, ControllerStrategy, ReconciliationState};
 use stackable_operator::error::OperatorResult;
-use stackable_operator::pod_utils as operator_pod_utils;
-use stackable_operator::reconcile::{
-    ReconcileFunctionAction, ReconcileResult, ReconciliationContext,
+use stackable_operator::k8s_utils;
+use stackable_operator::k8s_utils::LabelOptionalValueMap;
+use stackable_operator::labels::{
+    APP_COMPONENT_LABEL, APP_INSTANCE_LABEL, APP_ROLE_GROUP_LABEL, APP_VERSION_LABEL,
 };
-use stackable_operator::{finalizer, reconcile};
+use stackable_operator::reconcile::{
+    ContinuationStrategy, ReconcileFunctionAction, ReconcileResult, ReconciliationContext,
+};
+use stackable_operator::role_utils;
+use stackable_operator::role_utils::RoleGroup;
 use stackable_spark_crd::commands::{Restart, Start, Stop};
 use stackable_spark_crd::{
-    ClusterExecutionStatus, CurrentCommand, SparkCluster, SparkClusterSpec, SparkClusterStatus,
-    SparkNodeSelector, SparkNodeType, SparkVersion,
+    ClusterExecutionStatus, Config, CurrentCommand, NodeGroup, SparkCluster, SparkClusterStatus,
+    SparkNodeType, SparkVersion,
 };
-
-use kube_runtime::controller::ReconcilerAction;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::pin::Pin;
-use std::str::FromStr;
 use std::time::Duration;
+use strum::IntoEnumIterator;
+use tracing::{debug, info, trace, warn};
 
 type SparkReconcileResult = ReconcileResult<error::Error>;
 
 struct SparkState {
     context: ReconciliationContext<SparkCluster>,
-    spec: SparkClusterSpec,
-    status: Option<SparkClusterStatus>,
-    pod_information: Option<PodInformation>,
-}
-
-/// This will be filled in the beginning of the reconcile method.
-/// Nodes are sorted according to their cluster role / node type and their corresponding selector hash.
-/// The selector hash identifies a provided selector which shares properties for one or multiple pods.
-/// In order to reconcile properly, we need the pods to identify themselves via a hash belonging to a certain selector.
-/// This is currently the only way to match a pod to a certain selector and compare current vs desired state.
-struct PodInformation {
-    // hash for selector -> corresponding pod list
-    pub master: HashMap<String, Vec<Pod>>,
-    pub worker: HashMap<String, Vec<Pod>>,
-    pub history_server: Option<HashMap<String, Vec<Pod>>>,
-}
-
-impl PodInformation {
-    /// Count the pods according to their node type
-    ///
-    /// # Arguments
-    ///
-    /// * `node_type` - SparkNodeType (master/worker/history-server)
-    ///
-    pub fn get_pod_count(&self, node_type: SparkNodeType) -> usize {
-        let mut num_pods = 0;
-        match node_type {
-            SparkNodeType::Master => num_pods = get_pods_for_node(&self.master).len(),
-            SparkNodeType::Worker => num_pods = get_pods_for_node(&self.worker).len(),
-            SparkNodeType::HistoryServer => {
-                if self.history_server.is_some() {
-                    num_pods = get_pods_for_node(self.history_server.as_ref().unwrap()).len()
-                }
-            }
-        }
-        num_pods
-    }
-
-    /// Get all pods according to their node type
-    /// "None" will return every pod belonging to the cluster.
-    ///
-    /// # Arguments
-    ///
-    /// * `node_type` - Optional SparkNodeType (master/worker/history-server);
-    ///
-    fn get_all_pods(&self, node_type: Option<SparkNodeType>) -> Vec<Pod> {
-        let mut pods: Vec<Pod> = vec![];
-
-        match node_type {
-            Some(node_type) => match node_type {
-                SparkNodeType::Master => pods = get_pods_for_node(&self.master),
-                SparkNodeType::Worker => pods = get_pods_for_node(&self.worker),
-                SparkNodeType::HistoryServer => {
-                    if self.history_server.is_some() {
-                        pods = get_pods_for_node(self.history_server.as_ref().unwrap())
-                    }
-                }
-            },
-            None => {
-                pods.append(&mut get_pods_for_node(&self.master));
-                pods.append(&mut get_pods_for_node(&self.worker));
-                if self.history_server.is_some() {
-                    pods.append(&mut get_pods_for_node(
-                        self.history_server.as_ref().unwrap(),
-                    ))
-                }
-            }
-        };
-
-        pods
-    }
-}
-
-/// Retrieve all pods from a hashed selector (like PodInformation: Master, Worker, HistoryServer)
-///
-/// # Arguments
-///
-/// * `hashed` - Map where the key is a selector hash and list of pods owned by that selector
-///
-fn get_pods_for_node(hashed: &HashMap<String, Vec<Pod>>) -> Vec<Pod> {
-    let mut all_pods: Vec<Pod> = vec![];
-    for pods in hashed.values() {
-        all_pods.append(&mut pods.clone());
-    }
-    all_pods
+    existing_pods: Vec<Pod>,
+    eligible_nodes: HashMap<SparkNodeType, HashMap<String, Vec<Node>>>,
 }
 
 impl SparkState {
@@ -182,18 +103,18 @@ impl SparkState {
     pub async fn init_status(&mut self) -> SparkReconcileResult {
         // We'll begin by setting an empty status here because later in this method we might
         // update its conditions. To avoid any issues we'll just create it once here.
-        if self.status.is_none() {
+        if self.context.resource.status.is_none() {
             let status = SparkClusterStatus::default();
             self.context
                 .client
                 .merge_patch_status(&self.context.resource, &status)
                 .await?;
-            self.status = Some(status);
+            self.context.resource.status = Some(status);
         }
 
         // This should always return either the existing one or the one we just created above.
-        let status = self.status.take().unwrap_or_default();
-        let spec_version = self.spec.version.clone();
+        let status = self.context.resource.status.take().unwrap_or_default();
+        let spec_version = self.context.resource.spec.version.clone();
 
         match (&status.current_version, &status.target_version) {
             (None, None) => {
@@ -203,7 +124,7 @@ impl SparkState {
                     "Initial installation, now moving towards version [{}]",
                     spec_version
                 );
-                self.status = self
+                self.context.resource.status = self
                     .set_installing_condition(
                         &status.conditions,
                         &format!("Initial installation to version [{:?}]", spec_version),
@@ -212,7 +133,8 @@ impl SparkState {
                     )
                     .await?
                     .status;
-                self.status = self.set_target_version(Some(&spec_version)).await?.status;
+                self.context.resource.status =
+                    self.set_target_version(Some(&spec_version)).await?.status;
             }
             (None, Some(target_version)) => {
                 // No current_version but a target_version means we're still doing the initial
@@ -226,7 +148,7 @@ impl SparkState {
                     info!("A new target version ([{}]) was requested while we still do the initial installation to [{}], finishing running upgrade first", spec_version, target_version)
                 }
                 // We do this here to update the observedGeneration if needed
-                self.status = self
+                self.context.resource.status = self
                     .set_installing_condition(
                         &status.conditions,
                         &format!("Initial installation to version [{:?}]", spec_version),
@@ -248,14 +170,16 @@ impl SparkState {
                         current_version, &spec_version
                     );
                     reason = "Upgrading";
-                    self.status = self.set_target_version(Some(&spec_version)).await?.status;
+                    self.context.resource.status =
+                        self.set_target_version(Some(&spec_version)).await?.status;
                 } else if current_version.is_downgrade(&spec_version)? {
                     message = format!(
                         "Downgrading from [{:?}] to [{:?}]",
                         current_version, &spec_version
                     );
                     reason = "Downgrading";
-                    self.status = self.set_target_version(Some(&spec_version)).await?.status;
+                    self.context.resource.status =
+                        self.set_target_version(Some(&spec_version)).await?.status;
                 } else {
                     message = format!(
                         "No upgrade/downgrade required [{:?}] is still the current_version",
@@ -266,12 +190,12 @@ impl SparkState {
 
                 trace!("{}", message);
 
-                self.status = self
+                self.context.resource.status = self
                     .set_installing_condition(
                         &status.conditions,
                         &message,
                         &reason,
-                        ConditionStatus::True,
+                        ConditionStatus::False,
                     )
                     .await?
                     .status;
@@ -284,7 +208,7 @@ impl SparkState {
                     "Still changing version from [{}] to [{}]",
                     current_version, target_version
                 );
-                if &self.spec.version != target_version {
+                if &self.context.resource.spec.version != target_version {
                     info!("A new target version was requested while we still upgrade from [{}] to [{}], finishing running upgrade/downgrade first", current_version, target_version)
                 }
                 let message = format!(
@@ -292,7 +216,7 @@ impl SparkState {
                     current_version, target_version
                 );
 
-                self.status = self
+                self.context.resource.status = self
                     .set_installing_condition(
                         &status.conditions,
                         &message,
@@ -307,230 +231,19 @@ impl SparkState {
         Ok(ReconcileFunctionAction::Continue)
     }
 
-    /// Read all cluster specific pods. Check for required valid labels such as:
-    /// - HASH (required to match a certain selector)
-    /// - TYPE (which indicates master/worker/history-server)
-    /// - VERSION (cluster version the pod was created for)
-    ///
-    /// Remove invalid pods which are lacking (or have outdated) required labels.
-    /// Sort incoming valid pods into corresponding maps (hash -> Vec<Pod>)
-    /// for later usage for each node type (master/worker/history-server).
-    pub async fn read_existing_pod_information(&mut self) -> SparkReconcileResult {
-        trace!(
-            "Reading existing pod information for {}",
-            self.context.log_name()
-        );
-
-        let mut existing_pods = self.context.list_pods().await?;
-        trace!(
-            "{}: Found [{}] pods",
-            self.context.log_name(),
-            existing_pods.len()
-        );
-
-        // in order to ensure pod hashes that differ from cluster to cluster
-        // we need to hash the cluster name (metadata.name) as well
-        let hashed_selectors = self.spec.get_hashed_selectors(&self.context.log_name());
-        // for node information
-        let mut master: HashMap<String, Vec<Pod>> = HashMap::new();
-        let mut worker: HashMap<String, Vec<Pod>> = HashMap::new();
-        let mut history_server: HashMap<String, Vec<Pod>> = HashMap::new();
-
-        let status = self.status.as_ref().ok_or_else(|| error::Error::ReconcileError(
-            "Spark cluster status missing, this is a programming error and should never happen. Please report in our issue tracker.".to_string(),
-        ))?;
-
-        while let Some(pod) = existing_pods.pop() {
-            if let Some(labels) = pod.metadata.labels.clone() {
-                // we require HASH and TYPE label to identify and sort the pods into the NodeInformation
-                if let (Some(hash), Some(node_type), Some(version)) = (
-                    labels.get(pod_utils::HASH_LABEL),
-                    labels.get(pod_utils::TYPE_LABEL),
-                    labels.get(pod_utils::VERSION_LABEL),
-                ) {
-                    let spark_node_type = match SparkNodeType::from_str(node_type) {
-                        Ok(nt) => nt,
-                        Err(_) => {
-                            error!(
-                                "Pod [{}] has an invalid type '{}' [{}], deleting it.",
-                                Meta::name(&pod),
-                                pod_utils::TYPE_LABEL,
-                                node_type
-                            );
-                            self.context.client.delete(&pod).await?;
-                            continue;
-                        }
-                    };
-
-                    if let Some(hashed) = hashed_selectors.get(&spark_node_type) {
-                        // valid hash found? -> do we have a matching selector hash?
-                        if !hashed.contains_key(hash) {
-                            error!(
-                                "Pod [{}] has an outdated '{}' [{}], deleting it.",
-                                Meta::name(&pod),
-                                pod_utils::HASH_LABEL,
-                                hash
-                            );
-                            self.context.client.delete(&pod).await?;
-                            continue;
-                        }
-                    }
-
-                    // check version:
-                    // if there is a target version we are updating
-                    // if pod version matches spec version
-                    if let Some(target_version) = &status.target_version {
-                        if &SparkVersion::from_str(version).unwrap() != target_version {
-                            info!(
-                                "Pod [{}] has an outdated '{}' [{}] - required is [{}], deleting it",
-                                Meta::name(&pod),
-                                pod_utils::VERSION_LABEL,
-                                version,
-                                target_version
-                            );
-                            self.context.client.delete(&pod).await?;
-                            continue;
-                        }
-                    }
-
-                    match spark_node_type {
-                        SparkNodeType::Master => {
-                            master.entry(hash.to_string()).or_default().push(pod)
-                        }
-                        SparkNodeType::Worker => {
-                            worker.entry(hash.to_string()).or_default().push(pod)
-                        }
-                        SparkNodeType::HistoryServer => history_server
-                            .entry(hash.to_string())
-                            .or_default()
-                            .push(pod),
-                    };
-                } else {
-                    // some labels missing
-                    error!("Pod [{}] is missing one or more required '{:?}' labels, this is illegal, deleting it.",
-                         Meta::name(&pod), vec![pod_utils::HASH_LABEL, pod_utils::TYPE_LABEL, pod_utils::VERSION_LABEL]);
-                    self.context.client.delete(&pod).await?;
-                }
-            } else {
-                // all labels missing
-                error!(
-                    "Pod [{}] has no labels, this is illegal, deleting it.",
-                    Meta::name(&pod),
-                );
-                self.context.client.delete(&pod).await?;
-            }
-        }
-
-        self.pod_information = Some(PodInformation {
-            master,
-            worker,
-            history_server: Some(history_server),
-        });
-
-        debug!(
-            "Status[current/spec] - {} [{}/{}] | {} [{}/{}] | {} [{}/{}]",
-            SparkNodeType::Master.as_str(),
-            self.pod_information
-                .as_ref()
-                .unwrap()
-                .get_pod_count(SparkNodeType::Master),
-            self.spec.master.get_instances(),
-            SparkNodeType::Worker.as_str(),
-            self.pod_information
-                .as_ref()
-                .unwrap()
-                .get_pod_count(SparkNodeType::Worker),
-            self.spec.worker.get_instances(),
-            SparkNodeType::HistoryServer.as_str(),
-            self.pod_information
-                .as_ref()
-                .unwrap()
-                .get_pod_count(SparkNodeType::HistoryServer),
-            match self.spec.history_server.as_ref() {
-                None => 0,
-                Some(hs) => hs.get_instances(),
-            }
-        );
-
-        Ok(ReconcileFunctionAction::Continue)
-    }
-
-    /// Checks if all pods that currently belong to the cluster are up and running.
-    /// That means not "terminating" and "ready"
-    /// We always make sure that all masters are running before any workers / history-servers
-    async fn check_pods_up_and_running(&self) -> SparkReconcileResult {
-        trace!("Reconciliation: Checking if all pods are up and running");
-
-        if let Some(pod_info) = &self.pod_information {
-            // master nodes have priority
-            if !self.pods_up_and_running(pod_info.get_all_pods(Some(SparkNodeType::Master))) {
-                return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
-            }
-
-            // worker / history-server are treated equally
-            if !self.pods_up_and_running(pod_info.get_all_pods(Some(SparkNodeType::Worker)))
-                || !self
-                    .pods_up_and_running(pod_info.get_all_pods(Some(SparkNodeType::HistoryServer)))
-            {
-                return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
-            }
-        }
-
-        Ok(ReconcileFunctionAction::Continue)
-    }
-    /// Returns true only if any pod status is neither "terminating" or anything other than "ready"
-    ///
-    /// # Arguments
-    ///
-    /// * `pods` - List of pods to check if terminating or up and running (ready)
-    ///
-    fn pods_up_and_running(&self, pods: Vec<Pod>) -> bool {
-        // TODO: move to operator-rs; check discussion https://github.com/stackabletech/spark-operator/pull/17
-        let mut terminated_pods = vec![];
-        let mut started_pods = vec![];
-        for pod in &pods {
-            if finalizer::has_deletion_stamp(pod) {
-                terminated_pods.push(Meta::name(pod));
-            }
-
-            if !operator_pod_utils::is_pod_running_and_ready(pod) {
-                started_pods.push(Meta::name(pod));
-            }
-        }
-
-        // If pods are currently terminating, wait until they are done terminating.
-        // (this could be for restarts or upgrades)
-        if !terminated_pods.is_empty() {
-            info!("Waiting for Pod(s) to be terminated: {:?}", terminated_pods);
-            return false;
-        }
-
-        // At the moment we'll wait for all pods of a certain type (especially master),
-        // to be available and ready before we might enact any changes to existing ones.
-        if !started_pods.is_empty() {
-            info!(
-                "Waiting for Pod(s) to be running and ready: {:?}",
-                started_pods
-            );
-            return false;
-        }
-
-        true
-    }
-
     /// Process available / running commands. If current_command in the status is set, we have
     /// a running command. If it is not set, but commands are available, start the oldest command.
     /// If no command is running, no command is waiting and the cluster_status field is "Stopped",
     /// abort the reconcile action.
     pub async fn process_commands(&mut self) -> SparkReconcileResult {
-        if let Some(status) = &self.status {
+        if let Some(status) = self.context.resource.status.clone() {
             // if a current_command is available we are currently processing that command
             if let Some(current_command) = &status.current_command {
                 let running_command = command_utils::get_command_from_ref(
                     &self.context.client,
                     &current_command.command_type,
                     &current_command.command_ref,
-                    Meta::namespace(&self.context.resource).as_deref(),
+                    self.context.resource.namespace().as_deref(),
                 )
                 .await?;
 
@@ -551,16 +264,14 @@ impl SparkState {
                     started_at: command_utils::get_current_timestamp(),
                 };
 
-                if let Some(pod_info) = &self.pod_information {
-                    return Ok(next_command
-                        .process_command_execute(
-                            &self.context.client,
-                            &self.context.resource,
-                            &current_command,
-                            &pod_info.get_all_pods(None),
-                        )
-                        .await?);
-                }
+                return Ok(next_command
+                    .process_command_execute(
+                        &self.context.client,
+                        &self.context.resource,
+                        &current_command,
+                        &self.existing_pods,
+                    )
+                    .await?);
 
             // if no next command check if cluster is stopped
             } else if Some(ClusterExecutionStatus::Stopped) == status.cluster_execution_status {
@@ -572,85 +283,194 @@ impl SparkState {
         Ok(ReconcileFunctionAction::Continue)
     }
 
-    /// Reconcile the cluster according to provided spec. Start with master nodes and continue to worker and history-server nodes.
-    /// Create missing pods or delete excess pods to match the spec.
-    ///
-    /// # Arguments
-    /// * `node_type` - SparkNodeType (master/worker/history-server)
-    ///
-    pub async fn reconcile_cluster(&self, node_type: &SparkNodeType) -> SparkReconcileResult {
-        trace!("Starting {} reconciliation", node_type.as_str());
+    pub fn get_full_pod_node_map(&self) -> Vec<(Vec<Node>, LabelOptionalValueMap)> {
+        let mut eligible_nodes_map = vec![];
 
-        match (node_type, &self.pod_information) {
-            (SparkNodeType::Master, Some(pod_info)) => {
-                self.reconcile_node(node_type, &pod_info.master).await
+        for node_type in SparkNodeType::iter() {
+            if let Some(eligible_nodes_for_role) = self.eligible_nodes.get(&node_type) {
+                for (group_name, eligible_nodes) in eligible_nodes_for_role {
+                    // Create labels to identify eligible nodes
+                    trace!(
+                        "Adding [{}] nodes to eligible node list for role [{}] and group [{}].",
+                        eligible_nodes.len(),
+                        node_type,
+                        group_name
+                    );
+                    eligible_nodes_map.push((
+                        eligible_nodes.clone(),
+                        get_node_and_group_labels(group_name, &node_type),
+                    ))
+                }
             }
-            (SparkNodeType::Worker, Some(pod_info)) => {
-                self.reconcile_node(node_type, &pod_info.worker).await
-            }
-            (
-                SparkNodeType::HistoryServer,
-                Some(PodInformation {
-                    history_server: Some(history_server),
-                    ..
-                }),
-            ) => self.reconcile_node(node_type, history_server).await,
-            _ => Ok(ReconcileFunctionAction::Continue),
         }
+        eligible_nodes_map
     }
 
-    /// Reconcile a SparkNode (master/worker/history-server)
-    /// Create or delete pods if the instances do not match the specification
-    /// We want to create all pods for each node (master/worker/history-server) immediately.
-    /// If we created or deleted anything, we need a requeue to update the pod information for
-    /// succeeding methods.
-    ///
-    /// # Arguments
-    /// * `node_type` - SparkNodeType (master/worker/history-server)
-    /// * `nodes` - Map where the key is a selector hash and list of pods owned by that selector
-    ///
-    async fn reconcile_node(
-        &self,
-        node_type: &SparkNodeType,
-        nodes: &HashMap<String, Vec<Pod>>,
-    ) -> SparkReconcileResult {
-        if let Some(hashed_pods) = self
-            .spec
-            .get_hashed_selectors(&self.context.log_name())
-            .get(node_type)
+    /// Required labels for pods. Pods without any of these will deleted and replaced.
+    pub fn get_deletion_labels(&self) -> BTreeMap<String, Option<Vec<String>>> {
+        let roles = SparkNodeType::iter()
+            .map(|role| role.to_string())
+            .collect::<Vec<_>>();
+        let mut mandatory_labels = BTreeMap::new();
+
+        mandatory_labels.insert(String::from(APP_COMPONENT_LABEL), Some(roles));
+        mandatory_labels.insert(
+            String::from(APP_INSTANCE_LABEL),
+            Some(vec![self.context.resource.name()]),
+        );
+        mandatory_labels.insert(
+            String::from(APP_VERSION_LABEL),
+            Some(vec![self.context.resource.spec.version.to_string()]),
+        );
+        mandatory_labels
+    }
+
+    /// Create or update a config map.
+    /// - Create if no config map of that name exists
+    /// - Update if config map exists but the content differs
+    /// - Do nothing if the config map exists and the content is identical
+    async fn create_config_map<T>(&self, cm_name: &str, config: Option<T>) -> Result<(), Error>
+    where
+        T: Config,
+    {
+        let config_map = create_config_map_with_data(&self.context.resource, config, cm_name)?;
+
+        match self
+            .context
+            .client
+            .get::<ConfigMap>(cm_name, Some(&self.context.namespace()))
+            .await
         {
-            let mut applied_changes: bool = false;
+            Ok(ConfigMap {
+                data: existing_config_map_data,
+                ..
+            }) if existing_config_map_data == config_map.data => {
+                debug!(
+                    "ConfigMap [{}] already exists with identical data, skipping creation!",
+                    cm_name
+                );
+            }
+            Ok(_) => {
+                debug!(
+                    "ConfigMap [{}] already exists, but differs, updating it!",
+                    cm_name
+                );
+                self.context.client.update(&config_map).await?;
+            }
+            Err(e) => {
+                // TODO: This is shit, but works for now. If there is an actual error in comes with
+                //   K8S, it will most probably also occur further down and be properly handled
+                debug!("Error getting ConfigMap [{}]: [{:?}]", cm_name, e);
+                self.context.client.create(&config_map).await?;
+            }
+        }
 
-            for (hash, selector) in hashed_pods {
-                let spec_pod_count = selector.instances;
-                let mut current_count: usize = 0;
-                // delete pod when 1) hash found but current pod count > spec pod count
-                // create pod when 1) no hash found or 2) hash found but current pod count < spec pod count
-                if let Some(pods) = nodes.get(hash) {
-                    current_count = pods.len();
-                    while current_count > spec_pod_count {
-                        let pod = pods.get(0).unwrap();
-                        self.context.client.delete(pod).await?;
-                        debug!("Deleting {} pod '{}'", node_type.as_str(), Meta::name(pod));
-                        current_count -= 1;
-                        applied_changes = true;
-                    }
-                }
+        Ok(())
+    }
 
-                while current_count < spec_pod_count {
-                    let pod = self.create_pod(selector, node_type, hash).await?;
-                    self.create_config_maps(node_type, selector, hash).await?;
-                    debug!("Creating {} pod '{}'", node_type.as_str(), Meta::name(&pod));
-                    current_count += 1;
-                    applied_changes = true;
+    async fn create_missing_pods(&mut self, node_type: &SparkNodeType) -> SparkReconcileResult {
+        let mut changes_applied = false;
+        // The iteration happens in two stages here, to accommodate the way our operators think
+        // about nodes and roles.
+        // The hierarchy is:
+        // - Roles (for example master, worker, history-server)
+        //   - Node groups for this role (user defined)
+        //      - Individual nodes
+        if let Some(nodes_for_role) = self.eligible_nodes.get(&node_type) {
+            for (role_group, nodes) in nodes_for_role {
+                // Create config map for this role group (without node_name)
+                let pod_name = pod_utils::create_pod_name(
+                    &self.context.name(),
+                    role_group,
+                    &node_type.to_string(),
+                    None,
+                );
+
+                let cm_name = create_config_map_name(&pod_name);
+                debug!("pod_name: [{}], cm_name: [{}]", pod_name, cm_name);
+
+                // extract config
+                let config = self.context.resource.spec.get_config(node_type, role_group);
+                self.create_config_map(&cm_name, config).await?;
+
+                debug!(
+                    "Identify missing pods for [{}] role and group [{}]",
+                    node_type, role_group
+                );
+                trace!(
+                    "candidate_nodes[{}]: [{:?}]",
+                    nodes.len(),
+                    nodes
+                        .iter()
+                        .map(|node| node.metadata.name.as_ref().unwrap())
+                        .collect::<Vec<_>>()
+                );
+                trace!(
+                    "existing_pods[{}]: [{:?}]",
+                    &self.existing_pods.len(),
+                    &self
+                        .existing_pods
+                        .iter()
+                        .map(|pod| pod.metadata.name.as_ref().unwrap())
+                        .collect::<Vec<_>>()
+                );
+                trace!(
+                    "labels: [{:?}]",
+                    get_node_and_group_labels(role_group, &node_type)
+                );
+                let nodes_that_need_pods = k8s_utils::find_nodes_that_need_pods(
+                    nodes,
+                    &self.existing_pods,
+                    &get_node_and_group_labels(role_group, &node_type),
+                );
+
+                for node in nodes_that_need_pods {
+                    let node_name = if let Some(node_name) = &node.metadata.name {
+                        node_name
+                    } else {
+                        warn!("No name found in metadata, this should not happen! Skipping node: [{:?}]", node);
+                        continue;
+                    };
+                    debug!(
+                        "Creating pod on node [{}] for [{}] role and group [{}]",
+                        node.metadata
+                            .name
+                            .as_deref()
+                            .unwrap_or("<no node name found>"),
+                        node_type,
+                        role_group
+                    );
+
+                    let master_pods =
+                        filter_pods_for_type(&self.existing_pods, &SparkNodeType::Master);
+
+                    let master_urls = stackable_spark_crd::get_master_urls(
+                        master_pods.as_slice(),
+                        &self.context.resource.spec,
+                    );
+
+                    debug!("Found master urls: {:?}", master_urls);
+
+                    let pod = pod_utils::build_pod(
+                        &self.context.resource,
+                        &node_name,
+                        role_group,
+                        &node_type,
+                        &master_urls,
+                    )?;
+
+                    self.context.client.create(&pod).await?;
+                    changes_applied = true;
                 }
             }
-
-            if applied_changes {
+            // we do this here to make sure pods of each role are started after each other
+            // roles start in rolling fashion
+            // pods of each role start non rolling
+            // master > worker > history server
+            if changes_applied {
                 return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
             }
         }
-
         Ok(ReconcileFunctionAction::Continue)
     }
 
@@ -661,26 +481,29 @@ impl SparkState {
     /// Available master urls are hashed and stored as label in the worker pod. If the label differs
     /// from the spec, we need to replace (delete and and) the workers in a rolling fashion.
     pub async fn check_worker_master_urls(&self) -> SparkReconcileResult {
-        if let Some(pod_info) = &self.pod_information {
-            let worker_pods = pod_info.get_all_pods(Some(SparkNodeType::Worker));
-            for pod in &worker_pods {
-                if let Some(labels) = &pod.metadata.labels {
-                    if let Some(label_hashed_master_urls) =
-                        labels.get(pod_utils::MASTER_URLS_HASH_LABEL)
-                    {
-                        let current_hashed_master_urls =
-                            pod_utils::get_hashed_master_urls(&self.spec.master);
-                        if label_hashed_master_urls != &current_hashed_master_urls {
-                            debug!(
-                                "Pod [{}] has an outdated '{}' [{}] - required is [{}], deleting it",
-                                Meta::name(pod),
-                                pod_utils::MASTER_URLS_HASH_LABEL,
-                                label_hashed_master_urls,
-                                current_hashed_master_urls,
-                            );
-                            self.context.client.delete(pod).await?;
-                            return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
-                        }
+        let worker_pods = filter_pods_for_type(&self.existing_pods, &SparkNodeType::Worker);
+        let master_pods = filter_pods_for_type(&self.existing_pods, &SparkNodeType::Master);
+
+        for pod in &worker_pods {
+            if let Some(labels) = &pod.metadata.labels {
+                if let Some(label_hashed_master_urls) =
+                    labels.get(pod_utils::MASTER_URLS_HASH_LABEL)
+                {
+                    let current_hashed_master_urls =
+                        pod_utils::get_hashed_master_urls(&stackable_spark_crd::get_master_urls(
+                            &master_pods,
+                            &self.context.resource.spec,
+                        ));
+                    if label_hashed_master_urls != &current_hashed_master_urls {
+                        debug!(
+                            "Pod [{}] has an outdated '{}' [{}] - required is [{}], deleting it",
+                            &pod.name(),
+                            pod_utils::MASTER_URLS_HASH_LABEL,
+                            label_hashed_master_urls,
+                            current_hashed_master_urls,
+                        );
+                        self.context.client.delete(pod).await?;
+                        return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
                     }
                 }
             }
@@ -691,7 +514,7 @@ impl SparkState {
     /// After pod reconcile, if a command has startedAt but no finishedAt timestamp, set finishedAt
     /// timestamp and finalize command.
     pub async fn finalize_commands(&mut self) -> SparkReconcileResult {
-        if let Some(status) = &self.status {
+        if let Some(status) = &self.context.resource.status {
             // if a current_command is available we are currently
             // processing that command and are finished here.
             if let Some(current_command) = &status.current_command {
@@ -717,19 +540,19 @@ impl SparkState {
     /// We can now set current_version to target_version (if target_version was set),
     /// and target_version to None.
     pub async fn process_version(&mut self) -> SparkReconcileResult {
-        if let Some(status) = &self.status.clone() {
+        if let Some(status) = &self.context.resource.status.clone() {
             if let Some(target_version) = &status.target_version {
                 info!(
                     "Finished upgrade/downgrade to [{}]. Cluster ready!",
                     &target_version
                 );
 
-                self.status = self.set_target_version(None).await?.status;
-                self.status = self
+                self.context.resource.status = self.set_target_version(None).await?.status;
+                self.context.resource.status = self
                     .set_current_version(Some(&target_version))
                     .await?
                     .status;
-                self.status = self
+                self.context.resource.status = self
                     .set_installing_condition(
                         &status.conditions,
                         &format!(
@@ -746,57 +569,6 @@ impl SparkState {
 
         Ok(ReconcileFunctionAction::Continue)
     }
-
-    /// Build a pod and create it
-    ///
-    /// # Arguments
-    /// * `selector` - SparkNodeSelector which contains specific pod information
-    /// * `node_type` - SparkNodeType (master/worker/history-server)
-    /// * `hash` - NodeSelector hash
-    ///
-    async fn create_pod(
-        &self,
-        selector: &SparkNodeSelector,
-        node_type: &SparkNodeType,
-        hash: &str,
-    ) -> Result<Pod, Error> {
-        let pod = pod_utils::build_pod(
-            &self.context.resource,
-            &self.spec,
-            node_type,
-            selector.node_name.as_str(),
-            hash,
-        )?;
-        Ok(self.context.client.create(&pod).await?)
-    }
-
-    /// Create required config maps for the cluster
-    ///
-    /// # Arguments
-    /// * `node_type` - SparkNodeType (master/worker/history-server)
-    /// * `selector` - SparkNodeSelector to extract config options
-    /// * `hash` - NodeSelector hash
-    ///
-    async fn create_config_maps(
-        &self,
-        node_type: &SparkNodeType,
-        selector: &SparkNodeSelector,
-        hash: &str,
-    ) -> Result<(), Error> {
-        let config_maps = config::create_config_maps(
-            &self.context.resource,
-            &self.spec,
-            selector,
-            node_type,
-            hash,
-        )?;
-
-        for cm in config_maps {
-            self.context.client.apply_patch(&cm, &cm).await?;
-        }
-
-        Ok(())
-    }
 }
 
 impl ReconciliationState for SparkState {
@@ -806,20 +578,41 @@ impl ReconciliationState for SparkState {
         &mut self,
     ) -> Pin<Box<dyn Future<Output = Result<ReconcileFunctionAction, Self::Error>> + Send + '_>>
     {
+        info!("========================= Starting reconciliation =========================");
+        debug!("Deletion Labels: [{:?}]", &self.get_deletion_labels());
+
         Box::pin(async move {
             self.init_status()
                 .await?
-                .then(self.read_existing_pod_information())
+                .then(self.context.delete_illegal_pods(
+                    self.existing_pods.as_slice(),
+                    &self.get_deletion_labels(),
+                    ContinuationStrategy::OneRequeue,
+                ))
                 .await?
-                .then(self.check_pods_up_and_running())
+                .then(
+                    self.context
+                        .wait_for_terminating_pods(self.existing_pods.as_slice()),
+                )
+                .await?
+                .then(
+                    self.context
+                        .wait_for_running_and_ready_pods(&self.existing_pods),
+                )
                 .await?
                 .then(self.process_commands())
                 .await?
-                .then(self.reconcile_cluster(&SparkNodeType::Master))
+                .then(self.context.delete_excess_pods(
+                    self.get_full_pod_node_map().as_slice(),
+                    &self.existing_pods,
+                    ContinuationStrategy::OneRequeue,
+                ))
                 .await?
-                .then(self.reconcile_cluster(&SparkNodeType::Worker))
+                .then(self.create_missing_pods(&SparkNodeType::Master))
                 .await?
-                .then(self.reconcile_cluster(&SparkNodeType::HistoryServer))
+                .then(self.create_missing_pods(&SparkNodeType::Worker))
+                .await?
+                .then(self.create_missing_pods(&SparkNodeType::HistoryServer))
                 .await?
                 .then(self.check_worker_master_urls())
                 .await?
@@ -846,28 +639,69 @@ impl ControllerStrategy for SparkStrategy {
     type State = SparkState;
     type Error = error::Error;
 
-    fn error_policy(&self) -> ReconcilerAction {
-        let reconcile_after_error_sec = 30;
-        error!(
-            "Reconciliation error: requeuing after {} seconds!",
-            reconcile_after_error_sec
-        );
-        reconcile::create_requeuing_reconciler_action(Duration::from_secs(
-            reconcile_after_error_sec,
-        ))
-    }
-
     async fn init_reconcile_state(
         &self,
         context: ReconciliationContext<Self::Item>,
-    ) -> Result<Self::State, Error> {
+    ) -> Result<Self::State, Self::Error> {
+        let existing_pods = context.list_pods().await?;
+        trace!("Found [{}] pods", existing_pods.len());
+
+        let cluster_spec = &context.resource.spec;
+
+        let mut eligible_nodes = HashMap::new();
+
+        eligible_nodes.insert(
+            SparkNodeType::Master,
+            get_nodes_that_fit_selectors(&context.client, &cluster_spec.masters).await?,
+        );
+
+        eligible_nodes.insert(
+            SparkNodeType::Worker,
+            get_nodes_that_fit_selectors(&context.client, &cluster_spec.workers).await?,
+        );
+
+        if let Some(history_servers) = &cluster_spec.history_servers {
+            eligible_nodes.insert(
+                SparkNodeType::HistoryServer,
+                get_nodes_that_fit_selectors(&context.client, &history_servers).await?,
+            );
+        }
+
         Ok(SparkState {
-            spec: context.resource.spec.clone(),
-            status: context.resource.status.clone(),
             context,
-            pod_information: None,
+            existing_pods,
+            eligible_nodes,
         })
     }
+}
+
+async fn get_nodes_that_fit_selectors<T>(
+    client: &Client,
+    group: &NodeGroup<T>,
+) -> OperatorResult<HashMap<String, Vec<Node>>> {
+    let role_groups: Vec<RoleGroup> = group
+        .selectors
+        .iter()
+        .map(|(group_name, selector_config)| RoleGroup {
+            name: group_name.to_string(),
+            selector: selector_config.selector.clone().unwrap(),
+        })
+        .collect();
+
+    role_utils::find_nodes_that_fit_selectors(client, None, role_groups.as_slice()).await
+}
+
+fn get_node_and_group_labels(group_name: &str, node_type: &SparkNodeType) -> LabelOptionalValueMap {
+    let mut node_labels = BTreeMap::new();
+    node_labels.insert(
+        String::from(APP_COMPONENT_LABEL),
+        Some(node_type.to_string()),
+    );
+    node_labels.insert(
+        String::from(APP_ROLE_GROUP_LABEL),
+        Some(String::from(group_name)),
+    );
+    node_labels
 }
 
 /// This creates an instance of a [`Controller`] which waits for incoming events and reconciles them.

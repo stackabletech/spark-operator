@@ -1,24 +1,32 @@
 //! This module provides all required CRD definitions and additional helper methods.
 pub mod commands;
-mod error;
-
-pub use commands::{Restart, Start, Stop};
+pub mod error;
 
 pub use crate::error::CrdError;
-use derivative::Derivative;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
+pub use commands::{Restart, Start, Stop};
+use k8s_openapi::api::core::v1::Pod;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, LabelSelector};
 use kube::CustomResource;
 use schemars::JsonSchema;
 use semver::{SemVerError, Version};
 use serde::{Deserialize, Serialize};
+use stackable_operator::label_selector::schema;
+use stackable_operator::labels::{APP_COMPONENT_LABEL, APP_ROLE_GROUP_LABEL};
 use stackable_operator::Crd;
-use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
-use std::fmt;
-use std::hash::{Hash, Hasher};
-use std::str::FromStr;
+use stackable_spark_common::constants::{
+    SPARK_DEFAULTS_AUTHENTICATE_SECRET, SPARK_DEFAULTS_EVENT_LOG_DIR,
+    SPARK_DEFAULTS_HISTORY_FS_LOG_DIRECTORY, SPARK_DEFAULTS_HISTORY_STORE_PATH,
+    SPARK_DEFAULTS_HISTORY_WEBUI_PORT, SPARK_DEFAULTS_MASTER_PORT, SPARK_DEFAULTS_PORT_MAX_RETRIES,
+    SPARK_ENV_MASTER_PORT, SPARK_ENV_MASTER_WEBUI_PORT, SPARK_ENV_WORKER_CORES,
+    SPARK_ENV_WORKER_MEMORY, SPARK_ENV_WORKER_PORT, SPARK_ENV_WORKER_WEBUI_PORT,
+};
+use std::collections::{BTreeMap, HashMap};
+use std::hash::Hash;
+use strum_macros::EnumIter;
 
-#[derive(Clone, CustomResource, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+const DEFAULT_LOG_DIR: &str = "/tmp";
+
+#[derive(Clone, CustomResource, Debug, Deserialize, JsonSchema, Serialize)]
 #[kube(
     group = "spark.stackable.tech",
     version = "v1",
@@ -29,152 +37,306 @@ use std::str::FromStr;
 #[kube(status = "SparkClusterStatus")]
 #[serde(rename_all = "camelCase")]
 pub struct SparkClusterSpec {
-    pub master: SparkNode,
-    pub worker: SparkNode,
-    pub history_server: Option<SparkNode>,
+    pub masters: NodeGroup<MasterConfig>,
+    pub workers: NodeGroup<WorkerConfig>,
+    pub history_servers: Option<NodeGroup<HistoryServerConfig>>,
     pub version: SparkVersion,
     pub secret: Option<String>,
     pub log_dir: Option<String>,
     pub max_port_retries: Option<usize>,
 }
 
+#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeGroup<T> {
+    pub selectors: HashMap<String, SelectorAndConfig<T>>,
+}
+
 impl SparkClusterSpec {
-    /// Collect hashed selectors from master, worker and history server
+    pub fn get_config(
+        &self,
+        node_type: &SparkNodeType,
+        role_group: &str,
+    ) -> Option<Box<dyn Config>> {
+        match node_type {
+            SparkNodeType::Master => {
+                if let Some(selector) = self.masters.selectors.get(role_group) {
+                    return Some(Box::new(selector.config.clone().unwrap_or(MasterConfig {
+                        ..MasterConfig::default()
+                    })));
+                }
+            }
+            SparkNodeType::Worker => {
+                if let Some(selector) = self.workers.selectors.get(role_group) {
+                    return Some(Box::new(selector.config.clone().unwrap_or(WorkerConfig {
+                        ..WorkerConfig::default()
+                    })));
+                }
+            }
+            SparkNodeType::HistoryServer => {
+                if let Some(history_servers) = &self.history_servers {
+                    {
+                        if let Some(selector) = history_servers.selectors.get(role_group) {
+                            return Some(Box::new(selector.config.clone().unwrap_or(
+                                HistoryServerConfig {
+                                    ..HistoryServerConfig::default()
+                                },
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SelectorAndConfig<T> {
+    pub instances: u16,
+    pub instances_per_node: u8,
+    pub config: Option<T>,
+    #[schemars(schema_with = "schema")]
+    pub selector: Option<LabelSelector>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MasterConfig {
+    pub master_port: Option<u16>,
+    pub master_web_ui_port: Option<u16>,
+    pub spark_defaults: Option<Vec<ConfigOption>>,
+    pub spark_env_sh: Option<Vec<ConfigOption>>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkerConfig {
+    pub cores: Option<usize>,
+    pub memory: Option<String>,
+    pub worker_port: Option<u16>,
+    pub worker_web_ui_port: Option<u16>,
+    pub spark_defaults: Option<Vec<ConfigOption>>,
+    pub spark_env_sh: Option<Vec<ConfigOption>>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryServerConfig {
+    pub store_path: Option<String>,
+    pub history_web_ui_port: Option<u16>,
+    pub spark_defaults: Option<Vec<ConfigOption>>,
+    pub spark_env_sh: Option<Vec<ConfigOption>>,
+}
+
+pub trait Config: Send + Sync {
+    /// Get all required configuration options for spark-defaults.conf
+    /// - from spec
+    /// - from selector
+    /// - from user config properties
     ///
     /// # Arguments
-    /// * `cluster_name` - unique cluster identifier to avoid hashing collisions of selectors
+    /// * `spec` - SparkCluster spec for common properties
     ///
-    pub fn get_hashed_selectors(
-        &self,
-        cluster_name: &str,
-    ) -> HashMap<SparkNodeType, HashMap<String, SparkNodeSelector>> {
-        let mut hashed_selectors: HashMap<SparkNodeType, HashMap<String, SparkNodeSelector>> =
-            HashMap::new();
+    fn get_spark_defaults_conf(&self, spec: &SparkClusterSpec) -> BTreeMap<String, String>;
 
-        hashed_selectors.insert(
-            SparkNodeType::Master,
-            self.master
-                .get_hashed_selectors(SparkNodeType::Master, cluster_name),
+    /// Get all required configuration options for spark-env.sh
+    /// - from selector
+    /// - from user config properties
+    ///
+    fn get_spark_env_sh(&self) -> BTreeMap<String, String>;
+}
+
+/// This is a workaround to properly access the methods of the Config trait
+/// TODO: suggestions how to improve?
+impl<T: ?Sized> Config for Box<T>
+where
+    T: Config,
+{
+    fn get_spark_defaults_conf(&self, spec: &SparkClusterSpec) -> BTreeMap<String, String> {
+        (**self).get_spark_defaults_conf(&spec)
+    }
+
+    fn get_spark_env_sh(&self) -> BTreeMap<String, String> {
+        (**self).get_spark_env_sh()
+    }
+}
+
+impl Config for MasterConfig {
+    fn get_spark_defaults_conf(&self, spec: &SparkClusterSpec) -> BTreeMap<String, String> {
+        let mut config = BTreeMap::new();
+
+        let log_dir = spec.log_dir.as_deref().unwrap_or(DEFAULT_LOG_DIR);
+        config.insert(
+            SPARK_DEFAULTS_EVENT_LOG_DIR.to_string(),
+            log_dir.to_string(),
         );
 
-        hashed_selectors.insert(
-            SparkNodeType::Worker,
-            self.worker
-                .get_hashed_selectors(SparkNodeType::Worker, cluster_name),
-        );
-
-        if let Some(history_server) = &self.history_server {
-            hashed_selectors.insert(
-                SparkNodeType::HistoryServer,
-                history_server.get_hashed_selectors(SparkNodeType::HistoryServer, cluster_name),
+        if let Some(secret) = &spec.secret {
+            config.insert(
+                SPARK_DEFAULTS_AUTHENTICATE_SECRET.to_string(),
+                secret.to_string(),
             );
         }
 
-        hashed_selectors
+        add_common_spark_defaults(&mut config, spec);
+        add_user_defined_config_properties(&mut config, &self.spark_defaults);
+        config
     }
 
-    /// Get count of all specified instances in all nodes (master, worker, history-server)
-    pub fn get_all_instances(&self) -> usize {
-        let mut instances = 0;
-        instances += self.master.get_instances();
-        instances += self.worker.get_instances();
-        if let Some(history_server) = &self.history_server {
-            instances += history_server.get_instances();
+    fn get_spark_env_sh(&self) -> BTreeMap<String, String> {
+        let mut config = BTreeMap::new();
+
+        if let Some(port) = &self.master_port {
+            config.insert(SPARK_ENV_MASTER_PORT.to_string(), port.to_string());
+        }
+        if let Some(web_ui_port) = &self.master_web_ui_port {
+            config.insert(
+                SPARK_ENV_MASTER_WEBUI_PORT.to_string(),
+                web_ui_port.to_string(),
+            );
         }
 
-        instances
+        add_user_defined_config_properties(&mut config, &self.spark_env_sh);
+        config
     }
 }
 
-/// A spark node consists of a list of selectors and optional common properties that is shared for every node
-#[derive(Clone, Debug, Hash, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
-pub struct SparkNode {
-    pub selectors: Vec<SparkNodeSelector>,
-    // TODO: options
-    // TODO: master -> use Option<T>
-    // TODO: worker -> use Option<T>
-    // TODO: history_server -> use Option<T>
-}
+impl Config for WorkerConfig {
+    fn get_spark_defaults_conf(&self, spec: &SparkClusterSpec) -> BTreeMap<String, String> {
+        let mut config = BTreeMap::new();
 
-#[derive(Derivative, Clone, Debug, Default, Deserialize, Eq, JsonSchema, Serialize)]
-#[derivative(Hash, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct SparkNodeSelector {
-    // common options
-    pub node_name: String,
-    // we need to ignore instances from hashing -> if we scale up or down, the hash
-    // for the selectors changes and the operator removes all nodes and rebuilds them
-    #[derivative(Hash = "ignore", PartialEq = "ignore")]
-    pub instances: usize,
-    pub config: Option<Vec<ConfigOption>>,
-    pub env: Option<Vec<ConfigOption>>,
+        let log_dir = spec.log_dir.as_deref().unwrap_or(DEFAULT_LOG_DIR);
+        config.insert(
+            SPARK_DEFAULTS_EVENT_LOG_DIR.to_string(),
+            log_dir.to_string(),
+        );
 
-    // master options
-    pub master_port: Option<usize>,
-    pub master_web_ui_port: Option<usize>,
-    // worker options
-    pub cores: Option<usize>,
-    pub memory: Option<String>,
-    pub worker_port: Option<usize>,
-    pub worker_web_ui_port: Option<usize>,
-    // history-server options
-    pub store_path: Option<String>,
-    pub history_ui_port: Option<usize>,
-}
-
-impl SparkNode {
-    /// Collects all selectors provided in a node (master, worker, history-server) and hashes them
-    ///
-    /// # Arguments
-    /// * `node_type` - SparkNodeType (master/worker/history-server)
-    /// * `cluster_name` - Name of the cluster they belong to (otherwise different named clusters can have identical selector hashes)
-    ///
-    pub fn get_hashed_selectors(
-        &self,
-        node_type: SparkNodeType,
-        cluster_name: &str,
-    ) -> HashMap<String, SparkNodeSelector> {
-        let mut hashed_selectors: HashMap<String, SparkNodeSelector> = HashMap::new();
-        for selector in &self.selectors {
-            let mut hasher = DefaultHasher::new();
-            selector.hash(&mut hasher);
-            node_type.as_str().hash(&mut hasher);
-            cluster_name.hash(&mut hasher);
-            hashed_selectors.insert(hasher.finish().to_string(), selector.clone());
+        if let Some(secret) = &spec.secret {
+            config.insert(
+                SPARK_DEFAULTS_AUTHENTICATE_SECRET.to_string(),
+                secret.to_string(),
+            );
         }
-        hashed_selectors
+
+        add_common_spark_defaults(&mut config, spec);
+        add_user_defined_config_properties(&mut config, &self.spark_defaults);
+        config
     }
 
-    /// Returns the sum of all requested instance counts across all selectors.
-    pub fn get_instances(&self) -> usize {
-        let mut instances: usize = 0;
-        for selector in &self.selectors {
-            instances += selector.instances;
+    fn get_spark_env_sh(&self) -> BTreeMap<String, String> {
+        let mut config = BTreeMap::new();
+
+        if let Some(cores) = &self.cores {
+            config.insert(SPARK_ENV_WORKER_CORES.to_string(), cores.to_string());
         }
-        instances
+        if let Some(memory) = &self.memory {
+            config.insert(SPARK_ENV_WORKER_MEMORY.to_string(), memory.to_string());
+        }
+        if let Some(port) = &self.worker_port {
+            config.insert(SPARK_ENV_WORKER_PORT.to_string(), port.to_string());
+        }
+        if let Some(web_ui_port) = &self.worker_web_ui_port {
+            config.insert(
+                SPARK_ENV_WORKER_WEBUI_PORT.to_string(),
+                web_ui_port.to_string(),
+            );
+        }
+
+        add_user_defined_config_properties(&mut config, &self.spark_env_sh);
+        config
     }
 }
 
-#[derive(Clone, Debug, Hash, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+impl Config for HistoryServerConfig {
+    fn get_spark_defaults_conf(&self, spec: &SparkClusterSpec) -> BTreeMap<String, String> {
+        let mut config = BTreeMap::new();
+
+        let log_dir = spec.log_dir.as_deref().unwrap_or(DEFAULT_LOG_DIR);
+        config.insert(
+            SPARK_DEFAULTS_HISTORY_FS_LOG_DIRECTORY.to_string(),
+            log_dir.to_string(),
+        );
+
+        if let Some(store_path) = &self.store_path {
+            config.insert(
+                SPARK_DEFAULTS_HISTORY_STORE_PATH.to_string(),
+                store_path.to_string(),
+            );
+        }
+        if let Some(port) = &self.history_web_ui_port {
+            config.insert(
+                SPARK_DEFAULTS_HISTORY_WEBUI_PORT.to_string(),
+                port.to_string(),
+            );
+        }
+
+        add_common_spark_defaults(&mut config, spec);
+        add_user_defined_config_properties(&mut config, &self.spark_defaults);
+        config
+    }
+
+    fn get_spark_env_sh(&self) -> BTreeMap<String, String> {
+        let mut config = BTreeMap::new();
+        add_user_defined_config_properties(&mut config, &self.spark_env_sh);
+        config
+    }
+}
+
+fn add_common_spark_defaults(config: &mut BTreeMap<String, String>, spec: &SparkClusterSpec) {
+    if let Some(secret) = &spec.secret {
+        config.insert(
+            SPARK_DEFAULTS_AUTHENTICATE_SECRET.to_string(),
+            secret.to_string(),
+        );
+    }
+
+    let max_port_retries = &spec.max_port_retries.unwrap_or(0);
+    config.insert(
+        SPARK_DEFAULTS_PORT_MAX_RETRIES.to_string(),
+        max_port_retries.to_string(),
+    );
+}
+
+fn add_user_defined_config_properties(
+    config: &mut BTreeMap<String, String>,
+    config_properties: &Option<Vec<ConfigOption>>,
+) {
+    if let Some(conf) = config_properties {
+        for config_option in conf {
+            config.insert(config_option.name.clone(), config_option.value.clone());
+        }
+    }
+}
+
+#[derive(
+    EnumIter,
+    Clone,
+    Debug,
+    Hash,
+    Deserialize,
+    Eq,
+    JsonSchema,
+    PartialEq,
+    Serialize,
+    strum_macros::Display,
+    strum_macros::EnumString,
+)]
 pub enum SparkNodeType {
+    #[serde(rename = "master")]
+    #[strum(serialize = "master")]
     Master,
+    #[serde(rename = "slave")]
+    #[strum(serialize = "slave")]
     Worker,
+    #[serde(rename = "history-server")]
+    #[strum(serialize = "history-server")]
     HistoryServer,
 }
 
-const MASTER: &str = "master";
-const WORKER: &str = "slave";
-const HISTORY_SERVER: &str = "history-server";
-
 impl SparkNodeType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            SparkNodeType::Master { .. } => MASTER,
-            SparkNodeType::Worker { .. } => WORKER,
-            SparkNodeType::HistoryServer { .. } => HISTORY_SERVER,
-        }
-    }
-
     /// Returns the container start command for a spark node
     /// Right now works only for images using hadoop2.7
     /// # Arguments
@@ -185,29 +347,8 @@ impl SparkNodeType {
         format!(
             "spark-{}-bin-hadoop2.7/sbin/start-{}.sh",
             version,
-            self.as_str()
+            self.to_string()
         )
-    }
-}
-
-impl FromStr for SparkNodeType {
-    type Err = CrdError;
-
-    fn from_str(input: &str) -> Result<SparkNodeType, Self::Err> {
-        match input {
-            MASTER => Ok(SparkNodeType::Master),
-            WORKER => Ok(SparkNodeType::Worker),
-            HISTORY_SERVER => Ok(SparkNodeType::HistoryServer),
-            _ => Err(CrdError::InvalidNodeType {
-                node_type: input.to_string(),
-            }),
-        }
-    }
-}
-
-impl fmt::Display for SparkNodeType {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.as_str())
     }
 }
 
@@ -296,107 +437,191 @@ impl SparkVersion {
     }
 }
 
+/// Filter all existing pods for master node type and retrieve the selector config
+/// for the given role_group. Extract the nodeName from the pod and the specified port
+/// from the config to create the master urls for each pod.
+///
+/// # Arguments
+/// * `pods` - Slice of all existing pods
+/// * `spec` - The spark cluster spec
+///
+pub fn get_master_urls(pods: &[Pod], spec: &SparkClusterSpec) -> Vec<String> {
+    let mut master_urls = Vec::new();
+
+    for pod in pods {
+        if let Some(labels) = &pod.metadata.labels {
+            if let (Some(component), Some(role_group)) = (
+                labels.get(APP_COMPONENT_LABEL),
+                labels.get(APP_ROLE_GROUP_LABEL),
+            ) {
+                if component != &SparkNodeType::Master.to_string() {
+                    continue;
+                }
+
+                if let (Some(config), Some(pod_spec)) = (
+                    spec.get_config(&SparkNodeType::Master, role_group),
+                    &pod.spec,
+                ) {
+                    let port = get_master_port(config, spec);
+
+                    if let Some(node_name) = &pod_spec.node_name {
+                        master_urls.push(create_master_url(node_name, &port))
+                    }
+                }
+            }
+        }
+    }
+
+    master_urls
+}
+
+/// Search for the selected master port in the master config
+/// Priority is: spark_defaults.conf > spark_env.sh > default port
+///
+/// # Arguments
+/// * `config` - The custom resource config of the specified master
+/// * `spec` - The spark cluster spec
+///
+fn get_master_port(config: Box<dyn Config>, spec: &SparkClusterSpec) -> String {
+    return if let Some(spark_defaults_port) = config
+        .get_spark_defaults_conf(spec)
+        .get(SPARK_DEFAULTS_MASTER_PORT)
+    {
+        spark_defaults_port.clone()
+    } else if let Some(spark_env_port) = config.get_spark_env_sh().get(SPARK_ENV_MASTER_PORT) {
+        spark_env_port.clone()
+    } else {
+        // TODO: extract default / recommended from product config
+        "7077".to_string()
+    };
+}
+
+/// Create master url in format: <node_name>:<port>
+///
+/// # Arguments
+/// * `node_name` - Master node_name / host name
+/// * `port` - Port on which the master is running
+///
+fn create_master_url(node_name: &str, port: &str) -> String {
+    format!("{}:{}", node_name, port)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stackable_spark_test_utils::cluster::{Load, TestSparkCluster};
-
-    fn setup() -> SparkCluster {
-        TestSparkCluster::load()
-    }
-
-    fn get_instances(node: &SparkNode) -> usize {
-        let mut instances = 0;
-        for selector in &node.selectors {
-            instances += selector.instances;
-        }
-        instances
-    }
+    use stackable_spark_common::constants::SPARK_DEFAULTS_MASTER_PORT;
+    use stackable_spark_test_utils::cluster::{Data, TestSparkCluster};
 
     #[test]
-    fn test_spec_hashed_selectors() {
-        let cluster: SparkCluster = setup();
-        let spec: &SparkClusterSpec = &cluster.spec;
-        let cluster_name = &cluster.metadata.name.unwrap();
+    fn test_get_spark_defaults_master() {
+        let mut spark_cluster: SparkCluster = stackable_spark_test_utils::setup_test_cluster();
+        spark_cluster.metadata.uid = Some("12345".to_string());
 
-        let all_spec_hashed_selectors = spec.get_hashed_selectors(cluster_name);
-        if spec.history_server.is_some() {
-            // master + worker + history
-            assert_eq!(all_spec_hashed_selectors.len(), 3);
-        } else {
-            // master + worker
-            assert_eq!(all_spec_hashed_selectors.len(), 2);
-        }
-    }
+        let master_1_config = spark_cluster
+            .spec
+            .get_config(
+                &SparkNodeType::Master,
+                TestSparkCluster::MASTER_1_ROLE_GROUP,
+            )
+            .unwrap();
 
-    #[test]
-    fn test_get_all_instances() {
-        let spec: &SparkClusterSpec = &setup().spec;
-        let all_instances = spec.get_all_instances();
-        let mut calculated_instances = 0;
-        calculated_instances += spec.master.get_instances();
-        calculated_instances += spec.worker.get_instances();
-        if let Some(history) = &spec.history_server {
-            calculated_instances += history.get_instances();
-        }
-        assert_eq!(all_instances, calculated_instances)
-    }
+        let spark_defaults = master_1_config.get_spark_defaults_conf(&spark_cluster.spec);
 
-    #[test]
-    fn test_get_instances() {
-        let spec: &SparkClusterSpec = &setup().spec;
-
-        assert_eq!(spec.master.get_instances(), get_instances(&spec.master));
-        assert_eq!(spec.worker.get_instances(), get_instances(&spec.worker));
-        if let Some(history) = &spec.history_server {
-            assert_eq!(history.get_instances(), get_instances(history));
-        }
-    }
-
-    #[test]
-    fn test_spark_node_type_as_str() {
-        assert_eq!(SparkNodeType::Master.as_str(), MASTER);
-        assert_eq!(SparkNodeType::Worker.as_str(), WORKER);
-        assert_eq!(SparkNodeType::HistoryServer.as_str(), HISTORY_SERVER);
-    }
-
-    #[test]
-    fn test_spark_node_type_from_str() {
         assert_eq!(
-            SparkNodeType::from_str(MASTER).unwrap(),
-            SparkNodeType::Master
-        );
-        assert_eq!(
-            SparkNodeType::from_str(WORKER).unwrap(),
-            SparkNodeType::Worker
-        );
-        assert_eq!(
-            SparkNodeType::from_str(HISTORY_SERVER).unwrap(),
-            SparkNodeType::HistoryServer
+            spark_defaults.get(SPARK_DEFAULTS_MASTER_PORT),
+            Some(&TestSparkCluster::MASTER_1_CONFIG_PORT.to_string())
         );
 
-        let bad_node = "not_a_node";
-        let res = SparkNodeType::from_str(bad_node);
+        assert_eq!(
+            spark_defaults.get(SPARK_DEFAULTS_EVENT_LOG_DIR),
+            Some(&TestSparkCluster::CLUSTER_LOG_DIR.to_string())
+        );
 
         assert_eq!(
-            res,
-            Err(CrdError::InvalidNodeType {
-                node_type: bad_node.to_string()
-            })
+            spark_defaults.get(SPARK_DEFAULTS_PORT_MAX_RETRIES),
+            Some(&TestSparkCluster::CLUSTER_MAX_PORT_RETRIES.to_string())
+        );
+
+        assert_eq!(
+            spark_defaults.get(SPARK_DEFAULTS_AUTHENTICATE_SECRET),
+            Some(&TestSparkCluster::CLUSTER_SECRET.to_string())
+        );
+    }
+
+    #[test]
+    fn test_get_spark_env_master() {
+        let mut spark_cluster: SparkCluster = stackable_spark_test_utils::setup_test_cluster();
+        spark_cluster.metadata.uid = Some("12345".to_string());
+
+        let master_1_config = spark_cluster
+            .spec
+            .get_config(
+                &SparkNodeType::Master,
+                TestSparkCluster::MASTER_1_ROLE_GROUP,
+            )
+            .unwrap();
+
+        let spark_env = master_1_config.get_spark_env_sh();
+
+        assert_eq!(
+            spark_env.get(SPARK_ENV_MASTER_PORT),
+            Some(&TestSparkCluster::MASTER_1_ENV_PORT.to_string())
+        );
+
+        assert_eq!(
+            spark_env.get(SPARK_ENV_MASTER_WEBUI_PORT),
+            Some(&TestSparkCluster::MASTER_1_WEB_UI_PORT.to_string())
+        );
+    }
+
+    #[test]
+    fn test_get_spark_env_worker() {
+        let mut spark_cluster: SparkCluster = stackable_spark_test_utils::setup_test_cluster();
+        spark_cluster.metadata.uid = Some("12345".to_string());
+
+        let master_1_config = spark_cluster
+            .spec
+            .get_config(
+                &SparkNodeType::Worker,
+                TestSparkCluster::WORKER_1_ROLE_GROUP,
+            )
+            .unwrap();
+
+        let spark_env = master_1_config.get_spark_env_sh();
+
+        assert_eq!(
+            spark_env.get(SPARK_ENV_WORKER_PORT),
+            Some(&TestSparkCluster::WORKER_1_PORT.to_string())
+        );
+
+        assert_eq!(
+            spark_env.get(SPARK_ENV_WORKER_WEBUI_PORT),
+            Some(&TestSparkCluster::WORKER_1_WEBUI_PORT.to_string())
+        );
+
+        assert_eq!(
+            spark_env.get(SPARK_ENV_WORKER_MEMORY),
+            Some(&TestSparkCluster::WORKER_1_ENV_MEMORY.to_string())
+        );
+
+        assert_eq!(
+            spark_env.get(SPARK_ENV_WORKER_CORES),
+            Some(&TestSparkCluster::WORKER_1_CORES.to_string())
         );
     }
 
     #[test]
     fn test_spark_node_type_get_command() {
-        let spec: &SparkClusterSpec = &setup().spec;
-        let version = &spec.version;
+        let mut spark_cluster: SparkCluster = stackable_spark_test_utils::setup_test_cluster();
+        spark_cluster.metadata.uid = Some("12345".to_string());
+        let version = &spark_cluster.spec.version;
 
         assert_eq!(
             SparkNodeType::Master.get_command(&version.to_string()),
             format!(
                 "spark-{}-bin-hadoop2.7/sbin/start-{}.sh",
                 &version.to_string(),
-                MASTER
+                SparkNodeType::Master.to_string()
             )
         );
     }
@@ -422,6 +647,45 @@ mod tests {
         assert_eq!(
             SparkVersion::v3_0_1.is_downgrade(&SparkVersion::v3_0_1),
             Ok(false)
+        );
+    }
+
+    #[test]
+    fn test_get_master_urls() {
+        let spark_cluster: SparkCluster = stackable_spark_test_utils::setup_test_cluster();
+
+        let master_pods = stackable_spark_test_utils::create_master_pods();
+        let master_urls = get_master_urls(master_pods.as_slice(), &spark_cluster.spec);
+        assert!(!master_urls.is_empty());
+        // For master_1 we expect the config port
+        assert!(master_urls.contains(&create_master_url(
+            TestSparkCluster::MASTER_1_NODE_NAME,
+            &TestSparkCluster::MASTER_1_CONFIG_PORT.to_string()
+        )));
+        // For master_2 we expect the env port
+        assert!(master_urls.contains(&create_master_url(
+            TestSparkCluster::MASTER_2_NODE_NAME,
+            &TestSparkCluster::MASTER_2_PORT.to_string()
+        )));
+        // For master_3 we expect the default port
+        assert!(master_urls.contains(&create_master_url(
+            TestSparkCluster::MASTER_3_NODE_NAME,
+            &stackable_spark_test_utils::MASTER_DEFAULT_PORT.to_string()
+        )));
+    }
+
+    #[test]
+    fn test_create_master_url() {
+        assert_eq!(
+            create_master_url(
+                TestSparkCluster::MASTER_1_NODE_NAME,
+                &TestSparkCluster::MASTER_1_CONFIG_PORT.to_string()
+            ),
+            format!(
+                "{}:{}",
+                TestSparkCluster::MASTER_1_NODE_NAME,
+                &TestSparkCluster::MASTER_1_CONFIG_PORT.to_string()
+            )
         );
     }
 }

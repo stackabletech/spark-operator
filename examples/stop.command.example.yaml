@@ -3,4 +3,4 @@ kind: Stop
 metadata:
   name: spark-cluster-command-stop
 spec:
-  name: "spark-cluster"
+  name: "simple"

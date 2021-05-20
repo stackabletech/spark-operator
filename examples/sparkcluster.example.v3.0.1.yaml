@@ -1,23 +1,61 @@
 apiVersion: spark.stackable.tech/v1
 kind: SparkCluster
 metadata:
-  name: spark-cluster
+  name: simple
 spec:
-  master:
-    selectors:
-      - nodeName: "mdesktop"
-        instances: 1
-        masterPort: 9999
-        masterWebUiPort: 11111
-  worker:
-    selectors:
-      - nodeName: "mdesktop"
-        instances: 1
-        cores: 1
-        memory: "1g"
-  historyServer:
-    selectors:
-      - nodeName: "mdesktop"
-        instances: 1
   version: "3.0.1"
-  maxPortRetries: 0
+  masters:
+    selectors:
+      default:
+        selector:
+          matchLabels:
+            kubernetes.io/hostname: mdesktop
+        instances: 1
+        instancesPerNode: 1
+        config:
+          masterPort: 7078
+          masterWebUiPort: 8081
+      default2:
+        selector:
+          matchLabels:
+            kubernetes.io/hostname: mdesktop
+        instances: 1
+        instancesPerNode: 1
+        config:
+          masterPort: 7079
+          masterWebUiPort: 8082
+  workers:
+    selectors:
+      1core1g:
+        selector:
+          matchLabels:
+            kubernetes.io/hostname: mdesktop
+        instances: 1
+        instancesPerNode: 1
+        config:
+          cores: 1
+          memory: "1g"
+          workerPort: 3031
+          workerWebUiPort: 8083
+      2core2g:
+        selector:
+          matchLabels:
+            kubernetes.io/hostname: mdesktop
+        instances: 1
+        instancesPerNode: 1
+        config:
+          cores: 2
+          memory: "2g"
+          workerPort: 3032
+          workerWebUiPort: 8084
+  historyServers:
+    selectors:
+      default:
+        selector:
+          matchLabels:
+            kubernetes.io/hostname: mdesktop
+        instances: 1
+        instancesPerNode: 1
+        config:
+          historyWebUiPort: 18081
+

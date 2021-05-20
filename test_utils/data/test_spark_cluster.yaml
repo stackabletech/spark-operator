@@ -3,48 +3,76 @@ kind: SparkCluster
 metadata:
   name: spark-cluster
 spec:
-  master:
-    selectors:
-      - nodeName: "master_node_1"
-        instances: 1
-        masterPort: 10000
-        masterWebUiPort: 10100
-        config:
-          - name: "spark.master.port"
-            value: "10001"
-        env:
-          - name: "SPARK_MASTER_PORT"
-            value: "10002"
-      - nodeName: "master_node_2"
-        instances: 1
-        masterPort: 10000
-        masterWebUiPort: 10100
-        env:
-          - name: "SPARK_MASTER_PORT"
-            value: "10002"
-      - nodeName: "master_node_3"
-        instances: 1
-        masterPort: 30000
-      - nodeName: "master_node_4"
-        instances: 1
-  worker:
-    selectors:
-      - nodeName: "worker_node_1"
-        instances: 1
-        cores: 1
-        memory: "1g"
-        env:
-          - name: "SPARK_WORKER_MEMORY"
-            value: "3g"
-      - nodeName: "worker_node_2"
-        instances: 2
-        cores: 2
-        memory: "2g"
-  historyServer:
-    selectors:
-      - nodeName: "history_server_node_1"
-        instances: 1
   version: "3.0.1"
   secret: "secret"
   logDir: "/tmp/spark-events"
   maxPortRetries: 0
+  masters:
+    selectors:
+      master_1:
+        selector:
+          matchLabels:
+            kubernetes.io/hostname: master_node_1
+        instances: 1
+        instancesPerNode: 1
+        config:
+          masterPort: 7078
+          masterWebUiPort: 8081
+          sparkDefaults:
+            - name: "spark.master.port"
+              value: "10001"
+          sparkEnvSh:
+            - name: "SPARK_MASTER_PORT"
+              value: "10002"
+      master_2:
+        selector:
+          matchLabels:
+            kubernetes.io/hostname: master_node_2
+        instances: 1
+        instancesPerNode: 1
+        config:
+          masterPort: 7079
+          masterWebUiPort: 8082
+      master_3:
+        selector:
+          matchLabels:
+            kubernetes.io/hostname: master_node_3
+        instances: 1
+        instancesPerNode: 1
+  workers:
+    selectors:
+      1core1g:
+        selector:
+          matchLabels:
+            kubernetes.io/hostname: mdesktop
+        instances: 1
+        instancesPerNode: 1
+        config:
+          cores: 1
+          memory: "2g"
+          workerPort: 3031
+          workerWebUiPort: 8083
+          sparkEnvSh:
+            - name: "SPARK_WORKER_MEMORY"
+              value: "1g"
+      2core3g:
+        selector:
+          matchLabels:
+            kubernetes.io/hostname: mdesktop
+        instances: 1
+        instancesPerNode: 1
+        config:
+          cores: 2
+          memory: "3g"
+          workerPort: 3032
+          workerWebUiPort: 8084
+  historyServers:
+    selectors:
+      default:
+        selector:
+          matchLabels:
+            kubernetes.io/hostname: mdesktop
+        instances: 1
+        instancesPerNode: 1
+        config:
+          historyWebUiPort: 18081
