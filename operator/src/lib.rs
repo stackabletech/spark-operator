@@ -221,7 +221,7 @@ impl SparkState {
                         &status.conditions,
                         &message,
                         "",
-                        ConditionStatus::False,
+                        ConditionStatus::True,
                     )
                     .await?
                     .status;
