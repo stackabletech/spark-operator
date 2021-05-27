@@ -246,7 +246,7 @@ mod tests {
 
         let config_map = create_config_map_with_data(&spark_cluster, config, &cm_name).unwrap();
 
-        let cm_data = config_map.data.clone().unwrap();
+        let cm_data = config_map.data.unwrap();
         assert!(cm_data.contains_key(constants::SPARK_DEFAULTS_CONF));
         assert!(cm_data.contains_key(constants::SPARK_ENV_SH));
 

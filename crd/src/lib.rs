@@ -390,7 +390,7 @@ pub struct CurrentCommand {
 
 impl Crd for SparkCluster {
     const RESOURCE_NAME: &'static str = "sparkclusters.spark.stackable.tech";
-    const CRD_DEFINITION: &'static str = include_str!("../sparkcluster.crd.yaml");
+    const CRD_DEFINITION: &'static str = include_str!("../../deploy/crd/sparkcluster.crd.yaml");
 }
 
 #[allow(non_camel_case_types)]
