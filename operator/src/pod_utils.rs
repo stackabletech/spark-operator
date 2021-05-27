@@ -279,7 +279,6 @@ pub fn filter_pods_for_type(pods: &[Pod], node_type: &SparkNodeType) -> Vec<Pod>
 mod tests {
     use super::*;
     use crate::config::adapt_worker_command;
-    use stackable_spark_test_utils;
     use stackable_spark_test_utils::cluster::{Data, TestSparkCluster};
 
     #[test]
@@ -376,7 +375,7 @@ mod tests {
         );
 
         // check containers
-        let containers = pod.spec.clone().unwrap().containers;
+        let containers = pod.spec.unwrap().containers;
         assert_eq!(containers.len(), 1);
 
         let container = containers.get(0).unwrap();

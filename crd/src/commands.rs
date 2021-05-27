@@ -19,7 +19,7 @@ pub struct RestartCommandSpec {
 
 impl Crd for Restart {
     const RESOURCE_NAME: &'static str = "restarts.command.spark.stackable.tech";
-    const CRD_DEFINITION: &'static str = include_str!("../restart.command.crd.yaml");
+    const CRD_DEFINITION: &'static str = include_str!("../../deploy/crd/restart.command.crd.yaml");
 }
 
 impl Command for Restart {
@@ -43,7 +43,7 @@ pub struct StartCommandSpec {
 
 impl Crd for Start {
     const RESOURCE_NAME: &'static str = "starts.command.spark.stackable.tech";
-    const CRD_DEFINITION: &'static str = include_str!("../start.command.crd.yaml");
+    const CRD_DEFINITION: &'static str = include_str!("../../deploy/crd/start.command.crd.yaml");
 }
 
 impl Command for Start {
@@ -67,7 +67,7 @@ pub struct StopCommandSpec {
 
 impl Crd for Stop {
     const RESOURCE_NAME: &'static str = "stops.command.spark.stackable.tech";
-    const CRD_DEFINITION: &'static str = include_str!("../stop.command.crd.yaml");
+    const CRD_DEFINITION: &'static str = include_str!("../../deploy/crd/stop.command.crd.yaml");
 }
 
 impl Command for Stop {
