@@ -8,7 +8,7 @@ use k8s_openapi::api::core::v1::Pod;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, LabelSelector};
 use kube::CustomResource;
 use schemars::JsonSchema;
-use semver::{SemVerError, Version};
+use semver::{Error as SemVerError, Version};
 use serde::{Deserialize, Serialize};
 use stackable_operator::label_selector::schema;
 use stackable_operator::labels::{APP_COMPONENT_LABEL, APP_ROLE_GROUP_LABEL};
