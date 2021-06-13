@@ -8,7 +8,7 @@ use k8s_openapi::api::core::v1::Pod;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, LabelSelector};
 use kube::CustomResource;
 use schemars::JsonSchema;
-use semver::{SemVerError, Version};
+use semver::{Error as SemVerError, Version};
 use serde::{Deserialize, Serialize};
 use stackable_operator::label_selector::schema;
 use stackable_operator::labels::{APP_COMPONENT_LABEL, APP_ROLE_GROUP_LABEL};
@@ -629,24 +629,32 @@ mod tests {
     #[test]
     fn test_spark_version_is_upgrade() {
         assert_eq!(
-            SparkVersion::v2_4_7.is_upgrade(&SparkVersion::v3_0_1),
-            Ok(true)
+            SparkVersion::v2_4_7
+                .is_upgrade(&SparkVersion::v3_0_1)
+                .unwrap(),
+            true
         );
         assert_eq!(
-            SparkVersion::v3_0_1.is_upgrade(&SparkVersion::v3_0_1),
-            Ok(false)
+            SparkVersion::v3_0_1
+                .is_upgrade(&SparkVersion::v3_0_1)
+                .unwrap(),
+            false
         );
     }
 
     #[test]
     fn test_spark_version_is_downgrade() {
         assert_eq!(
-            SparkVersion::v3_0_1.is_downgrade(&SparkVersion::v2_4_7),
-            Ok(true)
+            SparkVersion::v3_0_1
+                .is_downgrade(&SparkVersion::v2_4_7)
+                .unwrap(),
+            true
         );
         assert_eq!(
-            SparkVersion::v3_0_1.is_downgrade(&SparkVersion::v3_0_1),
-            Ok(false)
+            SparkVersion::v3_0_1
+                .is_downgrade(&SparkVersion::v3_0_1)
+                .unwrap(),
+            false
         );
     }
 

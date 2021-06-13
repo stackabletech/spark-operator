@@ -21,7 +21,7 @@ pub enum Error {
     #[error("Error from semver: {source}")]
     SemVerError {
         #[from]
-        source: semver::SemVerError,
+        source: semver::Error,
     },
 
     #[error("Pod contains invalid node type: {source}")]
