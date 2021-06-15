@@ -1,7 +1,7 @@
 use k8s_openapi::api::core::v1::Pod;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
-use kube::Api;
 use kube::Resource;
+use kube::{Api, ResourceExt};
 use serde::de::DeserializeOwned;
 use serde_json::json;
 use stackable_operator::client::Client;

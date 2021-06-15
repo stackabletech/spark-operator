@@ -5,7 +5,7 @@ use crate::error::Error;
 use k8s_openapi::api::core::v1::{
     ConfigMapVolumeSource, Container, Pod, PodSpec, Volume, VolumeMount,
 };
-use kube::Resource;
+use kube::ResourceExt;
 use stackable_operator::krustlet::create_tolerations;
 use stackable_operator::labels;
 use stackable_operator::metadata;

@@ -12,6 +12,7 @@ use semver::{Error as SemVerError, Version};
 use serde::{Deserialize, Serialize};
 use stackable_operator::label_selector::schema;
 use stackable_operator::labels::{APP_COMPONENT_LABEL, APP_ROLE_GROUP_LABEL};
+use stackable_operator::status::Conditions;
 use stackable_operator::Crd;
 use stackable_spark_common::constants::{
     SPARK_DEFAULTS_AUTHENTICATE_SECRET, SPARK_DEFAULTS_EVENT_LOG_DIR,
@@ -386,6 +387,23 @@ pub struct CurrentCommand {
     pub command_ref: String,
     pub command_type: String,
     pub started_at: String,
+}
+
+impl Conditions for SparkCluster {
+    fn conditions(&self) -> Option<&Vec<Condition>> {
+        if let Some(status) = &self.status {
+            return Some(&status.conditions);
+        }
+        None
+    }
+
+    fn conditions_mut(&mut self) -> &mut Vec<Condition> {
+        if self.status.is_none() {
+            self.status = Some(SparkClusterStatus::default());
+            return &mut self.status.as_mut().unwrap().conditions;
+        }
+        return &mut self.status.as_mut().unwrap().conditions;
+    }
 }
 
 impl Crd for SparkCluster {
