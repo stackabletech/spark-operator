@@ -10,9 +10,8 @@ use crate::pod_utils::filter_pods_for_type;
 use async_trait::async_trait;
 use k8s_openapi::api::core::v1::{ConfigMap, Node, Pod};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
-use kube::api::ListParams;
+use kube::api::{ListParams, ResourceExt};
 use kube::Api;
-use kube::Resource;
 use serde_json::json;
 use stackable_operator::client::Client;
 use stackable_operator::conditions::ConditionStatus;
@@ -643,7 +642,7 @@ impl ControllerStrategy for SparkStrategy {
         &self,
         context: ReconciliationContext<Self::Item>,
     ) -> Result<Self::State, Self::Error> {
-        let existing_pods = context.list_pods().await?;
+        let existing_pods = context.list_owned().await?;
         trace!("Found [{}] pods", existing_pods.len());
 
         let cluster_spec = &context.resource.spec;
