@@ -390,9 +390,9 @@ pub struct CurrentCommand {
 }
 
 impl Conditions for SparkCluster {
-    fn conditions(&self) -> Option<&Vec<Condition>> {
+    fn conditions(&self) -> Option<&[Condition]> {
         if let Some(status) = &self.status {
-            return Some(&status.conditions);
+            return Some(&status.conditions.as_slice());
         }
         None
     }
