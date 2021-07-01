@@ -659,31 +659,31 @@ impl ControllerStrategy for SparkStrategy {
         let mut roles: HashMap<
             String,
             (
-                Role<Box<dyn Configuration<Configurable = SparkCluster>>>,
                 Vec<PropertyNameKind>,
+                Role<Box<dyn Configuration<Configurable = SparkCluster>>>,
             ),
         > = HashMap::new();
         roles.insert(
             SparkRole::Master.to_string(),
             (
-                context.resource.spec.masters.clone().into_dyn(),
                 vec![
                     PropertyNameKind::File("spark-env.sh".to_string()),
                     PropertyNameKind::File("spark-defaults.sh".to_string()),
                     PropertyNameKind::Env,
                 ],
+                context.resource.spec.masters.clone().into_dyn(),
             ),
         );
 
         roles.insert(
             SparkRole::Worker.to_string(),
             (
-                context.resource.spec.workers.clone().into_dyn(),
                 vec![
                     PropertyNameKind::File("spark-env.sh".to_string()),
                     PropertyNameKind::File("spark-defaults.sh".to_string()),
                     PropertyNameKind::Env,
                 ],
+                context.resource.spec.workers.clone().into_dyn(),
             ),
         );
 
@@ -691,15 +691,15 @@ impl ControllerStrategy for SparkStrategy {
             roles.insert(
                 SparkRole::HistoryServer.to_string(),
                 (
-                    history_servers.clone().into_dyn(),
                     vec![
                         PropertyNameKind::File("spark-env.sh".to_string()),
                         PropertyNameKind::File("spark-defaults.sh".to_string()),
                         PropertyNameKind::Env,
                     ],
+                    history_servers.clone().into_dyn(),
                 ),
-            )
-        };
+            );
+        }
 
         let role_config = transform_all_roles_to_config(&context.resource, roles);
 

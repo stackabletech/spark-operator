@@ -9,6 +9,7 @@ use kube::ResourceExt;
 use stackable_operator::krustlet::create_tolerations;
 use stackable_operator::labels;
 use stackable_operator::metadata;
+use stackable_operator::role_utils::CommonConfiguration;
 use stackable_spark_crd::{SparkCluster, SparkClusterSpec, SparkRole};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::BTreeMap;
@@ -74,9 +75,9 @@ pub fn build_pod(
         )?,
         spec: Some(PodSpec {
             node_name: Some(node_name.to_string()),
-            tolerations: Some(create_tolerations()),
+            tolerations: create_tolerations(),
             containers,
-            volumes: Some(volumes),
+            volumes,
             ..PodSpec::default()
         }),
         ..Pod::default()
@@ -105,16 +106,26 @@ fn build_containers(
         command.push(master_urls);
     }
 
+    let log_dir = if let Some(CommonConfiguration {
+        config: Some(cfg), ..
+    }) = &spec.config
+    {
+        cfg.log_dir.clone()
+    } else {
+        None
+    };
+
     let containers = vec![Container {
         image: Some(image_name),
         name: "spark".to_string(),
-        command: Some(command),
-        volume_mounts: Some(create_volume_mounts(&spec.log_dir)),
-        env: Some(config::create_required_startup_env()),
+        command,
+        // TODO: just to make it compile (unwrap)
+        volume_mounts: create_volume_mounts(&log_dir),
+        env: config::create_required_startup_env(),
         ..Container::default()
     }];
 
-    let volumes = create_volumes(&cm_name, spec.log_dir.clone());
+    let volumes = create_volumes(&cm_name, log_dir);
 
     (containers, volumes)
 }
@@ -263,11 +274,9 @@ pub fn filter_pods_for_type(pods: &[Pod], node_type: &SparkRole) -> Vec<Pod> {
     let mut filtered_pods = Vec::new();
 
     for pod in pods {
-        if let Some(labels) = &pod.metadata.labels {
-            if let Some(component) = labels.get(labels::APP_COMPONENT_LABEL) {
-                if component == &node_type.to_string() {
-                    filtered_pods.push(pod.clone());
-                }
+        if let Some(component) = pod.metadata.labels.get(labels::APP_COMPONENT_LABEL) {
+            if component == &node_type.to_string() {
+                filtered_pods.push(pod.clone());
             }
         }
     }

@@ -1,3 +1,4 @@
+use kube::CustomResourceExt;
 use stackable_spark_crd::{Restart, SparkCluster, Start, Stop};
 use std::error::Error;
 
