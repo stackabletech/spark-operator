@@ -9,7 +9,7 @@ use kube::ResourceExt;
 use stackable_operator::krustlet::create_tolerations;
 use stackable_operator::labels;
 use stackable_operator::metadata;
-use stackable_spark_crd::{SparkCluster, SparkClusterSpec, SparkNodeType};
+use stackable_spark_crd::{SparkCluster, SparkClusterSpec, SparkRole};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
@@ -36,7 +36,7 @@ pub fn build_pod(
     resource: &SparkCluster,
     node_name: &str,
     role_group: &str,
-    node_type: &SparkNodeType,
+    node_type: &SparkRole,
     master_urls: &[String],
 ) -> Result<Pod, Error> {
     let cluster_name = &resource.name();
@@ -93,7 +93,7 @@ pub fn build_pod(
 ///
 fn build_containers(
     spec: &SparkClusterSpec,
-    node_type: &SparkNodeType,
+    node_type: &SparkRole,
     cm_name: &str,
     master_urls: &[String],
 ) -> (Vec<Container>, Vec<Volume>) {
@@ -182,7 +182,7 @@ fn create_volume_mounts(log_dir: &Option<String>) -> Vec<VolumeMount> {
 /// * `master_urls` - Slice of all known master urls
 ///
 fn build_labels(
-    node_type: &SparkNodeType,
+    node_type: &SparkRole,
     role_group: &str,
     cluster_name: &str,
     version: &str,
@@ -205,7 +205,7 @@ fn build_labels(
 
     labels.insert(labels::APP_VERSION_LABEL.to_string(), version.to_string());
 
-    if node_type == &SparkNodeType::Worker {
+    if node_type == &SparkRole::Worker {
         labels.insert(
             MASTER_URLS_HASH_LABEL.to_string(),
             get_hashed_master_urls(master_urls),
@@ -259,7 +259,7 @@ pub fn get_hashed_master_urls(master_urls: &[String]) -> String {
 /// * `pods` - Slice of all existing pods
 /// * `node_type` - The cluster node type (e.g. master, worker, history-server)
 ///
-pub fn filter_pods_for_type(pods: &[Pod], node_type: &SparkNodeType) -> Vec<Pod> {
+pub fn filter_pods_for_type(pods: &[Pod], node_type: &SparkRole) -> Vec<Pod> {
     let mut filtered_pods = Vec::new();
 
     for pod in pods {
@@ -288,7 +288,7 @@ mod tests {
 
         let master_urls = stackable_spark_test_utils::create_master_urls();
         let cluster_name = &spark_cluster.name();
-        let node_type = &SparkNodeType::Master;
+        let node_type = &SparkRole::Master;
 
         let pod = build_pod(
             &spark_cluster,
@@ -335,7 +335,7 @@ mod tests {
 
         let master_urls = stackable_spark_test_utils::create_master_urls();
         let cluster_name = &spark_cluster.name();
-        let node_type = &SparkNodeType::Worker;
+        let node_type = &SparkRole::Worker;
 
         let pod = build_pod(
             &spark_cluster,

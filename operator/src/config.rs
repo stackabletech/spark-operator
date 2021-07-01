@@ -5,7 +5,7 @@ use k8s_openapi::api::core::v1::{ConfigMap, EnvVar};
 use stackable_operator::config_map::create_config_map;
 use stackable_operator::error::OperatorResult;
 use stackable_spark_common::constants::*;
-use stackable_spark_crd::{Config, SparkCluster, SparkNodeType};
+use stackable_spark_crd::{SparkCluster, SparkRole};
 use std::collections::BTreeMap;
 
 /// The worker start command needs to be extended with all known master nodes and ports.
@@ -17,10 +17,10 @@ use std::collections::BTreeMap;
 /// * `node_type` - The cluster node type (e.g. master, worker, history-server)
 /// * `master_urls` - Slice of master urls in format <node_name>:<port>
 ///
-pub fn adapt_worker_command(node_type: &SparkNodeType, master_urls: &[String]) -> Option<String> {
+pub fn adapt_worker_command(node_type: &SparkRole, master_urls: &[String]) -> Option<String> {
     let mut adapted_command: String = String::new();
     // only for workers
-    if node_type != &SparkNodeType::Worker {
+    if node_type != &SparkRole::Worker {
         return None;
     }
 
@@ -91,26 +91,26 @@ pub fn create_config_map_with_data<T>(
     cm_name: &str,
 ) -> OperatorResult<ConfigMap>
 where
-    T: Config,
 {
-    let mut spark_defaults = BTreeMap::new();
-    let mut spark_env_sh = BTreeMap::new();
-
-    if let Some(conf) = config {
-        spark_defaults = conf.get_spark_defaults_conf(&resource.spec);
-        spark_env_sh = conf.get_spark_env_sh();
-    }
-
-    let conf = convert_map_to_string(&spark_defaults, " ");
-    let env = convert_map_to_string(&spark_env_sh, "=");
-
-    let mut data = BTreeMap::new();
-    data.insert(SPARK_DEFAULTS_CONF.to_string(), conf);
-    data.insert(SPARK_ENV_SH.to_string(), env);
-
-    let cm = create_config_map(resource, &cm_name, data)?;
-
-    Ok(cm)
+    // let mut spark_defaults = BTreeMap::new();
+    // let mut spark_env_sh = BTreeMap::new();
+    //
+    // if let Some(conf) = config {
+    //     spark_defaults = conf.get_spark_defaults_conf(&resource.spec);
+    //     spark_env_sh = conf.get_spark_env_sh();
+    // }
+    //
+    // let conf = convert_map_to_string(&spark_defaults, " ");
+    // let env = convert_map_to_string(&spark_env_sh, "=");
+    //
+    // let mut data = BTreeMap::new();
+    // data.insert(SPARK_DEFAULTS_CONF.to_string(), conf);
+    // data.insert(SPARK_ENV_SH.to_string(), env);
+    //
+    // let cm = create_config_map(resource, &cm_name, data)?;
+    //
+    // Ok(cm)
+    Ok(ConfigMap::default())
 }
 
 #[cfg(test)]
@@ -123,7 +123,7 @@ mod tests {
     fn test_adapt_worker_command() {
         let master_urls = stackable_spark_test_utils::create_master_urls();
 
-        let command = adapt_worker_command(&SparkNodeType::Worker, master_urls.as_slice()).unwrap();
+        let command = adapt_worker_command(&SparkRole::Worker, master_urls.as_slice()).unwrap();
 
         for url in master_urls {
             assert!(command.contains(&url));
@@ -151,10 +151,7 @@ mod tests {
 
         let spark_defaults = spark_cluster
             .spec
-            .get_config(
-                &SparkNodeType::Master,
-                TestSparkCluster::MASTER_1_ROLE_GROUP,
-            )
+            .get_config(&SparkRole::Master, TestSparkCluster::MASTER_1_ROLE_GROUP)
             .unwrap()
             .get_spark_defaults_conf(&spark_cluster.spec);
 
@@ -189,10 +186,7 @@ mod tests {
 
         let spark_env_sh = spark_cluster
             .spec
-            .get_config(
-                &SparkNodeType::Worker,
-                TestSparkCluster::WORKER_1_ROLE_GROUP,
-            )
+            .get_config(&SparkRole::Worker, TestSparkCluster::WORKER_1_ROLE_GROUP)
             .unwrap()
             .get_spark_env_sh();
 
@@ -236,10 +230,9 @@ mod tests {
         let mut spark_cluster: SparkCluster = stackable_spark_test_utils::setup_test_cluster();
         spark_cluster.metadata.uid = Some("12345".to_string());
 
-        let config = spark_cluster.spec.get_config(
-            &SparkNodeType::Worker,
-            TestSparkCluster::WORKER_1_ROLE_GROUP,
-        );
+        let config = spark_cluster
+            .spec
+            .get_config(&SparkRole::Worker, TestSparkCluster::WORKER_1_ROLE_GROUP);
 
         let pod_name = "my_pod";
         let cm_name = create_config_map_name(pod_name);

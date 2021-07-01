@@ -12,10 +12,12 @@ use semver::{Error as SemVerError, Version};
 use serde::{Deserialize, Serialize};
 use stackable_operator::label_selector::schema;
 use stackable_operator::labels::{APP_COMPONENT_LABEL, APP_ROLE_GROUP_LABEL};
+use stackable_operator::product_config_utils::{ConfigError, Configuration};
+use stackable_operator::role_utils::{CommonConfiguration, Role};
 use stackable_operator::status::Conditions;
 use stackable_operator::Crd;
 use stackable_spark_common::constants::{
-    SPARK_DEFAULTS_AUTHENTICATE_SECRET, SPARK_DEFAULTS_EVENT_LOG_DIR,
+    SPARK_DEFAULTS_AUTHENTICATE, SPARK_DEFAULTS_AUTHENTICATE_SECRET, SPARK_DEFAULTS_EVENT_LOG_DIR,
     SPARK_DEFAULTS_HISTORY_FS_LOG_DIRECTORY, SPARK_DEFAULTS_HISTORY_STORE_PATH,
     SPARK_DEFAULTS_HISTORY_WEBUI_PORT, SPARK_DEFAULTS_MASTER_PORT, SPARK_DEFAULTS_PORT_MAX_RETRIES,
     SPARK_ENV_MASTER_PORT, SPARK_ENV_MASTER_WEBUI_PORT, SPARK_ENV_WORKER_CORES,
@@ -38,69 +40,20 @@ const DEFAULT_LOG_DIR: &str = "/tmp";
 #[kube(status = "SparkClusterStatus")]
 #[serde(rename_all = "camelCase")]
 pub struct SparkClusterSpec {
-    pub masters: NodeGroup<MasterConfig>,
-    pub workers: NodeGroup<WorkerConfig>,
-    pub history_servers: Option<NodeGroup<HistoryServerConfig>>,
     pub version: SparkVersion,
+    pub masters: Role<MasterConfig>,
+    pub workers: Role<WorkerConfig>,
+    pub history_servers: Option<Role<HistoryServerConfig>>,
+    #[serde(flatten)]
+    pub config: Option<CommonConfiguration<CommonConfig>>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommonConfig {
     pub secret: Option<String>,
     pub log_dir: Option<String>,
     pub max_port_retries: Option<usize>,
-}
-
-#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct NodeGroup<T> {
-    pub selectors: HashMap<String, SelectorAndConfig<T>>,
-}
-
-impl SparkClusterSpec {
-    pub fn get_config(
-        &self,
-        node_type: &SparkNodeType,
-        role_group: &str,
-    ) -> Option<Box<dyn Config>> {
-        match node_type {
-            SparkNodeType::Master => {
-                if let Some(selector) = self.masters.selectors.get(role_group) {
-                    return Some(Box::new(selector.config.clone().unwrap_or(MasterConfig {
-                        ..MasterConfig::default()
-                    })));
-                }
-            }
-            SparkNodeType::Worker => {
-                if let Some(selector) = self.workers.selectors.get(role_group) {
-                    return Some(Box::new(selector.config.clone().unwrap_or(WorkerConfig {
-                        ..WorkerConfig::default()
-                    })));
-                }
-            }
-            SparkNodeType::HistoryServer => {
-                if let Some(history_servers) = &self.history_servers {
-                    {
-                        if let Some(selector) = history_servers.selectors.get(role_group) {
-                            return Some(Box::new(selector.config.clone().unwrap_or(
-                                HistoryServerConfig {
-                                    ..HistoryServerConfig::default()
-                                },
-                            )));
-                        }
-                    }
-                }
-            }
-        }
-
-        None
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SelectorAndConfig<T> {
-    pub instances: u16,
-    pub instances_per_node: u8,
-    pub config: Option<T>,
-    #[schemars(schema_with = "schema")]
-    pub selector: Option<LabelSelector>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
@@ -108,8 +61,6 @@ pub struct SelectorAndConfig<T> {
 pub struct MasterConfig {
     pub master_port: Option<u16>,
     pub master_web_ui_port: Option<u16>,
-    pub spark_defaults: Option<Vec<ConfigOption>>,
-    pub spark_env_sh: Option<Vec<ConfigOption>>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
@@ -119,8 +70,6 @@ pub struct WorkerConfig {
     pub memory: Option<String>,
     pub worker_port: Option<u16>,
     pub worker_web_ui_port: Option<u16>,
-    pub spark_defaults: Option<Vec<ConfigOption>>,
-    pub spark_env_sh: Option<Vec<ConfigOption>>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
@@ -128,187 +77,207 @@ pub struct WorkerConfig {
 pub struct HistoryServerConfig {
     pub store_path: Option<String>,
     pub history_web_ui_port: Option<u16>,
-    pub spark_defaults: Option<Vec<ConfigOption>>,
-    pub spark_env_sh: Option<Vec<ConfigOption>>,
 }
 
-pub trait Config: Send + Sync {
-    /// Get all required configuration options for spark-defaults.conf
-    /// - from spec
-    /// - from selector
-    /// - from user config properties
-    ///
-    /// # Arguments
-    /// * `spec` - SparkCluster spec for common properties
-    ///
-    fn get_spark_defaults_conf(&self, spec: &SparkClusterSpec) -> BTreeMap<String, String>;
+impl Configuration for MasterConfig {
+    type Configurable = SparkCluster;
 
-    /// Get all required configuration options for spark-env.sh
-    /// - from selector
-    /// - from user config properties
-    ///
-    fn get_spark_env_sh(&self) -> BTreeMap<String, String>;
-}
-
-/// This is a workaround to properly access the methods of the Config trait
-/// TODO: suggestions how to improve?
-impl<T: ?Sized> Config for Box<T>
-where
-    T: Config,
-{
-    fn get_spark_defaults_conf(&self, spec: &SparkClusterSpec) -> BTreeMap<String, String> {
-        (**self).get_spark_defaults_conf(&spec)
+    fn compute_env(
+        &self,
+        _resource: &Self::Configurable,
+        _role_name: &str,
+    ) -> Result<BTreeMap<String, Option<String>>, ConfigError> {
+        Ok(BTreeMap::new())
     }
 
-    fn get_spark_env_sh(&self) -> BTreeMap<String, String> {
-        (**self).get_spark_env_sh()
+    fn compute_cli(
+        &self,
+        _resource: &Self::Configurable,
+        _role_name: &str,
+    ) -> Result<BTreeMap<String, Option<String>>, ConfigError> {
+        Ok(BTreeMap::new())
     }
-}
 
-impl Config for MasterConfig {
-    fn get_spark_defaults_conf(&self, spec: &SparkClusterSpec) -> BTreeMap<String, String> {
+    fn compute_files(
+        &self,
+        resource: &Self::Configurable,
+        _role_name: &str,
+        file: &str,
+    ) -> Result<BTreeMap<String, Option<String>>, ConfigError> {
         let mut config = BTreeMap::new();
 
-        let log_dir = spec.log_dir.as_deref().unwrap_or(DEFAULT_LOG_DIR);
-        config.insert(
-            SPARK_DEFAULTS_EVENT_LOG_DIR.to_string(),
-            log_dir.to_string(),
-        );
-
-        if let Some(secret) = &spec.secret {
-            config.insert(
-                SPARK_DEFAULTS_AUTHENTICATE_SECRET.to_string(),
-                secret.to_string(),
-            );
+        match file {
+            "spark-env.sh" => {
+                if let Some(port) = &self.master_port {
+                    config.insert(SPARK_ENV_MASTER_PORT.to_string(), Some(port.to_string()));
+                }
+                if let Some(web_ui_port) = &self.master_web_ui_port {
+                    config.insert(
+                        SPARK_ENV_MASTER_WEBUI_PORT.to_string(),
+                        Some(web_ui_port.to_string()),
+                    );
+                }
+            }
+            "spark-defaults.conf" => add_common_spark_defaults(&mut config, &resource.spec),
+            _ => {}
         }
 
-        add_common_spark_defaults(&mut config, spec);
-        add_user_defined_config_properties(&mut config, &self.spark_defaults);
-        config
-    }
-
-    fn get_spark_env_sh(&self) -> BTreeMap<String, String> {
-        let mut config = BTreeMap::new();
-
-        if let Some(port) = &self.master_port {
-            config.insert(SPARK_ENV_MASTER_PORT.to_string(), port.to_string());
-        }
-        if let Some(web_ui_port) = &self.master_web_ui_port {
-            config.insert(
-                SPARK_ENV_MASTER_WEBUI_PORT.to_string(),
-                web_ui_port.to_string(),
-            );
-        }
-
-        add_user_defined_config_properties(&mut config, &self.spark_env_sh);
-        config
+        Ok(config)
     }
 }
 
-impl Config for WorkerConfig {
-    fn get_spark_defaults_conf(&self, spec: &SparkClusterSpec) -> BTreeMap<String, String> {
-        let mut config = BTreeMap::new();
+impl Configuration for WorkerConfig {
+    type Configurable = SparkCluster;
 
-        let log_dir = spec.log_dir.as_deref().unwrap_or(DEFAULT_LOG_DIR);
-        config.insert(
-            SPARK_DEFAULTS_EVENT_LOG_DIR.to_string(),
-            log_dir.to_string(),
-        );
-
-        if let Some(secret) = &spec.secret {
-            config.insert(
-                SPARK_DEFAULTS_AUTHENTICATE_SECRET.to_string(),
-                secret.to_string(),
-            );
-        }
-
-        add_common_spark_defaults(&mut config, spec);
-        add_user_defined_config_properties(&mut config, &self.spark_defaults);
-        config
+    fn compute_env(
+        &self,
+        _resource: &Self::Configurable,
+        _role_name: &str,
+    ) -> Result<BTreeMap<String, Option<String>>, ConfigError> {
+        Ok(BTreeMap::new())
     }
 
-    fn get_spark_env_sh(&self) -> BTreeMap<String, String> {
+    fn compute_cli(
+        &self,
+        _resource: &Self::Configurable,
+        _role_name: &str,
+    ) -> Result<BTreeMap<String, Option<String>>, ConfigError> {
+        Ok(BTreeMap::new())
+    }
+
+    fn compute_files(
+        &self,
+        resource: &Self::Configurable,
+        _role_name: &str,
+        file: &str,
+    ) -> Result<BTreeMap<String, Option<String>>, ConfigError> {
         let mut config = BTreeMap::new();
 
-        if let Some(cores) = &self.cores {
-            config.insert(SPARK_ENV_WORKER_CORES.to_string(), cores.to_string());
-        }
-        if let Some(memory) = &self.memory {
-            config.insert(SPARK_ENV_WORKER_MEMORY.to_string(), memory.to_string());
-        }
-        if let Some(port) = &self.worker_port {
-            config.insert(SPARK_ENV_WORKER_PORT.to_string(), port.to_string());
-        }
-        if let Some(web_ui_port) = &self.worker_web_ui_port {
-            config.insert(
-                SPARK_ENV_WORKER_WEBUI_PORT.to_string(),
-                web_ui_port.to_string(),
-            );
+        match file {
+            "spark-env.sh" => {
+                if let Some(cores) = &self.cores {
+                    config.insert(SPARK_ENV_WORKER_CORES.to_string(), Some(cores.to_string()));
+                }
+                if let Some(memory) = &self.memory {
+                    config.insert(
+                        SPARK_ENV_WORKER_MEMORY.to_string(),
+                        Some(memory.to_string()),
+                    );
+                }
+                if let Some(port) = &self.worker_port {
+                    config.insert(SPARK_ENV_WORKER_PORT.to_string(), Some(port.to_string()));
+                }
+                if let Some(web_ui_port) = &self.worker_web_ui_port {
+                    config.insert(
+                        SPARK_ENV_WORKER_WEBUI_PORT.to_string(),
+                        Some(web_ui_port.to_string()),
+                    );
+                }
+            }
+            "spark-defaults.conf" => add_common_spark_defaults(&mut config, &resource.spec),
+            _ => {}
         }
 
-        add_user_defined_config_properties(&mut config, &self.spark_env_sh);
-        config
+        Ok(config)
     }
 }
 
-impl Config for HistoryServerConfig {
-    fn get_spark_defaults_conf(&self, spec: &SparkClusterSpec) -> BTreeMap<String, String> {
-        let mut config = BTreeMap::new();
+impl Configuration for HistoryServerConfig {
+    type Configurable = SparkCluster;
 
-        let log_dir = spec.log_dir.as_deref().unwrap_or(DEFAULT_LOG_DIR);
-        config.insert(
-            SPARK_DEFAULTS_HISTORY_FS_LOG_DIRECTORY.to_string(),
-            log_dir.to_string(),
-        );
-
-        if let Some(store_path) = &self.store_path {
-            config.insert(
-                SPARK_DEFAULTS_HISTORY_STORE_PATH.to_string(),
-                store_path.to_string(),
-            );
-        }
-        if let Some(port) = &self.history_web_ui_port {
-            config.insert(
-                SPARK_DEFAULTS_HISTORY_WEBUI_PORT.to_string(),
-                port.to_string(),
-            );
-        }
-
-        add_common_spark_defaults(&mut config, spec);
-        add_user_defined_config_properties(&mut config, &self.spark_defaults);
-        config
+    fn compute_env(
+        &self,
+        _resource: &Self::Configurable,
+        _role_name: &str,
+    ) -> Result<BTreeMap<String, Option<String>>, ConfigError> {
+        Ok(BTreeMap::new())
     }
 
-    fn get_spark_env_sh(&self) -> BTreeMap<String, String> {
+    fn compute_cli(
+        &self,
+        _resource: &Self::Configurable,
+        _role_name: &str,
+    ) -> Result<BTreeMap<String, Option<String>>, ConfigError> {
+        Ok(BTreeMap::new())
+    }
+
+    fn compute_files(
+        &self,
+        resource: &Self::Configurable,
+        _role_name: &str,
+        file: &str,
+    ) -> Result<BTreeMap<String, Option<String>>, ConfigError> {
         let mut config = BTreeMap::new();
-        add_user_defined_config_properties(&mut config, &self.spark_env_sh);
-        config
+
+        match file {
+            "spark-env.sh" => {}
+            "spark-defaults.conf" => {
+                if let Some(CommonConfiguration {
+                    config: Some(common_config),
+                    ..
+                }) = &resource.spec.config
+                {
+                    let log_dir = common_config.log_dir.as_deref().unwrap_or(DEFAULT_LOG_DIR);
+                    config.insert(
+                        SPARK_DEFAULTS_HISTORY_FS_LOG_DIRECTORY.to_string(),
+                        Some(log_dir.to_string()),
+                    );
+                }
+
+                if let Some(store_path) = &self.store_path {
+                    config.insert(
+                        SPARK_DEFAULTS_HISTORY_STORE_PATH.to_string(),
+                        Some(store_path.to_string()),
+                    );
+                }
+                if let Some(port) = &self.history_web_ui_port {
+                    config.insert(
+                        SPARK_DEFAULTS_HISTORY_WEBUI_PORT.to_string(),
+                        Some(port.to_string()),
+                    );
+                }
+                // TODO: do not need to add other logdir here
+                add_common_spark_defaults(&mut config, &resource.spec)
+            }
+            _ => {}
+        }
+
+        Ok(config)
     }
 }
 
-fn add_common_spark_defaults(config: &mut BTreeMap<String, String>, spec: &SparkClusterSpec) {
-    if let Some(secret) = &spec.secret {
-        config.insert(
-            SPARK_DEFAULTS_AUTHENTICATE_SECRET.to_string(),
-            secret.to_string(),
-        );
-    }
-
-    let max_port_retries = &spec.max_port_retries.unwrap_or(0);
-    config.insert(
-        SPARK_DEFAULTS_PORT_MAX_RETRIES.to_string(),
-        max_port_retries.to_string(),
-    );
-}
-
-fn add_user_defined_config_properties(
-    config: &mut BTreeMap<String, String>,
-    config_properties: &Option<Vec<ConfigOption>>,
+fn add_common_spark_defaults(
+    config: &mut BTreeMap<String, Option<String>>,
+    spec: &SparkClusterSpec,
 ) {
-    if let Some(conf) = config_properties {
-        for config_option in conf {
-            config.insert(config_option.name.clone(), config_option.value.clone());
+    if let Some(CommonConfiguration {
+        config: Some(common_config),
+        ..
+    }) = &spec.config
+    {
+        if let Some(secret) = &common_config.secret {
+            config.insert(
+                SPARK_DEFAULTS_AUTHENTICATE.to_string(),
+                Some("true".to_string()),
+            );
+
+            config.insert(
+                SPARK_DEFAULTS_AUTHENTICATE_SECRET.to_string(),
+                Some(secret.to_string()),
+            );
         }
+
+        let max_port_retries = &common_config.max_port_retries.unwrap_or(0);
+        config.insert(
+            SPARK_DEFAULTS_PORT_MAX_RETRIES.to_string(),
+            Some(max_port_retries.to_string()),
+        );
+
+        let log_dir = common_config.log_dir.as_deref().unwrap_or(DEFAULT_LOG_DIR);
+        config.insert(
+            SPARK_DEFAULTS_EVENT_LOG_DIR.to_string(),
+            Some(log_dir.to_string()),
+        );
     }
 }
 
@@ -325,7 +294,7 @@ fn add_user_defined_config_properties(
     strum_macros::Display,
     strum_macros::EnumString,
 )]
-pub enum SparkNodeType {
+pub enum SparkRole {
     #[serde(rename = "master")]
     #[strum(serialize = "master")]
     Master,
@@ -337,12 +306,12 @@ pub enum SparkNodeType {
     HistoryServer,
 }
 
-impl SparkNodeType {
+impl SparkRole {
     /// Returns the container start command for a spark node
     /// Right now works only for images using hadoop2.7
     /// # Arguments
-    /// * `version` - Current specified cluster version
     ///
+    /// * `version` - Current specified cluster version
     pub fn get_command(&self, version: &str) -> String {
         // TODO: remove hardcoded and adapt for versioning
         format!(
@@ -466,29 +435,27 @@ impl SparkVersion {
 pub fn get_master_urls(pods: &[Pod], spec: &SparkClusterSpec) -> Vec<String> {
     let mut master_urls = Vec::new();
 
-    for pod in pods {
-        if let Some(labels) = &pod.metadata.labels {
-            if let (Some(component), Some(role_group)) = (
-                labels.get(APP_COMPONENT_LABEL),
-                labels.get(APP_ROLE_GROUP_LABEL),
-            ) {
-                if component != &SparkNodeType::Master.to_string() {
-                    continue;
-                }
-
-                if let (Some(config), Some(pod_spec)) = (
-                    spec.get_config(&SparkNodeType::Master, role_group),
-                    &pod.spec,
-                ) {
-                    let port = get_master_port(config, spec);
-
-                    if let Some(node_name) = &pod_spec.node_name {
-                        master_urls.push(create_master_url(node_name, &port))
-                    }
-                }
-            }
-        }
-    }
+    // for pod in pods {
+    //     if let (Some(component), Some(role_group)) = (
+    //         pod.metadata.labels.get(APP_COMPONENT_LABEL),
+    //         pod.metadata.labels.get(APP_ROLE_GROUP_LABEL),
+    //     ) {
+    //         if component != &SparkNodeType::Master.to_string() {
+    //             continue;
+    //         }
+    //
+    //         if let (Some(config), Some(pod_spec)) = (
+    //             spec.get_config(&SparkNodeType::Master, role_group),
+    //             &pod.spec,
+    //         ) {
+    //             let port = get_master_port(config, spec);
+    //
+    //             if let Some(node_name) = &pod_spec.node_name {
+    //                 master_urls.push(create_master_url(node_name, &port))
+    //             }
+    //         }
+    //     }
+    // }
 
     master_urls
 }
@@ -500,19 +467,19 @@ pub fn get_master_urls(pods: &[Pod], spec: &SparkClusterSpec) -> Vec<String> {
 /// * `config` - The custom resource config of the specified master
 /// * `spec` - The spark cluster spec
 ///
-fn get_master_port(config: Box<dyn Config>, spec: &SparkClusterSpec) -> String {
-    return if let Some(spark_defaults_port) = config
-        .get_spark_defaults_conf(spec)
-        .get(SPARK_DEFAULTS_MASTER_PORT)
-    {
-        spark_defaults_port.clone()
-    } else if let Some(spark_env_port) = config.get_spark_env_sh().get(SPARK_ENV_MASTER_PORT) {
-        spark_env_port.clone()
-    } else {
-        // TODO: extract default / recommended from product config
-        "7077".to_string()
-    };
-}
+// fn get_master_port(config: Box<dyn Config>, spec: &SparkClusterSpec) -> String {
+//     return if let Some(spark_defaults_port) = config
+//         .get_spark_defaults_conf(spec)
+//         .get(SPARK_DEFAULTS_MASTER_PORT)
+//     {
+//         spark_defaults_port.clone()
+//     } else if let Some(spark_env_port) = config.get_spark_env_sh().get(SPARK_ENV_MASTER_PORT) {
+//         spark_env_port.clone()
+//     } else {
+//         // TODO: extract default / recommended from product config
+//         "7077".to_string()
+//     };
+// }
 
 /// Create master url in format: <node_name>:<port>
 ///
@@ -537,10 +504,7 @@ mod tests {
 
         let master_1_config = spark_cluster
             .spec
-            .get_config(
-                &SparkNodeType::Master,
-                TestSparkCluster::MASTER_1_ROLE_GROUP,
-            )
+            .get_config(&SparkRole::Master, TestSparkCluster::MASTER_1_ROLE_GROUP)
             .unwrap();
 
         let spark_defaults = master_1_config.get_spark_defaults_conf(&spark_cluster.spec);
@@ -573,10 +537,7 @@ mod tests {
 
         let master_1_config = spark_cluster
             .spec
-            .get_config(
-                &SparkNodeType::Master,
-                TestSparkCluster::MASTER_1_ROLE_GROUP,
-            )
+            .get_config(&SparkRole::Master, TestSparkCluster::MASTER_1_ROLE_GROUP)
             .unwrap();
 
         let spark_env = master_1_config.get_spark_env_sh();
@@ -599,10 +560,7 @@ mod tests {
 
         let master_1_config = spark_cluster
             .spec
-            .get_config(
-                &SparkNodeType::Worker,
-                TestSparkCluster::WORKER_1_ROLE_GROUP,
-            )
+            .get_config(&SparkRole::Worker, TestSparkCluster::WORKER_1_ROLE_GROUP)
             .unwrap();
 
         let spark_env = master_1_config.get_spark_env_sh();
@@ -635,11 +593,11 @@ mod tests {
         let version = &spark_cluster.spec.version;
 
         assert_eq!(
-            SparkNodeType::Master.get_command(&version.to_string()),
+            SparkRole::Master.get_command(&version.to_string()),
             format!(
                 "spark-{}-bin-hadoop2.7/sbin/start-{}.sh",
                 &version.to_string(),
-                SparkNodeType::Master.to_string()
+                SparkRole::Master.to_string()
             )
         );
     }

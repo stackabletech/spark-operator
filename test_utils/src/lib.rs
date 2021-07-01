@@ -1,7 +1,7 @@
 use crate::cluster::{Data, Load, TestSparkCluster};
 use k8s_openapi::api::core::v1::Pod;
 use serde::de::DeserializeOwned;
-use stackable_spark_crd::{SparkCluster, SparkNodeType};
+use stackable_spark_crd::{SparkCluster, SparkRole};
 use stackable_spark_operator::pod_utils::build_pod;
 
 pub mod cluster;
@@ -50,7 +50,7 @@ pub fn create_master_pods() -> Vec<Pod> {
             &spark_cluster,
             TestSparkCluster::MASTER_1_NODE_NAME,
             TestSparkCluster::MASTER_1_ROLE_GROUP,
-            &SparkNodeType::Master,
+            &SparkRole::Master,
             &master_urls.as_slice(),
         )
         .unwrap(),
@@ -58,7 +58,7 @@ pub fn create_master_pods() -> Vec<Pod> {
             &spark_cluster,
             TestSparkCluster::MASTER_2_NODE_NAME,
             TestSparkCluster::MASTER_2_ROLE_GROUP,
-            &SparkNodeType::Master,
+            &SparkRole::Master,
             &master_urls.as_slice(),
         )
         .unwrap(),
@@ -66,7 +66,7 @@ pub fn create_master_pods() -> Vec<Pod> {
             &spark_cluster,
             TestSparkCluster::MASTER_3_NODE_NAME,
             TestSparkCluster::MASTER_3_ROLE_GROUP,
-            &SparkNodeType::Master,
+            &SparkRole::Master,
             &master_urls.as_slice(),
         )
         .unwrap(),
