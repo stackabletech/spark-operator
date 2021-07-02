@@ -5,7 +5,7 @@ use stackable_spark_crd::{SparkCluster, SparkRole};
 use stackable_spark_operator::pod_utils::build_pod;
 
 pub mod cluster;
-
+/*
 // TODO: get default port from config-properties
 pub const MASTER_DEFAULT_PORT: usize = 7077;
 
@@ -48,9 +48,9 @@ pub fn create_master_pods() -> Vec<Pod> {
     vec![
         build_pod(
             &spark_cluster,
-            TestSparkCluster::MASTER_1_NODE_NAME,
-            TestSparkCluster::MASTER_1_ROLE_GROUP,
             &SparkRole::Master,
+            TestSparkCluster::MASTER_1_ROLE_GROUP,
+            TestSparkCluster::MASTER_1_NODE_NAME,
             &master_urls.as_slice(),
         )
         .unwrap(),
@@ -72,3 +72,4 @@ pub fn create_master_pods() -> Vec<Pod> {
         .unwrap(),
     ]
 }
+*/

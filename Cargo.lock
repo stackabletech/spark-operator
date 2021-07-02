@@ -1437,6 +1437,7 @@ dependencies = [
  "derivative",
  "k8s-openapi",
  "kube",
+ "product-config",
  "schemars",
  "semver",
  "serde",

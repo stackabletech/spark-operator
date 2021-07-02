@@ -1,21 +1,21 @@
 //! This module provides all required CRD definitions and additional helper methods.
-pub mod commands;
-pub mod error;
+use std::collections::BTreeMap;
+use std::hash::Hash;
 
-pub use crate::error::CrdError;
-pub use commands::{Restart, Start, Stop};
 use k8s_openapi::api::core::v1::Pod;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, LabelSelector};
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use semver::{Error as SemVerError, Version};
 use serde::{Deserialize, Serialize};
-use stackable_operator::label_selector::schema;
 use stackable_operator::labels::{APP_COMPONENT_LABEL, APP_ROLE_GROUP_LABEL};
 use stackable_operator::product_config_utils::{ConfigError, Configuration};
 use stackable_operator::role_utils::{CommonConfiguration, Role};
 use stackable_operator::status::Conditions;
 use stackable_operator::Crd;
+use strum_macros::EnumIter;
+
+pub use commands::{Restart, Start, Stop};
 use stackable_spark_common::constants::{
     SPARK_DEFAULTS_AUTHENTICATE, SPARK_DEFAULTS_AUTHENTICATE_SECRET, SPARK_DEFAULTS_EVENT_LOG_DIR,
     SPARK_DEFAULTS_HISTORY_FS_LOG_DIRECTORY, SPARK_DEFAULTS_HISTORY_STORE_PATH,
@@ -23,11 +23,15 @@ use stackable_spark_common::constants::{
     SPARK_ENV_MASTER_PORT, SPARK_ENV_MASTER_WEBUI_PORT, SPARK_ENV_WORKER_CORES,
     SPARK_ENV_WORKER_MEMORY, SPARK_ENV_WORKER_PORT, SPARK_ENV_WORKER_WEBUI_PORT,
 };
-use std::collections::{BTreeMap, HashMap};
-use std::hash::Hash;
-use strum_macros::EnumIter;
+
+pub use crate::error::CrdError;
+
+pub mod commands;
+pub mod error;
 
 const DEFAULT_LOG_DIR: &str = "/tmp";
+const SPARK_DEFAULTS_CONF: &str = "spark-defaults.conf";
+const SPARK_ENV_SH: &str = "spark-env.sh";
 
 #[derive(Clone, CustomResource, Debug, Deserialize, JsonSchema, Serialize)]
 #[kube(
@@ -107,7 +111,7 @@ impl Configuration for MasterConfig {
         let mut config = BTreeMap::new();
 
         match file {
-            "spark-env.sh" => {
+            SPARK_ENV_SH => {
                 if let Some(port) = &self.master_port {
                     config.insert(SPARK_ENV_MASTER_PORT.to_string(), Some(port.to_string()));
                 }
@@ -118,7 +122,7 @@ impl Configuration for MasterConfig {
                     );
                 }
             }
-            "spark-defaults.conf" => add_common_spark_defaults(&mut config, &resource.spec),
+            SPARK_DEFAULTS_CONF => add_common_spark_defaults(&mut config, &resource.spec),
             _ => {}
         }
 
@@ -154,7 +158,7 @@ impl Configuration for WorkerConfig {
         let mut config = BTreeMap::new();
 
         match file {
-            "spark-env.sh" => {
+            SPARK_ENV_SH => {
                 if let Some(cores) = &self.cores {
                     config.insert(SPARK_ENV_WORKER_CORES.to_string(), Some(cores.to_string()));
                 }
@@ -174,7 +178,7 @@ impl Configuration for WorkerConfig {
                     );
                 }
             }
-            "spark-defaults.conf" => add_common_spark_defaults(&mut config, &resource.spec),
+            SPARK_DEFAULTS_CONF => add_common_spark_defaults(&mut config, &resource.spec),
             _ => {}
         }
 
@@ -210,8 +214,8 @@ impl Configuration for HistoryServerConfig {
         let mut config = BTreeMap::new();
 
         match file {
-            "spark-env.sh" => {}
-            "spark-defaults.conf" => {
+            SPARK_ENV_SH => {}
+            SPARK_DEFAULTS_CONF => {
                 if let Some(CommonConfiguration {
                     config: Some(common_config),
                     ..
@@ -236,7 +240,7 @@ impl Configuration for HistoryServerConfig {
                         Some(port.to_string()),
                     );
                 }
-                // TODO: do not need to add other logdir here
+                // TODO: do not need to add the other log dir here
                 add_common_spark_defaults(&mut config, &resource.spec)
             }
             _ => {}
@@ -430,25 +434,55 @@ impl SparkVersion {
 ///
 /// # Arguments
 /// * `pods` - Slice of all existing pods
-/// * `spec` - The spark cluster spec
-///
-pub fn get_master_urls(pods: &[Pod], spec: &SparkClusterSpec) -> Vec<String> {
+/// * `role_config` - The precalculated role and role group configuration with properties
+///                   split by PropertyNameKind
+pub fn get_master_urls(pods: &[Pod], resource: &SparkCluster) -> Vec<String> {
     let mut master_urls = Vec::new();
 
     // for pod in pods {
-    //     if let (Some(component), Some(role_group)) = (
+    //     if let (Some(role), Some(role_group)) = (
     //         pod.metadata.labels.get(APP_COMPONENT_LABEL),
     //         pod.metadata.labels.get(APP_ROLE_GROUP_LABEL),
     //     ) {
-    //         if component != &SparkNodeType::Master.to_string() {
+    //         if role != &SparkRole::Master.to_string() {
     //             continue;
     //         }
     //
-    //         if let (Some(config), Some(pod_spec)) = (
-    //             spec.get_config(&SparkNodeType::Master, role_group),
-    //             &pod.spec,
-    //         ) {
-    //             let port = get_master_port(config, spec);
+    //         let mut port;
+    //
+    //         if let Some(groups) = role_config.get(role) {
+    //             if let Some(config_by_kind) = groups.get(role_group) {
+    //                 // The order for spark properties:
+    //                 // SparkConf > spark-submit / spark-shell > spark-defaults.conf > spark-env.sh
+    //                 // We only check spark-defaults.conf and spark-env.sh
+    //                 // 1) check spark-defaults.sh
+    //                 if let Some(defaults_conf) =
+    //                     config_by_kind.get(&PropertyNameKind::File(SPARK_DEFAULTS_CONF.to_string()))
+    //                 {
+    //                     if let Some(Some(defaults_conf_port)) =
+    //                         defaults_conf.get(SPARK_DEFAULTS_MASTER_PORT)
+    //                     {
+    //                         port = defaults_conf_port.to_string();
+    //                     }
+    //                 }
+    //                 // 2) check spark-env.sh
+    //                 else if Some(properties) =
+    //                     config_by_kind.get(&PropertyNameKind::File(SPARK_ENV_SH.to_string()))
+    //                 {
+    //                     if let Some(Some(env_port)) = env_sh.get(SPARK_ENV_MASTER_PORT) {
+    //                         port = env_port.to_string();
+    //                     }
+    //                 } else {
+    //                     // TODO: extract default / recommended from product config
+    //                     "7077".to_string()
+    //                 }
+    //             }
+    //         }
+    //
+    //         if let (Some(config), Some(pod_spec)) =
+    //             (spec.get_config(&SparkRole::Master, role_group), &pod.spec)
+    //         {
+    //             let port = get_master_port(config, resource);
     //
     //             if let Some(node_name) = &pod_spec.node_name {
     //                 master_urls.push(create_master_url(node_name, &port))
@@ -465,21 +499,37 @@ pub fn get_master_urls(pods: &[Pod], spec: &SparkClusterSpec) -> Vec<String> {
 ///
 /// # Arguments
 /// * `config` - The custom resource config of the specified master
-/// * `spec` - The spark cluster spec
+/// * `resource` - The spark cluster
 ///
-// fn get_master_port(config: Box<dyn Config>, spec: &SparkClusterSpec) -> String {
-//     return if let Some(spark_defaults_port) = config
-//         .get_spark_defaults_conf(spec)
-//         .get(SPARK_DEFAULTS_MASTER_PORT)
-//     {
-//         spark_defaults_port.clone()
-//     } else if let Some(spark_env_port) = config.get_spark_env_sh().get(SPARK_ENV_MASTER_PORT) {
-//         spark_env_port.clone()
-//     } else {
-//         // TODO: extract default / recommended from product config
-//         "7077".to_string()
-//     };
-// }
+fn get_master_port<T>(config: T, resource: &SparkCluster) -> String
+where
+    T: Configuration,
+{
+    // // The order for spark properties:
+    // // SparkConf > spark-submit / spark-shell > spark-defaults.conf > spark-env.sh
+    // // We only check spark-defaults.conf and spark-env.sh
+    // // 1) check spark-defaults.sh
+    // if let Ok(defaults_conf) = config.compute_files(
+    //     resource,
+    //     &SparkRole::Master.to_string(),
+    //     SPARK_DEFAULTS_CONF,
+    // ) {
+    //     if let Some(Some(port)) = defaults_conf.get(SPARK_DEFAULTS_MASTER_PORT) {
+    //         return port.to_string();
+    //     }
+    // }
+    // // 2) check spark-env.sh
+    // else if let Ok(env_sh) =
+    //     config.compute_files(resource, &SparkRole::Master.to_string(), SPARK_ENV_SH)
+    // {
+    //     if let Some(Some(port)) = env_sh.get(SPARK_ENV_MASTER_PORT) {
+    //         return port.to_string();
+    //     }
+    // }
+    //
+    // // TODO: extract default / recommended from product config
+    "7077".to_string()
+}
 
 /// Create master url in format: <node_name>:<port>
 ///
@@ -493,9 +543,10 @@ fn create_master_url(node_name: &str, port: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use stackable_spark_common::constants::SPARK_DEFAULTS_MASTER_PORT;
     use stackable_spark_test_utils::cluster::{Data, TestSparkCluster};
+
+    use super::*;
 
     #[test]
     fn test_get_spark_defaults_master() {
@@ -639,7 +690,7 @@ mod tests {
         let spark_cluster: SparkCluster = stackable_spark_test_utils::setup_test_cluster();
 
         let master_pods = stackable_spark_test_utils::create_master_pods();
-        let master_urls = get_master_urls(master_pods.as_slice(), &spark_cluster.spec);
+        let master_urls = get_master_urls(master_pods.as_slice(), &spark_cluster);
         assert!(!master_urls.is_empty());
         // For master_1 we expect the config port
         assert!(master_urls.contains(&create_master_url(

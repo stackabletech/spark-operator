@@ -14,13 +14,13 @@ use std::collections::BTreeMap;
 /// spark://<master-node-name-1>:<master-port-1>,<master-node-name-2>:<master-port-2>
 ///
 /// # Arguments
-/// * `node_type` - The cluster node type (e.g. master, worker, history-server)
+/// * `role` - The cluster role (e.g. master, worker, history-server)
 /// * `master_urls` - Slice of master urls in format <node_name>:<port>
 ///
-pub fn adapt_worker_command(node_type: &SparkRole, master_urls: &[String]) -> Option<String> {
+pub fn adapt_worker_command(role: &SparkRole, master_urls: &[String]) -> Option<String> {
     let mut adapted_command: String = String::new();
     // only for workers
-    if node_type != &SparkRole::Worker {
+    if role != &SparkRole::Worker {
         return None;
     }
 
@@ -61,7 +61,7 @@ pub fn create_required_startup_env() -> Vec<EnvVar> {
 /// * `map` - Map containing option_name:option_value pairs
 /// * `assignment` - Used character to assign option_value to option_name (e.g. "=", " ", ":" ...)
 ///
-fn convert_map_to_string(map: &BTreeMap<String, String>, assignment: &str) -> String {
+pub fn convert_map_to_string(map: &BTreeMap<String, String>, assignment: &str) -> String {
     let mut data = String::new();
     for (key, value) in map {
         data.push_str(format!("{}{}{}\n", key, assignment, value).as_str());
