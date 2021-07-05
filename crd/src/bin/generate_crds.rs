@@ -1,4 +1,3 @@
-use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
 use kube::CustomResourceExt;
 use stackable_spark_crd::{Restart, SparkCluster, Start, Stop};
 use std::error::Error;

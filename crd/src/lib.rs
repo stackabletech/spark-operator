@@ -2,13 +2,11 @@
 use std::collections::BTreeMap;
 use std::hash::Hash;
 
-use k8s_openapi::api::core::v1::Pod;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use semver::{Error as SemVerError, Version};
 use serde::{Deserialize, Serialize};
-use stackable_operator::labels::{APP_COMPONENT_LABEL, APP_ROLE_GROUP_LABEL};
 use stackable_operator::product_config_utils::{ConfigError, Configuration};
 use stackable_operator::role_utils::{CommonConfiguration, Role};
 use stackable_operator::status::Conditions;
@@ -19,9 +17,9 @@ pub use commands::{Restart, Start, Stop};
 use stackable_spark_common::constants::{
     SPARK_DEFAULTS_AUTHENTICATE, SPARK_DEFAULTS_AUTHENTICATE_SECRET, SPARK_DEFAULTS_EVENT_LOG_DIR,
     SPARK_DEFAULTS_HISTORY_FS_LOG_DIRECTORY, SPARK_DEFAULTS_HISTORY_STORE_PATH,
-    SPARK_DEFAULTS_HISTORY_WEBUI_PORT, SPARK_DEFAULTS_MASTER_PORT, SPARK_DEFAULTS_PORT_MAX_RETRIES,
-    SPARK_ENV_MASTER_PORT, SPARK_ENV_MASTER_WEBUI_PORT, SPARK_ENV_WORKER_CORES,
-    SPARK_ENV_WORKER_MEMORY, SPARK_ENV_WORKER_PORT, SPARK_ENV_WORKER_WEBUI_PORT,
+    SPARK_DEFAULTS_HISTORY_WEBUI_PORT, SPARK_DEFAULTS_PORT_MAX_RETRIES, SPARK_ENV_MASTER_PORT,
+    SPARK_ENV_MASTER_WEBUI_PORT, SPARK_ENV_WORKER_CORES, SPARK_ENV_WORKER_MEMORY,
+    SPARK_ENV_WORKER_PORT, SPARK_ENV_WORKER_WEBUI_PORT,
 };
 
 pub use crate::error::CrdError;
@@ -285,6 +283,9 @@ fn add_common_spark_defaults(
     }
 }
 
+/// Enum to manage the different Spark roles.
+/// `WARNING`: Do not alter the order of the roles because they are iterated over (via strum)
+/// and it always has to start with master (then worker, then history server).
 #[derive(
     EnumIter,
     Clone,
@@ -426,119 +427,6 @@ impl SparkVersion {
         let to_version = Version::parse(&to.to_string())?;
         Ok(to_version < from_version)
     }
-}
-
-/// Filter all existing pods for master node type and retrieve the selector config
-/// for the given role_group. Extract the nodeName from the pod and the specified port
-/// from the config to create the master urls for each pod.
-///
-/// # Arguments
-/// * `pods` - Slice of all existing pods
-/// * `role_config` - The precalculated role and role group configuration with properties
-///                   split by PropertyNameKind
-pub fn get_master_urls(pods: &[Pod], resource: &SparkCluster) -> Vec<String> {
-    let mut master_urls = Vec::new();
-
-    // for pod in pods {
-    //     if let (Some(role), Some(role_group)) = (
-    //         pod.metadata.labels.get(APP_COMPONENT_LABEL),
-    //         pod.metadata.labels.get(APP_ROLE_GROUP_LABEL),
-    //     ) {
-    //         if role != &SparkRole::Master.to_string() {
-    //             continue;
-    //         }
-    //
-    //         let mut port;
-    //
-    //         if let Some(groups) = role_config.get(role) {
-    //             if let Some(config_by_kind) = groups.get(role_group) {
-    //                 // The order for spark properties:
-    //                 // SparkConf > spark-submit / spark-shell > spark-defaults.conf > spark-env.sh
-    //                 // We only check spark-defaults.conf and spark-env.sh
-    //                 // 1) check spark-defaults.sh
-    //                 if let Some(defaults_conf) =
-    //                     config_by_kind.get(&PropertyNameKind::File(SPARK_DEFAULTS_CONF.to_string()))
-    //                 {
-    //                     if let Some(Some(defaults_conf_port)) =
-    //                         defaults_conf.get(SPARK_DEFAULTS_MASTER_PORT)
-    //                     {
-    //                         port = defaults_conf_port.to_string();
-    //                     }
-    //                 }
-    //                 // 2) check spark-env.sh
-    //                 else if Some(properties) =
-    //                     config_by_kind.get(&PropertyNameKind::File(SPARK_ENV_SH.to_string()))
-    //                 {
-    //                     if let Some(Some(env_port)) = env_sh.get(SPARK_ENV_MASTER_PORT) {
-    //                         port = env_port.to_string();
-    //                     }
-    //                 } else {
-    //                     // TODO: extract default / recommended from product config
-    //                     "7077".to_string()
-    //                 }
-    //             }
-    //         }
-    //
-    //         if let (Some(config), Some(pod_spec)) =
-    //             (spec.get_config(&SparkRole::Master, role_group), &pod.spec)
-    //         {
-    //             let port = get_master_port(config, resource);
-    //
-    //             if let Some(node_name) = &pod_spec.node_name {
-    //                 master_urls.push(create_master_url(node_name, &port))
-    //             }
-    //         }
-    //     }
-    // }
-
-    master_urls
-}
-
-/// Search for the selected master port in the master config
-/// Priority is: spark_defaults.conf > spark_env.sh > default port
-///
-/// # Arguments
-/// * `config` - The custom resource config of the specified master
-/// * `resource` - The spark cluster
-///
-fn get_master_port<T>(config: T, resource: &SparkCluster) -> String
-where
-    T: Configuration,
-{
-    // // The order for spark properties:
-    // // SparkConf > spark-submit / spark-shell > spark-defaults.conf > spark-env.sh
-    // // We only check spark-defaults.conf and spark-env.sh
-    // // 1) check spark-defaults.sh
-    // if let Ok(defaults_conf) = config.compute_files(
-    //     resource,
-    //     &SparkRole::Master.to_string(),
-    //     SPARK_DEFAULTS_CONF,
-    // ) {
-    //     if let Some(Some(port)) = defaults_conf.get(SPARK_DEFAULTS_MASTER_PORT) {
-    //         return port.to_string();
-    //     }
-    // }
-    // // 2) check spark-env.sh
-    // else if let Ok(env_sh) =
-    //     config.compute_files(resource, &SparkRole::Master.to_string(), SPARK_ENV_SH)
-    // {
-    //     if let Some(Some(port)) = env_sh.get(SPARK_ENV_MASTER_PORT) {
-    //         return port.to_string();
-    //     }
-    // }
-    //
-    // // TODO: extract default / recommended from product config
-    "7077".to_string()
-}
-
-/// Create master url in format: <node_name>:<port>
-///
-/// # Arguments
-/// * `node_name` - Master node_name / host name
-/// * `port` - Port on which the master is running
-///
-fn create_master_url(node_name: &str, port: &str) -> String {
-    format!("{}:{}", node_name, port)
 }
 
 #[cfg(test)]

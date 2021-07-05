@@ -1,12 +1,18 @@
 //! This module contains all methods that are responsible for setting / adapting configuration
 //! parameters in the Pods and respective ConfigMaps.
 
-use k8s_openapi::api::core::v1::{ConfigMap, EnvVar};
-use stackable_operator::config_map::create_config_map;
+use std::collections::{BTreeMap, HashMap};
+
+use k8s_openapi::api::core::v1::{ConfigMap, EnvVar, Pod, PodSpec};
 use stackable_operator::error::OperatorResult;
+
+use product_config::types::PropertyNameKind;
+use stackable_operator::labels::{APP_COMPONENT_LABEL, APP_ROLE_GROUP_LABEL};
+use stackable_operator::product_config_utils::{
+    config_for_role_and_group, ValidatedRoleConfigByPropertyKind,
+};
 use stackable_spark_common::constants::*;
 use stackable_spark_crd::{SparkCluster, SparkRole};
-use std::collections::BTreeMap;
 
 /// The worker start command needs to be extended with all known master nodes and ports.
 /// The required URLs for the starting command are in format: '<master-node-name>:<master-port'
@@ -78,46 +84,85 @@ pub fn create_config_map_name(pod_name: &str) -> String {
     format!("{}-config", pod_name)
 }
 
-/// Create all required config maps and respective config map data.
+/// Filter all existing pods for master node type and retrieve the selector config
+/// for the given role_group. Extract the nodeName from the pod and the specified port
+/// from the config to create the master urls for each pod.
 ///
 /// # Arguments
-/// * `resource` - SparkCluster
-/// * `config` - The custom resource config
-/// * `cm_name` - The desired config map name
+/// * `pods` - Slice of all existing pods
+/// * `role_config` - The precalculated role and role group configuration with properties
+///                   split by PropertyNameKind
+pub fn get_master_urls(
+    pods: &[Pod],
+    validated_config: &ValidatedRoleConfigByPropertyKind,
+) -> OperatorResult<Vec<String>> {
+    let mut master_urls = Vec::new();
+
+    for pod in pods {
+        if let (Some(role), Some(group)) = (
+            pod.metadata.labels.get(APP_COMPONENT_LABEL),
+            pod.metadata.labels.get(APP_ROLE_GROUP_LABEL),
+        ) {
+            if role != &SparkRole::Master.to_string() {
+                continue;
+            }
+
+            let validated_config_for_role_and_group =
+                config_for_role_and_group(role, group, &validated_config)?;
+
+            let mut port = "7077";
+            // The order for spark properties:
+            // SparkConf > spark-submit / spark-shell > spark-defaults.conf > spark-env.sh
+            // We only check spark-defaults.conf and spark-env.sh
+            // 1) check spark-defaults.sh
+            if let Some(spark_defaults_conf) = validated_config_for_role_and_group
+                .get(&PropertyNameKind::File(SPARK_DEFAULTS_CONF.to_string()))
+            {
+                if let Some(defaults_conf_port) =
+                    spark_defaults_conf.get(SPARK_DEFAULTS_MASTER_PORT)
+                {
+                    port = defaults_conf_port;
+                }
+                // 2) check spark-env.sh
+                else if let Some(spark_env_sh) = validated_config_for_role_and_group
+                    .get(&PropertyNameKind::File(SPARK_ENV_SH.to_string()))
+                {
+                    if let Some(env_port) = spark_env_sh.get(SPARK_ENV_MASTER_PORT) {
+                        port = env_port;
+                    }
+                }
+            }
+            // TODO: 3) default value will be provided via product config
+
+            if let Some(PodSpec {
+                node_name: Some(node),
+                ..
+            }) = &pod.spec
+            {
+                master_urls.push(create_master_url(node, port))
+            }
+        }
+    }
+
+    Ok(master_urls)
+}
+
+/// Create master url in format: <node_name>:<port>
 ///
-pub fn create_config_map_with_data<T>(
-    resource: &SparkCluster,
-    config: Option<T>,
-    cm_name: &str,
-) -> OperatorResult<ConfigMap>
-where
-{
-    // let mut spark_defaults = BTreeMap::new();
-    // let mut spark_env_sh = BTreeMap::new();
-    //
-    // if let Some(conf) = config {
-    //     spark_defaults = conf.get_spark_defaults_conf(&resource.spec);
-    //     spark_env_sh = conf.get_spark_env_sh();
-    // }
-    //
-    // let conf = convert_map_to_string(&spark_defaults, " ");
-    // let env = convert_map_to_string(&spark_env_sh, "=");
-    //
-    // let mut data = BTreeMap::new();
-    // data.insert(SPARK_DEFAULTS_CONF.to_string(), conf);
-    // data.insert(SPARK_ENV_SH.to_string(), env);
-    //
-    // let cm = create_config_map(resource, &cm_name, data)?;
-    //
-    // Ok(cm)
-    Ok(ConfigMap::default())
+/// # Arguments
+/// * `node_name` - Master node_name / host name
+/// * `port` - Port on which the master is running
+///
+fn create_master_url(node_name: &str, port: &str) -> String {
+    format!("{}:{}", node_name, port)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use stackable_spark_common::constants;
     use stackable_spark_test_utils::cluster::{Data, TestSparkCluster};
+
+    use super::*;
 
     #[test]
     fn test_adapt_worker_command() {

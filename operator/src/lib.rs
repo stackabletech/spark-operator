@@ -16,10 +16,12 @@ use stackable_operator::client::Client;
 use stackable_operator::conditions::ConditionStatus;
 use stackable_operator::controller::{Controller, ControllerStrategy, ReconciliationState};
 use stackable_operator::error::OperatorResult;
-use stackable_operator::labels::{APP_COMPONENT_LABEL, APP_INSTANCE_LABEL, APP_VERSION_LABEL};
+use stackable_operator::labels::{
+    APP_COMPONENT_LABEL, APP_INSTANCE_LABEL, APP_ROLE_GROUP_LABEL, APP_VERSION_LABEL,
+};
 use stackable_operator::product_config_utils::{
-    transform_all_roles_to_config, validate_role_and_group_config, Configuration,
-    RoleConfigByPropertyKind,
+    config_for_role_and_group, transform_all_roles_to_config, validate_all_roles_and_groups_config,
+    Configuration, ValidatedRoleConfigByPropertyKind,
 };
 use stackable_operator::reconcile::{
     ContinuationStrategy, ReconcileFunctionAction, ReconcileResult, ReconciliationContext,
@@ -39,7 +41,6 @@ use stackable_spark_crd::{
     SparkVersion,
 };
 
-use crate::config::create_config_map_name;
 use crate::error::Error;
 use crate::pod_utils::filter_pods_for_type;
 
@@ -55,7 +56,7 @@ struct SparkState {
     config: Arc<ProductConfigManager>,
     existing_pods: Vec<Pod>,
     eligible_nodes: HashMap<String, HashMap<String, Vec<Node>>>,
-    role_config: RoleConfigByPropertyKind,
+    validated_role_config: ValidatedRoleConfigByPropertyKind,
 }
 
 impl SparkState {
@@ -356,18 +357,18 @@ impl SparkState {
         trace!("Starting `create_missing_pods`");
 
         let mut changes_applied = false;
-
         // The iteration happens in two stages here, to accommodate the way our operators think
         // about roles and role groups.
         // The hierarchy is:
         // - Roles
         //   - Role groups for this role (user defined)
-        for spark_role in SparkRole::iter() {
-            if let Some(nodes_for_role) = self.eligible_nodes.get(&spark_role.to_string()) {
+        for role in SparkRole::iter() {
+            let role_str = &role.to_string();
+            if let Some(nodes_for_role) = self.eligible_nodes.get(role_str) {
                 for (role_group, nodes) in nodes_for_role {
                     debug!(
                         "Identify missing pods for [{}] role and group [{}]",
-                        spark_role, role_group
+                        role_str, role_group
                     );
                     trace!(
                         "candidate_nodes[{}]: [{:?}]",
@@ -388,12 +389,12 @@ impl SparkState {
                     );
                     trace!(
                         "labels: [{:?}]",
-                        get_role_and_group_labels(&spark_role.to_string(), role_group)
+                        get_role_and_group_labels(role_str, role_group)
                     );
                     let nodes_that_need_pods = k8s_utils::find_nodes_that_need_pods(
                         nodes,
                         &self.existing_pods,
-                        &get_role_and_group_labels(&spark_role.to_string(), role_group),
+                        &get_role_and_group_labels(role_str, role_group),
                     );
 
                     for node in nodes_that_need_pods {
@@ -409,12 +410,26 @@ impl SparkState {
                                 .name
                                 .as_deref()
                                 .unwrap_or("<no node name found>"),
-                            spark_role,
+                            role_str,
                             role_group
                         );
 
+                        // now we have a node that needs pods -> get validated config
+                        // TODO: unwraps cannot fail
+                        let validated_config = self
+                            .validated_role_config
+                            .get(role_str)
+                            .unwrap()
+                            .get(role_group)
+                            .unwrap();
+
                         let (pod, config_maps) = self
-                            .create_pod_and_config_maps(&spark_role, role_group, &node_name)
+                            .create_pod_and_config_maps(
+                                &role,
+                                role_group,
+                                &node_name,
+                                &validated_config,
+                            )
                             .await?;
 
                         self.context.client.create(&pod).await?;
@@ -445,28 +460,18 @@ impl SparkState {
         role: &SparkRole,
         role_group: &str,
         node_name: &str,
+        validated_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
     ) -> Result<(Pod, Vec<ConfigMap>), Error> {
-        let version = &self.context.resource.spec.version.to_string();
-        let validated_config = validate_role_and_group_config(
-            &role.to_string(),
-            role_group,
-            version,
-            &self.role_config,
-            &self.config,
-            false,
-            false,
-        )?;
-
         let mut config_maps = vec![];
         let mut cli_command = vec![];
         let mut env_vars = vec![];
-        let mut data = BTreeMap::new();
+        let mut cm_data = BTreeMap::new();
 
-        for (property_name_kind, config) in &validated_config {
+        for (property_name_kind, config) in validated_config {
             // we need to convert to <String, String> to <String, Option<String>> to deal with
             // CLI flags etc. We can not currently represent that via operator-rs / product-config.
             // This is a preparation for that.
-            let mut transformed_config: BTreeMap<String, Option<String>> = config
+            let transformed_config: BTreeMap<String, Option<String>> = config
                 .into_iter()
                 .map(|(k, v)| (k.to_string(), Some(v.to_string())))
                 .collect();
@@ -475,11 +480,11 @@ impl SparkState {
                 PropertyNameKind::File(file_name) => match file_name.as_str() {
                     SPARK_DEFAULTS_CONF => {
                         let config_as_string = config::convert_map_to_string(config, " ");
-                        data.insert(SPARK_DEFAULTS_CONF.to_string(), config_as_string);
+                        cm_data.insert(SPARK_DEFAULTS_CONF.to_string(), config_as_string);
                     }
                     SPARK_ENV_SH => {
                         let config_as_string = config::convert_map_to_string(config, "=");
-                        data.insert(SPARK_ENV_SH.to_string(), config_as_string);
+                        cm_data.insert(SPARK_ENV_SH.to_string(), config_as_string);
                     }
                     _ => {}
                 },
@@ -528,6 +533,9 @@ impl SparkState {
 
         let cm_name = config::create_config_map_name(&pod_name);
 
+        let master_pods = filter_pods_for_type(&self.existing_pods, &SparkRole::Master);
+        let master_urls = &config::get_master_urls(&master_pods, &self.validated_role_config)?;
+
         // TODO: adapt master urls
         let pod = pod_utils::build_pod(
             &self.context.resource,
@@ -536,14 +544,14 @@ impl SparkState {
             node_name,
             &pod_name,
             &cm_name,
-            &vec![],
+            master_urls,
         )?;
 
         // we only need one config map in spark (spark-defaults.conf and spark-env.sh)
         config_maps.push(config_map::create_config_map(
             &self.context.resource,
             &cm_name,
-            data,
+            cm_data,
         )?);
 
         Ok((pod, config_maps))
@@ -560,12 +568,15 @@ impl SparkState {
         let master_pods = filter_pods_for_type(&self.existing_pods, &SparkRole::Master);
 
         for pod in &worker_pods {
-            if let Some(label_hashed_master_urls) =
-                pod.metadata.labels.get(pod_utils::MASTER_URLS_HASH_LABEL)
-            {
+            if let (Some(label_hashed_master_urls), Some(role), Some(group)) = (
+                pod.metadata.labels.get(pod_utils::MASTER_URLS_HASH_LABEL),
+                pod.metadata.labels.get(APP_COMPONENT_LABEL),
+                pod.metadata.labels.get(APP_ROLE_GROUP_LABEL),
+            ) {
                 let current_hashed_master_urls = pod_utils::get_hashed_master_urls(
-                    &stackable_spark_crd::get_master_urls(&master_pods, &self.context.resource),
+                    &config::get_master_urls(&master_pods, &self.validated_role_config)?,
                 );
+
                 if label_hashed_master_urls != &current_hashed_master_urls {
                     debug!(
                         "Pod [{}] has an outdated '{}' [{}] - required is [{}], deleting it",
@@ -787,13 +798,20 @@ impl ControllerStrategy for SparkStrategy {
         }
 
         let role_config = transform_all_roles_to_config(&context.resource, roles);
+        let validated_role_config = validate_all_roles_and_groups_config(
+            &context.resource.spec.version.to_string(),
+            &role_config,
+            &self.config,
+            false,
+            false,
+        )?;
 
         Ok(SparkState {
             context,
             config: self.config.clone(),
             existing_pods,
             eligible_nodes,
-            role_config,
+            validated_role_config,
         })
     }
 }
