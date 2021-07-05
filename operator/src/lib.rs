@@ -20,15 +20,14 @@ use stackable_operator::labels::{
     APP_COMPONENT_LABEL, APP_INSTANCE_LABEL, APP_ROLE_GROUP_LABEL, APP_VERSION_LABEL,
 };
 use stackable_operator::product_config_utils::{
-    config_for_role_and_group, transform_all_roles_to_config, validate_all_roles_and_groups_config,
-    Configuration, ValidatedRoleConfigByPropertyKind,
+    config_for_role_and_group, ValidatedRoleConfigByPropertyKind,
 };
 use stackable_operator::reconcile::{
     ContinuationStrategy, ReconcileFunctionAction, ReconcileResult, ReconciliationContext,
 };
 use stackable_operator::role_utils::{
     find_nodes_that_fit_selectors, get_role_and_group_labels,
-    list_eligible_nodes_for_role_and_group, Role,
+    list_eligible_nodes_for_role_and_group,
 };
 use stackable_operator::{config_map, k8s_utils};
 use strum::IntoEnumIterator;
@@ -41,8 +40,9 @@ use stackable_spark_crd::{
     SparkVersion,
 };
 
+use crate::config::validated_product_config;
 use crate::error::Error;
-use crate::pod_utils::filter_pods_for_type;
+use crate::pod_utils::{build_containers_and_volumes, filter_pods_for_type};
 
 mod command_utils;
 mod config;
@@ -53,7 +53,6 @@ type SparkReconcileResult = ReconcileResult<error::Error>;
 
 struct SparkState {
     context: ReconciliationContext<SparkCluster>,
-    config: Arc<ProductConfigManager>,
     existing_pods: Vec<Pod>,
     eligible_nodes: HashMap<String, HashMap<String, Vec<Node>>>,
     validated_role_config: ValidatedRoleConfigByPropertyKind,
@@ -317,38 +316,41 @@ impl SparkState {
     /// - Create if no config map of that name exists
     /// - Update if config map exists but the content differs
     /// - Do nothing if the config map exists and the content is identical
-    async fn create_config_map<T>(&self, cm_name: &str, config: Option<T>) -> Result<(), Error> {
-        // let config_map = create_config_map_with_data(&self.context.resource, config, cm_name)?;
-        //
-        // match self
-        //     .context
-        //     .client
-        //     .get::<ConfigMap>(cm_name, Some(&self.context.namespace()))
-        //     .await
-        // {
-        //     Ok(ConfigMap {
-        //         data: existing_config_map_data,
-        //         ..
-        //     }) if existing_config_map_data == config_map.data => {
-        //         debug!(
-        //             "ConfigMap [{}] already exists with identical data, skipping creation!",
-        //             cm_name
-        //         );
-        //     }
-        //     Ok(_) => {
-        //         debug!(
-        //             "ConfigMap [{}] already exists, but differs, updating it!",
-        //             cm_name
-        //         );
-        //         self.context.client.update(&config_map).await?;
-        //     }
-        //     Err(e) => {
-        //         // TODO: This is shit, but works for now. If there is an actual error in comes with
-        //         //   K8S, it will most probably also occur further down and be properly handled
-        //         debug!("Error getting ConfigMap [{}]: [{:?}]", cm_name, e);
-        //         self.context.client.create(&config_map).await?;
-        //     }
-        // }
+    async fn create_config_map(&self, config_map: ConfigMap) -> Result<(), Error> {
+        let cm_name = match config_map.metadata.name.as_deref() {
+            None => return Err(Error::InvalidConfigMap),
+            Some(name) => name,
+        };
+
+        match self
+            .context
+            .client
+            .get::<ConfigMap>(cm_name, Some(&self.context.namespace()))
+            .await
+        {
+            Ok(ConfigMap {
+                data: existing_config_map_data,
+                ..
+            }) if existing_config_map_data == config_map.data => {
+                debug!(
+                    "ConfigMap [{}] already exists with identical data, skipping creation!",
+                    cm_name
+                );
+            }
+            Ok(_) => {
+                debug!(
+                    "ConfigMap [{}] already exists, but differs, updating it!",
+                    cm_name
+                );
+                self.context.client.update(&config_map).await?;
+            }
+            Err(e) => {
+                // TODO: This is shit, but works for now. If there is an actual error in comes with
+                //   K8S, it will most probably also occur further down and be properly handled
+                debug!("Error getting ConfigMap [{}]: [{:?}]", cm_name, e);
+                self.context.client.create(&config_map).await?;
+            }
+        }
 
         Ok(())
     }
@@ -414,28 +416,23 @@ impl SparkState {
                             role_group
                         );
 
-                        // now we have a node that needs pods -> get validated config
-                        // TODO: unwraps cannot fail
-                        let validated_config = self
-                            .validated_role_config
-                            .get(role_str)
-                            .unwrap()
-                            .get(role_group)
-                            .unwrap();
-
                         let (pod, config_maps) = self
                             .create_pod_and_config_maps(
                                 &role,
                                 role_group,
                                 &node_name,
-                                &validated_config,
+                                &config_for_role_and_group(
+                                    role_str,
+                                    role_group,
+                                    &self.validated_role_config,
+                                )?,
                             )
                             .await?;
 
                         self.context.client.create(&pod).await?;
 
-                        for config_map in &config_maps {
-                            self.context.client.create(config_map).await?;
+                        for config_map in config_maps {
+                            self.create_config_map(config_map).await?;
                         }
 
                         changes_applied = true;
@@ -463,7 +460,7 @@ impl SparkState {
         validated_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
     ) -> Result<(Pod, Vec<ConfigMap>), Error> {
         let mut config_maps = vec![];
-        let mut cli_command = vec![];
+        let mut cli_arguments = vec![];
         let mut env_vars = vec![];
         let mut cm_data = BTreeMap::new();
 
@@ -472,7 +469,7 @@ impl SparkState {
             // CLI flags etc. We can not currently represent that via operator-rs / product-config.
             // This is a preparation for that.
             let transformed_config: BTreeMap<String, Option<String>> = config
-                .into_iter()
+                .iter()
                 .map(|(k, v)| (k.to_string(), Some(v.to_string())))
                 .collect();
 
@@ -510,10 +507,10 @@ impl SparkState {
                         }
                         // single argument / flag
                         if property_value.is_none() {
-                            cli_command.push(property_name);
+                            cli_arguments.push(property_name);
                         } else {
                             // key value pair
-                            cli_command.push(format!(
+                            cli_arguments.push(format!(
                                 "--{} {}",
                                 property_name,
                                 property_value.unwrap()
@@ -536,18 +533,33 @@ impl SparkState {
         let master_pods = filter_pods_for_type(&self.existing_pods, &SparkRole::Master);
         let master_urls = &config::get_master_urls(&master_pods, &self.validated_role_config)?;
 
-        // TODO: adapt master urls
-        let pod = pod_utils::build_pod(
-            &self.context.resource,
-            &role,
-            role_group,
-            node_name,
-            &pod_name,
+        let (containers, volumes) = build_containers_and_volumes(
+            &self.context.resource.spec,
+            role,
             &cm_name,
             master_urls,
+            cli_arguments,
+            env_vars,
+        );
+
+        let labels = pod_utils::build_labels(
+            &role.to_string(),
+            role_group,
+            &self.context.resource.name(),
+            &self.context.resource.spec.version.to_string(),
+            master_urls,
+        );
+
+        let pod = pod_utils::build_pod(
+            &self.context.resource,
+            labels,
+            node_name,
+            &pod_name,
+            containers,
+            volumes,
         )?;
 
-        // we only need one config map in spark (spark-defaults.conf and spark-env.sh)
+        // we only need one config map in spark containing spark-defaults.conf and spark-env.sh
         config_maps.push(config_map::create_config_map(
             &self.context.resource,
             &cm_name,
@@ -567,20 +579,22 @@ impl SparkState {
         let worker_pods = filter_pods_for_type(&self.existing_pods, &SparkRole::Worker);
         let master_pods = filter_pods_for_type(&self.existing_pods, &SparkRole::Master);
 
+        let current_hashed_master_urls = pod_utils::get_hashed_master_urls(
+            &config::get_master_urls(&master_pods, &self.validated_role_config)?,
+        );
+
         for pod in &worker_pods {
             if let (Some(label_hashed_master_urls), Some(role), Some(group)) = (
                 pod.metadata.labels.get(pod_utils::MASTER_URLS_HASH_LABEL),
                 pod.metadata.labels.get(APP_COMPONENT_LABEL),
                 pod.metadata.labels.get(APP_ROLE_GROUP_LABEL),
             ) {
-                let current_hashed_master_urls = pod_utils::get_hashed_master_urls(
-                    &config::get_master_urls(&master_pods, &self.validated_role_config)?,
-                );
-
                 if label_hashed_master_urls != &current_hashed_master_urls {
                     debug!(
-                        "Pod [{}] has an outdated '{}' [{}] - required is [{}], deleting it",
+                        "Pod [{}] with Role [{}] and Group [{}] has an outdated '{}' [{}] - required is [{}], deleting it",
                         &pod.name(),
+                        role,
+                        group,
                         pod_utils::MASTER_URLS_HASH_LABEL,
                         label_hashed_master_urls,
                         current_hashed_master_urls,
@@ -752,66 +766,11 @@ impl ControllerStrategy for SparkStrategy {
             );
         }
 
-        let mut roles: HashMap<
-            String,
-            (
-                Vec<PropertyNameKind>,
-                Role<Box<dyn Configuration<Configurable = SparkCluster>>>,
-            ),
-        > = HashMap::new();
-        roles.insert(
-            SparkRole::Master.to_string(),
-            (
-                vec![
-                    PropertyNameKind::File(SPARK_ENV_SH.to_string()),
-                    PropertyNameKind::File(SPARK_DEFAULTS_CONF.to_string()),
-                    PropertyNameKind::Env,
-                ],
-                context.resource.spec.masters.clone().into_dyn(),
-            ),
-        );
-
-        roles.insert(
-            SparkRole::Worker.to_string(),
-            (
-                vec![
-                    PropertyNameKind::File(SPARK_ENV_SH.to_string()),
-                    PropertyNameKind::File(SPARK_DEFAULTS_CONF.to_string()),
-                    PropertyNameKind::Env,
-                ],
-                context.resource.spec.workers.clone().into_dyn(),
-            ),
-        );
-
-        if let Some(history_servers) = &context.resource.spec.history_servers {
-            roles.insert(
-                SparkRole::HistoryServer.to_string(),
-                (
-                    vec![
-                        PropertyNameKind::File(SPARK_ENV_SH.to_string()),
-                        PropertyNameKind::File(SPARK_DEFAULTS_CONF.to_string()),
-                        PropertyNameKind::Env,
-                    ],
-                    history_servers.clone().into_dyn(),
-                ),
-            );
-        }
-
-        let role_config = transform_all_roles_to_config(&context.resource, roles);
-        let validated_role_config = validate_all_roles_and_groups_config(
-            &context.resource.spec.version.to_string(),
-            &role_config,
-            &self.config,
-            false,
-            false,
-        )?;
-
         Ok(SparkState {
+            validated_role_config: validated_product_config(&context.resource, &self.config)?,
             context,
-            config: self.config.clone(),
             existing_pods,
             eligible_nodes,
-            validated_role_config,
         })
     }
 }

@@ -3,14 +3,16 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use k8s_openapi::api::core::v1::{ConfigMap, EnvVar, Pod, PodSpec};
-use stackable_operator::error::OperatorResult;
-
+use k8s_openapi::api::core::v1::{Pod, PodSpec};
 use product_config::types::PropertyNameKind;
+use stackable_operator::error::OperatorResult;
 use stackable_operator::labels::{APP_COMPONENT_LABEL, APP_ROLE_GROUP_LABEL};
 use stackable_operator::product_config_utils::{
-    config_for_role_and_group, ValidatedRoleConfigByPropertyKind,
+    config_for_role_and_group, transform_all_roles_to_config, validate_all_roles_and_groups_config,
+    ValidatedRoleConfigByPropertyKind,
 };
+
+use product_config::ProductConfigManager;
 use stackable_spark_common::constants::*;
 use stackable_spark_crd::{SparkCluster, SparkRole};
 
@@ -40,25 +42,6 @@ pub fn adapt_worker_command(role: &SparkRole, master_urls: &[String]) -> Option<
     }
 
     Some(adapted_command)
-}
-
-/// The SPARK_CONFIG_DIR and SPARK_NO_DAEMONIZE must be provided as env variable in the container.
-/// SPARK_CONFIG_DIR must be available before the start up of the nodes (master, worker, history-server) to point to our custom configuration.
-/// SPARK_NO_DAEMONIZE stops the node processes to be started in the background, which causes the agent to lose track of the processes.
-/// The Agent then assumes the processes stopped or died and recreates them over and over again.
-pub fn create_required_startup_env() -> Vec<EnvVar> {
-    vec![
-        EnvVar {
-            name: SPARK_NO_DAEMONIZE.to_string(),
-            value: Some("true".to_string()),
-            ..EnvVar::default()
-        },
-        EnvVar {
-            name: SPARK_CONF_DIR.to_string(),
-            value: Some("{{configroot}}/conf".to_string()),
-            ..EnvVar::default()
-        },
-    ]
 }
 
 /// Unroll a map into a String using a given assignment character (for writing config maps)
@@ -147,6 +130,60 @@ pub fn get_master_urls(
     Ok(master_urls)
 }
 
+pub fn validated_product_config(
+    resource: &SparkCluster,
+    product_config: &ProductConfigManager,
+) -> OperatorResult<ValidatedRoleConfigByPropertyKind> {
+    let mut roles = HashMap::new();
+    roles.insert(
+        SparkRole::Master.to_string(),
+        (
+            vec![
+                PropertyNameKind::File(SPARK_ENV_SH.to_string()),
+                PropertyNameKind::File(SPARK_DEFAULTS_CONF.to_string()),
+                PropertyNameKind::Env,
+            ],
+            resource.spec.masters.clone().into_dyn(),
+        ),
+    );
+
+    roles.insert(
+        SparkRole::Worker.to_string(),
+        (
+            vec![
+                PropertyNameKind::File(SPARK_ENV_SH.to_string()),
+                PropertyNameKind::File(SPARK_DEFAULTS_CONF.to_string()),
+                PropertyNameKind::Env,
+            ],
+            resource.spec.workers.clone().into_dyn(),
+        ),
+    );
+
+    if let Some(history_servers) = &resource.spec.history_servers {
+        roles.insert(
+            SparkRole::HistoryServer.to_string(),
+            (
+                vec![
+                    PropertyNameKind::File(SPARK_ENV_SH.to_string()),
+                    PropertyNameKind::File(SPARK_DEFAULTS_CONF.to_string()),
+                    PropertyNameKind::Env,
+                ],
+                history_servers.clone().into_dyn(),
+            ),
+        );
+    }
+
+    let role_config = transform_all_roles_to_config(resource, roles);
+
+    validate_all_roles_and_groups_config(
+        &resource.spec.version.to_string(),
+        &role_config,
+        &product_config,
+        false,
+        false,
+    )
+}
+
 /// Create master url in format: <node_name>:<port>
 ///
 /// # Arguments
@@ -159,10 +196,9 @@ fn create_master_url(node_name: &str, port: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use stackable_spark_common::constants;
-    use stackable_spark_test_utils::cluster::{Data, TestSparkCluster};
-
     use super::*;
+    use stackable_spark_crd::SparkCluster;
+    use stackable_spark_test_utils::cluster::{Data, TestSparkCluster};
 
     #[test]
     fn test_adapt_worker_command() {
@@ -176,91 +212,6 @@ mod tests {
     }
 
     #[test]
-    fn test_required_startup_env() {
-        let env_vars = create_required_startup_env();
-        assert!(env_vars.contains(&EnvVar {
-            name: SPARK_NO_DAEMONIZE.to_string(),
-            value: Some("true".to_string()),
-            ..EnvVar::default()
-        }));
-        assert!(env_vars.contains(&EnvVar {
-            name: SPARK_CONF_DIR.to_string(),
-            value: Some("{{configroot}}/conf".to_string()),
-            ..EnvVar::default()
-        }));
-    }
-
-    #[test]
-    fn test_get_spark_defaults() {
-        let spark_cluster: SparkCluster = stackable_spark_test_utils::setup_test_cluster();
-
-        let spark_defaults = spark_cluster
-            .spec
-            .get_config(&SparkRole::Master, TestSparkCluster::MASTER_1_ROLE_GROUP)
-            .unwrap()
-            .get_spark_defaults_conf(&spark_cluster.spec);
-
-        assert!(spark_defaults.contains_key(constants::SPARK_DEFAULTS_EVENT_LOG_DIR));
-        assert_eq!(
-            spark_defaults.get(constants::SPARK_DEFAULTS_EVENT_LOG_DIR),
-            Some(&TestSparkCluster::CLUSTER_LOG_DIR.to_string())
-        );
-
-        assert!(spark_defaults.contains_key(constants::SPARK_DEFAULTS_AUTHENTICATE_SECRET));
-        assert_eq!(
-            spark_defaults.get(constants::SPARK_DEFAULTS_AUTHENTICATE_SECRET),
-            Some(&TestSparkCluster::CLUSTER_SECRET.to_string())
-        );
-
-        assert!(spark_defaults.contains_key(constants::SPARK_DEFAULTS_PORT_MAX_RETRIES));
-        assert_eq!(
-            spark_defaults.get(constants::SPARK_DEFAULTS_PORT_MAX_RETRIES),
-            Some(&TestSparkCluster::CLUSTER_MAX_PORT_RETRIES.to_string())
-        );
-
-        assert!(spark_defaults.contains_key(constants::SPARK_DEFAULTS_MASTER_PORT));
-        assert_eq!(
-            spark_defaults.get(constants::SPARK_DEFAULTS_MASTER_PORT),
-            Some(&TestSparkCluster::MASTER_1_CONFIG_PORT.to_string())
-        );
-    }
-
-    #[test]
-    fn test_get_env_variables() {
-        let spark_cluster: SparkCluster = stackable_spark_test_utils::setup_test_cluster();
-
-        let spark_env_sh = spark_cluster
-            .spec
-            .get_config(&SparkRole::Worker, TestSparkCluster::WORKER_1_ROLE_GROUP)
-            .unwrap()
-            .get_spark_env_sh();
-
-        assert!(spark_env_sh.contains_key(constants::SPARK_ENV_WORKER_PORT));
-        assert_eq!(
-            spark_env_sh.get(constants::SPARK_ENV_WORKER_PORT),
-            Some(&TestSparkCluster::WORKER_1_PORT.to_string())
-        );
-
-        assert!(spark_env_sh.contains_key(constants::SPARK_ENV_WORKER_WEBUI_PORT));
-        assert_eq!(
-            spark_env_sh.get(constants::SPARK_ENV_WORKER_WEBUI_PORT),
-            Some(&TestSparkCluster::WORKER_1_WEBUI_PORT.to_string())
-        );
-
-        assert!(spark_env_sh.contains_key(constants::SPARK_ENV_WORKER_MEMORY));
-        assert_eq!(
-            spark_env_sh.get(constants::SPARK_ENV_WORKER_MEMORY),
-            Some(&TestSparkCluster::WORKER_1_ENV_MEMORY.to_string())
-        );
-
-        assert!(spark_env_sh.contains_key(constants::SPARK_ENV_WORKER_CORES));
-        assert_eq!(
-            spark_env_sh.get(constants::SPARK_ENV_WORKER_CORES),
-            Some(&TestSparkCluster::WORKER_1_CORES.to_string())
-        );
-    }
-
-    #[test]
     fn test_create_config_map_name() {
         let pod_name = "my_pod";
 
@@ -271,33 +222,47 @@ mod tests {
     }
 
     #[test]
-    fn test_create_config_maps() {
-        let mut spark_cluster: SparkCluster = stackable_spark_test_utils::setup_test_cluster();
-        spark_cluster.metadata.uid = Some("12345".to_string());
+    fn test_get_master_urls() {
+        let spark_cluster: SparkCluster = stackable_spark_test_utils::setup_test_cluster();
+        let master_pods = stackable_spark_test_utils::create_master_pods();
+        let product_config =
+            ProductConfigManager::from_yaml_file("../deploy/config-spec/properties.yaml").unwrap();
 
-        let config = spark_cluster
-            .spec
-            .get_config(&SparkRole::Worker, TestSparkCluster::WORKER_1_ROLE_GROUP);
+        let validated_config = validated_product_config(&spark_cluster, &product_config).unwrap();
 
-        let pod_name = "my_pod";
-        let cm_name = create_config_map_name(pod_name);
+        let master_urls = get_master_urls(master_pods.as_slice(), &validated_config).unwrap();
 
-        let config_map = create_config_map_with_data(&spark_cluster, config, &cm_name).unwrap();
+        assert!(!master_urls.is_empty());
 
-        let cm_data = config_map.data.unwrap();
-        assert!(cm_data.contains_key(constants::SPARK_DEFAULTS_CONF));
-        assert!(cm_data.contains_key(constants::SPARK_ENV_SH));
+        // For master_1 we expect the config port
+        assert!(master_urls.contains(&create_master_url(
+            TestSparkCluster::MASTER_1_NODE_NAME,
+            &TestSparkCluster::MASTER_1_OVERRIDE_PORT.to_string(),
+        )));
+        // For master_2 we expect the env port
+        assert!(master_urls.contains(&create_master_url(
+            TestSparkCluster::MASTER_2_NODE_NAME,
+            &TestSparkCluster::MASTER_2_PORT.to_string()
+        )));
+        // For master_3 we expect the default port
+        assert!(master_urls.contains(&create_master_url(
+            TestSparkCluster::MASTER_3_NODE_NAME,
+            &stackable_spark_test_utils::MASTER_DEFAULT_PORT.to_string()
+        )));
+    }
 
-        assert!(cm_data
-            .get(constants::SPARK_DEFAULTS_CONF)
-            .unwrap()
-            .contains(constants::SPARK_DEFAULTS_AUTHENTICATE_SECRET));
-
-        assert!(cm_data
-            .get(constants::SPARK_ENV_SH)
-            .unwrap()
-            .contains(constants::SPARK_ENV_WORKER_PORT));
-
-        // TODO: add more asserts
+    #[test]
+    fn test_create_master_url() {
+        assert_eq!(
+            create_master_url(
+                TestSparkCluster::MASTER_1_NODE_NAME,
+                &TestSparkCluster::MASTER_1_PORT.to_string()
+            ),
+            format!(
+                "{}:{}",
+                TestSparkCluster::MASTER_1_NODE_NAME,
+                &TestSparkCluster::MASTER_1_PORT.to_string()
+            )
+        );
     }
 }

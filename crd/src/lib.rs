@@ -431,99 +431,7 @@ impl SparkVersion {
 
 #[cfg(test)]
 mod tests {
-    use stackable_spark_common::constants::SPARK_DEFAULTS_MASTER_PORT;
-    use stackable_spark_test_utils::cluster::{Data, TestSparkCluster};
-
     use super::*;
-
-    #[test]
-    fn test_get_spark_defaults_master() {
-        let mut spark_cluster: SparkCluster = stackable_spark_test_utils::setup_test_cluster();
-        spark_cluster.metadata.uid = Some("12345".to_string());
-
-        let master_1_config = spark_cluster
-            .spec
-            .get_config(&SparkRole::Master, TestSparkCluster::MASTER_1_ROLE_GROUP)
-            .unwrap();
-
-        let spark_defaults = master_1_config.get_spark_defaults_conf(&spark_cluster.spec);
-
-        assert_eq!(
-            spark_defaults.get(SPARK_DEFAULTS_MASTER_PORT),
-            Some(&TestSparkCluster::MASTER_1_CONFIG_PORT.to_string())
-        );
-
-        assert_eq!(
-            spark_defaults.get(SPARK_DEFAULTS_EVENT_LOG_DIR),
-            Some(&TestSparkCluster::CLUSTER_LOG_DIR.to_string())
-        );
-
-        assert_eq!(
-            spark_defaults.get(SPARK_DEFAULTS_PORT_MAX_RETRIES),
-            Some(&TestSparkCluster::CLUSTER_MAX_PORT_RETRIES.to_string())
-        );
-
-        assert_eq!(
-            spark_defaults.get(SPARK_DEFAULTS_AUTHENTICATE_SECRET),
-            Some(&TestSparkCluster::CLUSTER_SECRET.to_string())
-        );
-    }
-
-    #[test]
-    fn test_get_spark_env_master() {
-        let mut spark_cluster: SparkCluster = stackable_spark_test_utils::setup_test_cluster();
-        spark_cluster.metadata.uid = Some("12345".to_string());
-
-        let master_1_config = spark_cluster
-            .spec
-            .get_config(&SparkRole::Master, TestSparkCluster::MASTER_1_ROLE_GROUP)
-            .unwrap();
-
-        let spark_env = master_1_config.get_spark_env_sh();
-
-        assert_eq!(
-            spark_env.get(SPARK_ENV_MASTER_PORT),
-            Some(&TestSparkCluster::MASTER_1_ENV_PORT.to_string())
-        );
-
-        assert_eq!(
-            spark_env.get(SPARK_ENV_MASTER_WEBUI_PORT),
-            Some(&TestSparkCluster::MASTER_1_WEB_UI_PORT.to_string())
-        );
-    }
-
-    #[test]
-    fn test_get_spark_env_worker() {
-        let mut spark_cluster: SparkCluster = stackable_spark_test_utils::setup_test_cluster();
-        spark_cluster.metadata.uid = Some("12345".to_string());
-
-        let master_1_config = spark_cluster
-            .spec
-            .get_config(&SparkRole::Worker, TestSparkCluster::WORKER_1_ROLE_GROUP)
-            .unwrap();
-
-        let spark_env = master_1_config.get_spark_env_sh();
-
-        assert_eq!(
-            spark_env.get(SPARK_ENV_WORKER_PORT),
-            Some(&TestSparkCluster::WORKER_1_PORT.to_string())
-        );
-
-        assert_eq!(
-            spark_env.get(SPARK_ENV_WORKER_WEBUI_PORT),
-            Some(&TestSparkCluster::WORKER_1_WEBUI_PORT.to_string())
-        );
-
-        assert_eq!(
-            spark_env.get(SPARK_ENV_WORKER_MEMORY),
-            Some(&TestSparkCluster::WORKER_1_ENV_MEMORY.to_string())
-        );
-
-        assert_eq!(
-            spark_env.get(SPARK_ENV_WORKER_CORES),
-            Some(&TestSparkCluster::WORKER_1_CORES.to_string())
-        );
-    }
 
     #[test]
     fn test_spark_node_type_get_command() {
@@ -570,45 +478,6 @@ mod tests {
                 .is_downgrade(&SparkVersion::v3_0_1)
                 .unwrap(),
             false
-        );
-    }
-
-    #[test]
-    fn test_get_master_urls() {
-        let spark_cluster: SparkCluster = stackable_spark_test_utils::setup_test_cluster();
-
-        let master_pods = stackable_spark_test_utils::create_master_pods();
-        let master_urls = get_master_urls(master_pods.as_slice(), &spark_cluster);
-        assert!(!master_urls.is_empty());
-        // For master_1 we expect the config port
-        assert!(master_urls.contains(&create_master_url(
-            TestSparkCluster::MASTER_1_NODE_NAME,
-            &TestSparkCluster::MASTER_1_CONFIG_PORT.to_string()
-        )));
-        // For master_2 we expect the env port
-        assert!(master_urls.contains(&create_master_url(
-            TestSparkCluster::MASTER_2_NODE_NAME,
-            &TestSparkCluster::MASTER_2_PORT.to_string()
-        )));
-        // For master_3 we expect the default port
-        assert!(master_urls.contains(&create_master_url(
-            TestSparkCluster::MASTER_3_NODE_NAME,
-            &stackable_spark_test_utils::MASTER_DEFAULT_PORT.to_string()
-        )));
-    }
-
-    #[test]
-    fn test_create_master_url() {
-        assert_eq!(
-            create_master_url(
-                TestSparkCluster::MASTER_1_NODE_NAME,
-                &TestSparkCluster::MASTER_1_CONFIG_PORT.to_string()
-            ),
-            format!(
-                "{}:{}",
-                TestSparkCluster::MASTER_1_NODE_NAME,
-                &TestSparkCluster::MASTER_1_CONFIG_PORT.to_string()
-            )
         );
     }
 }

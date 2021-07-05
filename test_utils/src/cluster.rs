@@ -20,8 +20,7 @@ pub trait Data {
     const MASTER_1_INSTANCES: usize;
     const MASTER_1_PORT: u16;
     const MASTER_1_WEB_UI_PORT: u16;
-    const MASTER_1_CONFIG_PORT: usize;
-    const MASTER_1_ENV_PORT: usize;
+    const MASTER_1_OVERRIDE_PORT: u16;
     const MASTER_1_ROLE_GROUP: &'static str;
 
     const MASTER_2_NODE_NAME: &'static str;
@@ -80,8 +79,7 @@ impl Data for TestSparkCluster {
     const MASTER_1_INSTANCES: usize = 1;
     const MASTER_1_PORT: u16 = 7078;
     const MASTER_1_WEB_UI_PORT: u16 = 8081;
-    const MASTER_1_CONFIG_PORT: usize = 10001;
-    const MASTER_1_ENV_PORT: usize = 10002;
+    const MASTER_1_OVERRIDE_PORT: u16 = 10002;
     const MASTER_1_ROLE_GROUP: &'static str = "master_1";
 
     const MASTER_2_NODE_NAME: &'static str = "master_node_2";

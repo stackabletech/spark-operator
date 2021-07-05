@@ -2,9 +2,8 @@
 use crate::config;
 use crate::error::Error;
 use k8s_openapi::api::core::v1::{
-    ConfigMapVolumeSource, Container, Pod, PodSpec, Volume, VolumeMount,
+    ConfigMapVolumeSource, Container, EnvVar, Pod, PodSpec, Volume, VolumeMount,
 };
-use kube::ResourceExt;
 use stackable_operator::krustlet::create_tolerations;
 use stackable_operator::labels;
 use stackable_operator::metadata;
@@ -29,38 +28,22 @@ const EVENT_VOLUME: &str = "event-volume";
 ///
 /// # Arguments
 /// * `resource` - SparkCluster
-/// * `role` - The cluster role type (e.g. master, worker, history-server)
-/// * `role_group` - The role group of the selector
+/// * `labels` - Required labels for the pod
 /// * `node_name` - Specific node_name (host) of the pod
 /// * `pod_name` - Specific pod_name
-/// * `master_urls` - Slice of all known master urls
+/// * `containers` - Pod containers with image, volume mounts, cli arguments and env variables
+/// * `volumes` - Pod volumes
 ///
 pub fn build_pod(
     resource: &SparkCluster,
-    role: &SparkRole,
-    role_group: &str,
+    labels: BTreeMap<String, String>,
     node_name: &str,
     pod_name: &str,
-    cm_name: &str,
-    master_urls: &[String],
+    containers: Vec<Container>,
+    volumes: Vec<Volume>,
 ) -> Result<Pod, Error> {
-    let cluster_name = &resource.name();
-
-    let (containers, volumes) = build_containers(&resource.spec, role, &cm_name, master_urls);
-
     Ok(Pod {
-        metadata: metadata::build_metadata(
-            pod_name.to_string(),
-            Some(build_labels(
-                &role.to_string(),
-                role_group,
-                cluster_name,
-                &resource.spec.version.to_string(),
-                master_urls,
-            )),
-            resource,
-            true,
-        )?,
+        metadata: metadata::build_metadata(pod_name.to_string(), Some(labels), resource, true)?,
         spec: Some(PodSpec {
             node_name: Some(node_name.to_string()),
             tolerations: create_tolerations(),
@@ -79,20 +62,29 @@ pub fn build_pod(
 /// * `role` - The cluster role (e.g. master, worker, history-server)
 /// * `cm_name` - The name of the config map
 /// * `master_urls` - Slice of all known master urls
+/// * `cli` - Additional CLI arguments
+/// * `env` - Additional ENV variables
 ///
-fn build_containers(
+pub fn build_containers_and_volumes(
     spec: &SparkClusterSpec,
     role: &SparkRole,
     cm_name: &str,
     master_urls: &[String],
+    cli: Vec<String>,
+    env: Vec<EnvVar>,
 ) -> (Vec<Container>, Vec<Volume>) {
     let image_name = format!("spark:{}", &spec.version.to_string());
 
-    let mut command = vec![role.get_command(&spec.version.to_string())];
+    // cli command
+    let command = vec![role.get_command(&spec.version.to_string())];
+    // cli arguments
+    let mut args = vec![];
     // adapt worker command with master url(s)
     if let Some(master_urls) = config::adapt_worker_command(role, master_urls) {
-        command.push(master_urls);
+        args.push(master_urls);
     }
+    // extends with cli parameter
+    args.extend(cli.into_iter());
 
     let log_dir = if let Some(CommonConfiguration {
         config: Some(cfg), ..
@@ -107,8 +99,9 @@ fn build_containers(
         image: Some(image_name),
         name: "spark".to_string(),
         command,
+        args,
         volume_mounts: create_volume_mounts(&log_dir),
-        env: config::create_required_startup_env(),
+        env,
         ..Container::default()
     }];
 
@@ -179,7 +172,7 @@ fn create_volume_mounts(log_dir: &Option<String>) -> Vec<VolumeMount> {
 /// * `version` - The current cluster version
 /// * `master_urls` - Slice of all known master urls
 ///
-fn build_labels(
+pub fn build_labels(
     role: &str,
     role_group: &str,
     cluster_name: &str,
@@ -204,7 +197,7 @@ fn build_labels(
 
     labels.insert(labels::APP_VERSION_LABEL.to_string(), version.to_string());
 
-    if role == &SparkRole::Worker.to_string() {
+    if role == SparkRole::Worker.to_string() {
         labels.insert(
             MASTER_URLS_HASH_LABEL.to_string(),
             get_hashed_master_urls(master_urls),
@@ -274,53 +267,46 @@ pub fn filter_pods_for_type(pods: &[Pod], node_type: &SparkRole) -> Vec<Pod> {
 mod tests {
     use super::*;
     use crate::config::adapt_worker_command;
-    use stackable_spark_test_utils::cluster::{Data, TestSparkCluster};
+    use kube::ResourceExt;
 
     #[test]
     fn test_build_master_pod() {
         let mut spark_cluster: SparkCluster = stackable_spark_test_utils::setup_test_cluster();
         spark_cluster.metadata.uid = Some("12345".to_string());
 
-        let master_urls = stackable_spark_test_utils::create_master_urls();
         let cluster_name = &spark_cluster.name();
         let node_type = &SparkRole::Master;
 
-        let pod = build_pod(
-            &spark_cluster,
-            TestSparkCluster::MASTER_1_NODE_NAME,
-            TestSparkCluster::MASTER_1_ROLE_GROUP,
-            node_type,
-            master_urls.as_slice(),
-        )
-        .unwrap();
+        let master_pods = stackable_spark_test_utils::create_master_pods();
 
-        // check labels
-        assert!(pod.metadata.labels.is_some());
+        for pod in master_pods {
+            assert!(!pod.metadata.labels.is_empty());
 
-        let labels = pod.metadata.labels.as_ref().unwrap();
+            let labels = &pod.metadata.labels;
 
-        assert_eq!(
-            labels.get(labels::APP_VERSION_LABEL),
-            Some(&spark_cluster.spec.version.to_string())
-        );
+            assert_eq!(
+                labels.get(labels::APP_VERSION_LABEL),
+                Some(&spark_cluster.spec.version.to_string())
+            );
 
-        assert_eq!(labels.get(labels::APP_INSTANCE_LABEL), Some(cluster_name));
+            assert_eq!(labels.get(labels::APP_INSTANCE_LABEL), Some(cluster_name));
 
-        assert_eq!(
-            labels.get(labels::APP_COMPONENT_LABEL),
-            Some(&node_type.to_string())
-        );
+            assert_eq!(
+                labels.get(labels::APP_COMPONENT_LABEL),
+                Some(&node_type.to_string())
+            );
 
-        // check containers
-        let containers = pod.spec.clone().unwrap().containers;
-        assert_eq!(containers.len(), 1);
-        let container = containers.get(0).unwrap();
-        assert_eq!(
-            container.command.clone().unwrap(),
-            vec![node_type.get_command(&spark_cluster.spec.version.to_string())]
-        );
-        // only start command for masters
-        assert_eq!(container.command.clone().unwrap().len(), 1);
+            // check containers
+            let containers = pod.spec.clone().unwrap().containers;
+            assert_eq!(containers.len(), 1);
+            let container = containers.get(0).unwrap();
+            assert_eq!(
+                container.command,
+                vec![node_type.get_command(&spark_cluster.spec.version.to_string())]
+            );
+            // only start command for masters
+            assert_eq!(container.command.len(), 1);
+        }
     }
 
     #[test]
@@ -332,59 +318,51 @@ mod tests {
         let cluster_name = &spark_cluster.name();
         let node_type = &SparkRole::Worker;
 
-        let pod = build_pod(
-            &spark_cluster,
-            TestSparkCluster::WORKER_1_NODE_NAME,
-            TestSparkCluster::WORKER_1_ROLE_GROUP,
-            node_type,
-            master_urls.as_slice(),
-        )
-        .unwrap();
+        let worker_pods = stackable_spark_test_utils::create_worker_pods();
 
-        // check labels
-        assert!(pod.metadata.labels.is_some());
+        for pod in worker_pods {
+            assert!(!pod.metadata.labels.is_empty());
 
-        let labels = pod.metadata.labels.unwrap();
+            let labels = &pod.metadata.labels;
 
-        assert_eq!(
-            labels.get(labels::APP_VERSION_LABEL),
-            Some(&spark_cluster.spec.version.to_string())
-        );
+            assert_eq!(
+                labels.get(labels::APP_VERSION_LABEL),
+                Some(&spark_cluster.spec.version.to_string())
+            );
 
-        assert_eq!(labels.get(labels::APP_INSTANCE_LABEL), Some(cluster_name));
+            assert_eq!(labels.get(labels::APP_INSTANCE_LABEL), Some(cluster_name));
 
-        assert_eq!(
-            labels.get(labels::APP_COMPONENT_LABEL),
-            Some(&node_type.to_string())
-        );
+            assert_eq!(
+                labels.get(labels::APP_COMPONENT_LABEL),
+                Some(&node_type.to_string())
+            );
 
-        assert_eq!(
-            labels.get(MASTER_URLS_HASH_LABEL),
-            Some(&get_hashed_master_urls(master_urls.as_slice()))
-        );
+            assert_eq!(
+                labels.get(MASTER_URLS_HASH_LABEL),
+                Some(&get_hashed_master_urls(master_urls.as_slice()))
+            );
 
-        // check node name
-        assert_eq!(
-            pod.spec.as_ref().unwrap().node_name,
-            Some(TestSparkCluster::WORKER_1_NODE_NAME.to_string())
-        );
+            // check containers
+            let containers = pod.spec.unwrap().containers;
+            assert_eq!(containers.len(), 1);
 
-        // check containers
-        let containers = pod.spec.unwrap().containers;
-        assert_eq!(containers.len(), 1);
+            let container = containers.get(0).unwrap();
 
-        let container = containers.get(0).unwrap();
-        // start command and master urls for workers
-        let command = container.command.clone().unwrap();
-        assert_eq!(command.len(), 2);
+            // start command and master urls for workers
+            let command = container.command.clone();
+            let args = container.args.clone();
+            assert_eq!(command.len(), 1);
+            assert_eq!(
+                command,
+                vec![node_type.get_command(&spark_cluster.spec.version.to_string()),]
+            );
 
-        assert_eq!(
-            command,
-            vec![
-                node_type.get_command(&spark_cluster.spec.version.to_string()),
-                adapt_worker_command(node_type, master_urls.as_slice()).unwrap()
-            ]
-        );
+            assert_eq!(args.len(), 1);
+            assert_eq!(
+                args,
+                vec![adapt_worker_command(node_type, master_urls.as_slice()).unwrap()]
+            );
+        }
     }
 
     #[test]

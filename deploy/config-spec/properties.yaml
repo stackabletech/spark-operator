@@ -329,6 +329,47 @@ properties:
       asOfVersion: "1.1.1"
       description: "Maximum number of retries when binding to a port before giving up. When a port is given a specific value (non 0), each subsequent retry will increment the port used in the previous attempt by 1 before retrying. This essentially allows it to try a range of ports from the start port specified to port + maxRetries."
 
+  - property: &sparkNoDaemonize
+      propertyNames:
+        - name: "SPARK_NO_DAEMONIZE"
+          kind:
+            type: "env"
+      datatype:
+        type: "bool"
+      recommendedValues:
+        - fromVersion: "2.0.0"
+          value: "true"
+      roles:
+        - name: "master"
+          required: true
+        - name: "slave"
+          required: true
+        - name: "history-server"
+          required: true
+      asOfVersion: "2.0.0"
+      description: "Run spark processes in foreground if true. Useful for systemd (default: false)"
+
+  - property: &sparkConfDir
+      propertyNames:
+        - name: "SPARK_CONF_DIR"
+          kind:
+            type: "env"
+      datatype:
+        type: "string"
+      recommendedValues:
+        - fromVersion: "1.1.1"
+          value: "{{configroot}}/conf"
+      roles:
+        - name: "master"
+          required: true
+        - name: "slave"
+          required: true
+        - name: "history-server"
+          required: true
+      asOfVersion: "1.1.1"
+      description: "To specify a different configuration directory other than the default “SPARK_HOME/conf”, you can set SPARK_CONF_DIR. Spark will use the the configuration files (spark-defaults.conf, spark-env.sh, log4j.properties, etc) from this directory."
+
+
 
 
 
