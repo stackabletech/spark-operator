@@ -67,9 +67,9 @@ pub fn create_config_map_name(pod_name: &str) -> String {
     format!("{}-config", pod_name)
 }
 
-/// Filter all existing pods for master node type and retrieve the selector config
-/// for the given role_group. Extract the nodeName from the pod and the specified port
-/// from the config to create the master urls for each pod.
+/// Filter all existing pods for master node type and retrieve the role group config
+/// Extract the nodeName from the pod and the specified port from the config to create
+/// the master urls for each pod.
 ///
 /// # Arguments
 /// * `pods` - Slice of all existing pods

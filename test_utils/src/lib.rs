@@ -1,9 +1,13 @@
 use crate::cluster::{Data, Load, TestSparkCluster};
 use k8s_openapi::api::core::v1::Pod;
-use kube::ResourceExt;
 use serde::de::DeserializeOwned;
+use stackable_operator::builder::{ContainerBuilder, ObjectMetaBuilder, PodBuilder};
 use stackable_spark_crd::{SparkCluster, SparkRole};
-use stackable_spark_operator::pod_utils::{build_containers_and_volumes, build_labels, build_pod};
+use stackable_spark_operator::config::adapt_worker_command;
+use stackable_spark_operator::pod_utils;
+use stackable_spark_operator::pod_utils::{
+    get_hashed_master_urls, APP_NAME, MASTER_URLS_HASH_LABEL,
+};
 
 pub mod cluster;
 pub const MASTER_DEFAULT_PORT: usize = 7077;
@@ -41,139 +45,172 @@ pub fn create_master_urls() -> Vec<String> {
 pub fn create_master_pods() -> Vec<Pod> {
     let mut spark_cluster: SparkCluster = setup_test_cluster();
     spark_cluster.metadata.uid = Some("12345".to_string());
-
-    let master_urls = create_master_urls();
-
-    let (master_1_containers, master_1_volumes) = build_containers_and_volumes(
-        &spark_cluster.spec,
-        &SparkRole::Master,
-        "master_1_pod_conf",
-        &master_urls.as_slice(),
-        Vec::new(),
-        Vec::new(),
-    );
-
-    let (master_2_containers, master_2_volumes) = build_containers_and_volumes(
-        &spark_cluster.spec,
-        &SparkRole::Master,
-        "master_2_pod_conf",
-        &master_urls.as_slice(),
-        Vec::new(),
-        Vec::new(),
-    );
-
-    let (master_3_containers, master_3_volumes) = build_containers_and_volumes(
-        &spark_cluster.spec,
-        &SparkRole::Master,
-        "master_3_pod_conf",
-        &master_urls.as_slice(),
-        Vec::new(),
-        Vec::new(),
-    );
+    let version = &spark_cluster.spec.version.to_string();
 
     vec![
-        build_pod(
-            &spark_cluster,
-            build_labels(
-                &SparkRole::Master.to_string(),
-                TestSparkCluster::MASTER_1_ROLE_GROUP,
-                &spark_cluster.name(),
-                &spark_cluster.spec.version.to_string(),
-                master_urls.as_slice(),
-            ),
-            TestSparkCluster::MASTER_1_NODE_NAME,
-            "master_1_pod",
-            master_1_containers,
-            master_1_volumes,
-        )
-        .unwrap(),
-        build_pod(
-            &spark_cluster,
-            build_labels(
-                &SparkRole::Master.to_string(),
-                TestSparkCluster::MASTER_2_ROLE_GROUP,
-                &spark_cluster.name(),
-                &spark_cluster.spec.version.to_string(),
-                master_urls.as_slice(),
-            ),
-            TestSparkCluster::MASTER_2_NODE_NAME,
-            "master_2_pod",
-            master_2_containers,
-            master_2_volumes,
-        )
-        .unwrap(),
-        build_pod(
-            &spark_cluster,
-            build_labels(
-                &SparkRole::Master.to_string(),
-                TestSparkCluster::MASTER_3_ROLE_GROUP,
-                &spark_cluster.name(),
-                &spark_cluster.spec.version.to_string(),
-                master_urls.as_slice(),
-            ),
-            TestSparkCluster::MASTER_3_NODE_NAME,
-            "master_3_pod",
-            master_3_containers,
-            master_3_volumes,
-        )
-        .unwrap(),
+        PodBuilder::new()
+            .metadata(
+                ObjectMetaBuilder::new()
+                    .name("master_1_pod")
+                    .with_recommended_labels(
+                        &spark_cluster,
+                        APP_NAME,
+                        version,
+                        &SparkRole::Master.to_string(),
+                        TestSparkCluster::MASTER_1_ROLE_GROUP,
+                    )
+                    .ownerreference_from_resource(&spark_cluster, Some(true), Some(false))
+                    .unwrap()
+                    .build()
+                    .unwrap(),
+            )
+            .add_stackable_agent_tolerations()
+            .add_container(
+                ContainerBuilder::new("spark")
+                    .image(format!("spark:{}", version))
+                    .command(vec![SparkRole::Master.get_command(version)])
+                    .add_configmapvolume(pod_utils::CONFIG_VOLUME, "conf".to_string())
+                    .build(),
+            )
+            .node_name(TestSparkCluster::MASTER_1_NODE_NAME)
+            .build()
+            .unwrap(),
+        PodBuilder::new()
+            .metadata(
+                ObjectMetaBuilder::new()
+                    .name("master_2_pod")
+                    .with_recommended_labels(
+                        &spark_cluster,
+                        APP_NAME,
+                        version,
+                        &SparkRole::Master.to_string(),
+                        TestSparkCluster::MASTER_2_ROLE_GROUP,
+                    )
+                    .ownerreference_from_resource(&spark_cluster, Some(true), Some(false))
+                    .unwrap()
+                    .build()
+                    .unwrap(),
+            )
+            .add_stackable_agent_tolerations()
+            .add_container(
+                ContainerBuilder::new("spark")
+                    .image(format!("spark:{}", version))
+                    .command(vec![SparkRole::Master.get_command(version)])
+                    .add_configmapvolume(pod_utils::CONFIG_VOLUME, "conf".to_string())
+                    .build(),
+            )
+            .node_name(TestSparkCluster::MASTER_2_NODE_NAME)
+            .build()
+            .unwrap(),
+        PodBuilder::new()
+            .metadata(
+                ObjectMetaBuilder::new()
+                    .name("master_3_pod")
+                    .with_recommended_labels(
+                        &spark_cluster,
+                        APP_NAME,
+                        version,
+                        &SparkRole::Master.to_string(),
+                        TestSparkCluster::MASTER_3_ROLE_GROUP,
+                    )
+                    .ownerreference_from_resource(&spark_cluster, Some(true), Some(false))
+                    .unwrap()
+                    .build()
+                    .unwrap(),
+            )
+            .add_stackable_agent_tolerations()
+            .add_container(
+                ContainerBuilder::new("spark")
+                    .image(format!("spark:{}", version))
+                    .command(vec![SparkRole::Master.get_command(version)])
+                    .add_configmapvolume(pod_utils::CONFIG_VOLUME, "conf".to_string())
+                    .build(),
+            )
+            .node_name(TestSparkCluster::MASTER_3_NODE_NAME)
+            .build()
+            .unwrap(),
     ]
 }
 
 pub fn create_worker_pods() -> Vec<Pod> {
     let mut spark_cluster: SparkCluster = setup_test_cluster();
     spark_cluster.metadata.uid = Some("12345".to_string());
+    let version = &spark_cluster.spec.version.to_string();
 
     let master_urls = create_master_urls();
 
-    let (worker_1_containers, worker_1_volumes) = build_containers_and_volumes(
-        &spark_cluster.spec,
-        &SparkRole::Worker,
-        "worker_1_pod_conf",
-        &master_urls.as_slice(),
-        Vec::new(),
-        Vec::new(),
-    );
-
-    let (worker_2_containers, worker_2_volumes) = build_containers_and_volumes(
-        &spark_cluster.spec,
-        &SparkRole::Worker,
-        "worker_2_pod_conf",
-        &master_urls.as_slice(),
-        Vec::new(),
-        Vec::new(),
-    );
-
     vec![
-        build_pod(
-            &spark_cluster,
-            build_labels(
-                &SparkRole::Worker.to_string(),
-                TestSparkCluster::WORKER_1_ROLE_GROUP,
-                &spark_cluster.name(),
-                &spark_cluster.spec.version.to_string(),
-                master_urls.as_slice(),
-            ),
-            TestSparkCluster::WORKER_1_NODE_NAME,
-            "worker_1_pod",
-            worker_1_containers,
-            worker_1_volumes,
-        )
-        .unwrap(),
-        build_pod(
-            &spark_cluster,
-            build_labels(
-                &SparkRole::Worker.to_string(),
-                TestSparkCluster::WORKER_2_ROLE_GROUP,
-                &spark_cluster.name(),
-                &spark_cluster.spec.version.to_string(),
-                master_urls.as_slice(),
-            ),
-            TestSparkCluster::WORKER_2_NODE_NAME,
-            "worker_2_pod",
-            worker_2_containers,
-            worker_2_volumes,
-        )
-        .unwrap(),
+        PodBuilder::new()
+            .metadata(
+                ObjectMetaBuilder::new()
+                    .name("worker_1_pod")
+                    .with_recommended_labels(
+                        &spark_cluster,
+                        APP_NAME,
+                        version,
+                        &SparkRole::Worker.to_string(),
+                        TestSparkCluster::WORKER_1_ROLE_GROUP,
+                    )
+                    .with_label(
+                        MASTER_URLS_HASH_LABEL,
+                        &get_hashed_master_urls(&master_urls),
+                    )
+                    .ownerreference_from_resource(&spark_cluster, Some(true), Some(false))
+                    .unwrap()
+                    .build()
+                    .unwrap(),
+            )
+            .add_stackable_agent_tolerations()
+            .add_container(
+                ContainerBuilder::new("spark")
+                    .image(format!("spark:{}", version))
+                    .command(vec![SparkRole::Worker.get_command(version)])
+                    .args(vec![adapt_worker_command(
+                        &SparkRole::Worker,
+                        master_urls.as_slice(),
+                    )
+                    .unwrap()])
+                    .add_configmapvolume(pod_utils::CONFIG_VOLUME, "conf".to_string())
+                    .build(),
+            )
+            .node_name(TestSparkCluster::WORKER_1_NODE_NAME)
+            .build()
+            .unwrap(),
+        PodBuilder::new()
+            .metadata(
+                ObjectMetaBuilder::new()
+                    .name("worker_2_pod")
+                    .with_recommended_labels(
+                        &spark_cluster,
+                        APP_NAME,
+                        version,
+                        &SparkRole::Worker.to_string(),
+                        TestSparkCluster::WORKER_2_ROLE_GROUP,
+                    )
+                    .with_label(
+                        MASTER_URLS_HASH_LABEL,
+                        &get_hashed_master_urls(&master_urls),
+                    )
+                    .ownerreference_from_resource(&spark_cluster, Some(true), Some(false))
+                    .unwrap()
+                    .build()
+                    .unwrap(),
+            )
+            .add_stackable_agent_tolerations()
+            .add_container(
+                ContainerBuilder::new("spark")
+                    .image(format!("spark:{}", version))
+                    .command(vec![SparkRole::Worker.get_command(version)])
+                    .args(vec![adapt_worker_command(
+                        &SparkRole::Worker,
+                        master_urls.as_slice(),
+                    )
+                    .unwrap()])
+                    .add_configmapvolume(pod_utils::CONFIG_VOLUME, "conf".to_string())
+                    .build(),
+            )
+            .node_name(TestSparkCluster::WORKER_2_NODE_NAME)
+            .build()
+            .unwrap(),
     ]
 }

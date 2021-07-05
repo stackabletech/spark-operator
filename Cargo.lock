@@ -1495,6 +1495,7 @@ dependencies = [
  "kube",
  "serde",
  "serde_yaml",
+ "stackable-operator",
  "stackable-spark-crd",
  "stackable-spark-operator",
 ]

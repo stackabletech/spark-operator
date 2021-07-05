@@ -12,12 +12,17 @@ use kube::Api;
 use product_config::types::PropertyNameKind;
 use product_config::ProductConfigManager;
 use serde_json::json;
+use stackable_operator::builder::{
+    ConfigMapBuilder, ContainerBuilder, ObjectMetaBuilder, PodBuilder,
+};
 use stackable_operator::client::Client;
 use stackable_operator::conditions::ConditionStatus;
 use stackable_operator::controller::{Controller, ControllerStrategy, ReconciliationState};
 use stackable_operator::error::OperatorResult;
+use stackable_operator::k8s_utils;
 use stackable_operator::labels::{
-    APP_COMPONENT_LABEL, APP_INSTANCE_LABEL, APP_ROLE_GROUP_LABEL, APP_VERSION_LABEL,
+    get_recommended_labels, APP_COMPONENT_LABEL, APP_INSTANCE_LABEL, APP_ROLE_GROUP_LABEL,
+    APP_VERSION_LABEL,
 };
 use stackable_operator::product_config_utils::{
     config_for_role_and_group, ValidatedRoleConfigByPropertyKind,
@@ -27,9 +32,8 @@ use stackable_operator::reconcile::{
 };
 use stackable_operator::role_utils::{
     find_nodes_that_fit_selectors, get_role_and_group_labels,
-    list_eligible_nodes_for_role_and_group,
+    list_eligible_nodes_for_role_and_group, CommonConfiguration,
 };
-use stackable_operator::{config_map, k8s_utils};
 use strum::IntoEnumIterator;
 use tracing::{debug, info, trace, warn};
 
@@ -42,10 +46,12 @@ use stackable_spark_crd::{
 
 use crate::config::validated_product_config;
 use crate::error::Error;
-use crate::pod_utils::{build_containers_and_volumes, filter_pods_for_type};
+use crate::pod_utils::{
+    filter_pods_for_type, get_hashed_master_urls, APP_NAME, MASTER_URLS_HASH_LABEL,
+};
 
 mod command_utils;
-mod config;
+pub mod config;
 mod error;
 pub mod pod_utils;
 
@@ -294,7 +300,7 @@ impl SparkState {
     }
 
     /// Required labels for pods. Pods without any of these will deleted and replaced.
-    pub fn get_deletion_labels(&self) -> BTreeMap<String, Option<Vec<String>>> {
+    pub fn deletion_labels(&self) -> BTreeMap<String, Option<Vec<String>>> {
         let roles = SparkRole::iter()
             .map(|role| role.to_string())
             .collect::<Vec<_>>();
@@ -533,38 +539,81 @@ impl SparkState {
         let master_pods = filter_pods_for_type(&self.existing_pods, &SparkRole::Master);
         let master_urls = &config::get_master_urls(&master_pods, &self.validated_role_config)?;
 
-        let (containers, volumes) = build_containers_and_volumes(
-            &self.context.resource.spec,
-            role,
-            &cm_name,
-            master_urls,
-            cli_arguments,
-            env_vars,
-        );
+        let version = &self.context.resource.spec.version.to_string();
 
-        let labels = pod_utils::build_labels(
+        let mut labels = get_recommended_labels(
+            &self.context.resource,
+            APP_NAME,
+            version,
             &role.to_string(),
             role_group,
-            &self.context.resource.name(),
-            &self.context.resource.spec.version.to_string(),
-            master_urls,
         );
 
-        let pod = pod_utils::build_pod(
-            &self.context.resource,
-            labels,
-            node_name,
-            &pod_name,
-            containers,
-            volumes,
-        )?;
+        let mut args = vec![];
+        // add hashed master url label to workers and adapt start command and
+        // adapt worker command with master url(s)
+        if role == &SparkRole::Worker {
+            labels.insert(
+                MASTER_URLS_HASH_LABEL.to_string(),
+                get_hashed_master_urls(master_urls),
+            );
 
-        // we only need one config map in spark containing spark-defaults.conf and spark-env.sh
-        config_maps.push(config_map::create_config_map(
-            &self.context.resource,
-            &cm_name,
-            cm_data,
-        )?);
+            if let Some(master_urls) = config::adapt_worker_command(role, master_urls) {
+                args.push(master_urls);
+            }
+        }
+
+        // add cli arguments from product config / user config
+        args.append(&mut cli_arguments);
+
+        let mut container_builder = ContainerBuilder::new("spark");
+        container_builder.image(format!("spark:{}", version));
+        container_builder.command(vec![role.get_command(version)]);
+        container_builder.args(args);
+        container_builder.add_configmapvolume(pod_utils::CONFIG_VOLUME, "conf".to_string());
+
+        if let Some(CommonConfiguration {
+            config: Some(cfg), ..
+        }) = &self.context.resource.spec.config
+        {
+            if let Some(log_dir) = &cfg.log_dir {
+                container_builder.add_configmapvolume(pod_utils::EVENT_VOLUME, log_dir);
+            }
+        }
+
+        for env in env_vars {
+            if let Some(val) = env.value {
+                container_builder.add_env_var(env.name, val);
+            }
+        }
+
+        let pod = PodBuilder::new()
+            .metadata(
+                ObjectMetaBuilder::new()
+                    .name(pod_name)
+                    .with_labels(labels)
+                    .ownerreference_from_resource(&self.context.resource, Some(true), Some(true))?
+                    .build()?,
+            )
+            .add_stackable_agent_tolerations()
+            .add_container(container_builder.build())
+            .build()?;
+
+        config_maps.push(
+            ConfigMapBuilder::new()
+                .metadata(
+                    ObjectMetaBuilder::new()
+                        .name(cm_name)
+                        .ownerreference_from_resource(
+                            &self.context.resource,
+                            Some(true),
+                            Some(true),
+                        )?
+                        .build()?,
+                )
+                .data(cm_data)
+                .build()?,
+        );
 
         Ok((pod, config_maps))
     }
@@ -574,7 +623,7 @@ impl SparkState {
     /// to fall back on other masters, if the primary master fails.
     /// Therefore we always need to keep the workers updated in terms of available master urls.
     /// Available master urls are hashed and stored as label in the worker pod. If the label differs
-    /// from the spec, we need to replace (delete and and) the workers in a rolling fashion.
+    /// from the spec, we need to replace (delete and create) the workers in a rolling fashion.
     pub async fn check_worker_master_urls(&self) -> SparkReconcileResult {
         let worker_pods = filter_pods_for_type(&self.existing_pods, &SparkRole::Worker);
         let master_pods = filter_pods_for_type(&self.existing_pods, &SparkRole::Master);
@@ -675,14 +724,14 @@ impl ReconciliationState for SparkState {
     ) -> Pin<Box<dyn Future<Output = Result<ReconcileFunctionAction, Self::Error>> + Send + '_>>
     {
         info!("========================= Starting reconciliation =========================");
-        debug!("Deletion Labels: [{:?}]", &self.get_deletion_labels());
+        debug!("Deletion Labels: [{:?}]", &self.deletion_labels());
 
         Box::pin(async move {
             self.init_status()
                 .await?
                 .then(self.context.delete_illegal_pods(
                     self.existing_pods.as_slice(),
-                    &self.get_deletion_labels(),
+                    &self.deletion_labels(),
                     ContinuationStrategy::OneRequeue,
                 ))
                 .await?
