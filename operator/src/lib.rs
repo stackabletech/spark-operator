@@ -21,8 +21,8 @@ use stackable_operator::controller::{Controller, ControllerStrategy, Reconciliat
 use stackable_operator::error::OperatorResult;
 use stackable_operator::k8s_utils;
 use stackable_operator::labels::{
-    get_recommended_labels, APP_COMPONENT_LABEL, APP_INSTANCE_LABEL, APP_ROLE_GROUP_LABEL,
-    APP_VERSION_LABEL,
+    build_common_labels_for_all_managed_resources, get_recommended_labels, APP_COMPONENT_LABEL,
+    APP_INSTANCE_LABEL, APP_ROLE_GROUP_LABEL, APP_VERSION_LABEL,
 };
 use stackable_operator::product_config_utils::{
     config_for_role_and_group, ValidatedRoleConfigByPropertyKind,
@@ -368,8 +368,8 @@ impl SparkState {
         // The iteration happens in two stages here, to accommodate the way our operators think
         // about roles and role groups.
         // The hierarchy is:
-        // - Roles
-        //   - Role groups for this role (user defined)
+        // - Roles (Master, Worker, History-Server)
+        //   - Role groups (user defined)
         for role in SparkRole::iter() {
             let role_str = &role.to_string();
             if let Some(nodes_for_role) = self.eligible_nodes.get(role_str) {
@@ -570,14 +570,14 @@ impl SparkState {
         container_builder.image(format!("spark:{}", version));
         container_builder.command(vec![role.get_command(version)]);
         container_builder.args(args);
-        container_builder.add_configmapvolume(pod_utils::CONFIG_VOLUME, "conf".to_string());
+        container_builder.add_configmapvolume(cm_name.clone(), "conf".to_string());
 
         if let Some(CommonConfiguration {
             config: Some(cfg), ..
         }) = &self.context.resource.spec.config
         {
             if let Some(log_dir) = &cfg.log_dir {
-                container_builder.add_configmapvolume(pod_utils::EVENT_VOLUME, log_dir);
+                container_builder.add_configmapvolume(cm_name.clone(), log_dir);
             }
         }
 
@@ -591,12 +591,14 @@ impl SparkState {
             .metadata(
                 ObjectMetaBuilder::new()
                     .name(pod_name)
+                    .namespace(&self.context.client.default_namespace)
                     .with_labels(labels)
                     .ownerreference_from_resource(&self.context.resource, Some(true), Some(true))?
                     .build()?,
             )
             .add_stackable_agent_tolerations()
             .add_container(container_builder.build())
+            .node_name(node_name)
             .build()?;
 
         config_maps.push(
@@ -609,6 +611,7 @@ impl SparkState {
                             Some(true),
                             Some(true),
                         )?
+                        .namespace(&self.context.client.default_namespace)
                         .build()?,
                 )
                 .data(cm_data)
@@ -787,7 +790,12 @@ impl ControllerStrategy for SparkStrategy {
         &self,
         context: ReconciliationContext<Self::Item>,
     ) -> Result<Self::State, Self::Error> {
-        let existing_pods = context.list_owned().await?;
+        let existing_pods = context
+            .list_owned(build_common_labels_for_all_managed_resources(
+                APP_NAME,
+                &context.resource.name(),
+            ))
+            .await?;
         trace!(
             "{}: Found [{}] pods",
             context.log_name(),

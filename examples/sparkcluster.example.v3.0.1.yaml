@@ -4,6 +4,8 @@ metadata:
   name: simple
 spec:
   version: "3.0.1"
+  config:
+    logDir: "file:///tmp"
   masters:
     roleGroups:
       default:

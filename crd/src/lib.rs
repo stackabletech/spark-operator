@@ -238,7 +238,7 @@ impl Configuration for HistoryServerConfig {
                         Some(port.to_string()),
                     );
                 }
-                // TODO: do not need to add the other log dir here
+                // TODO: do not need to add the other log dir ("spark.eventLog.dir") here
                 add_common_spark_defaults(&mut config, &resource.spec)
             }
             _ => {}
