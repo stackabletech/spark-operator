@@ -55,6 +55,8 @@ pub mod config;
 mod error;
 pub mod pod_utils;
 
+const FINALIZER_NAME: &str = "spark.stackable.tech/cleanup";
+
 type SparkReconcileResult = ReconcileResult<error::Error>;
 
 struct SparkState {
@@ -316,6 +318,13 @@ impl SparkState {
             Some(vec![self.context.resource.spec.version.to_string()]),
         );
         mandatory_labels
+    }
+
+    async fn delete_all_pods(&self) -> OperatorResult<ReconcileFunctionAction> {
+        for pod in &self.existing_pods {
+            self.context.client.delete(pod).await?;
+        }
+        Ok(ReconcileFunctionAction::Done)
     }
 
     /// Create or update a config map.
@@ -731,6 +740,12 @@ impl ReconciliationState for SparkState {
 
         Box::pin(async move {
             self.init_status()
+                .await?
+                .then(self.context.handle_deletion(
+                    Box::pin(self.delete_all_pods()),
+                    FINALIZER_NAME,
+                    true,
+                ))
                 .await?
                 .then(self.context.delete_illegal_pods(
                     self.existing_pods.as_slice(),
