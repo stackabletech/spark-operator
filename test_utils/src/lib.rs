@@ -4,7 +4,6 @@ use serde::de::DeserializeOwned;
 use stackable_operator::builder::{ContainerBuilder, ObjectMetaBuilder, PodBuilder};
 use stackable_spark_crd::{SparkCluster, SparkRole};
 use stackable_spark_operator::config::adapt_worker_command;
-use stackable_spark_operator::pod_utils;
 use stackable_spark_operator::pod_utils::{
     get_hashed_master_urls, APP_NAME, MASTER_URLS_HASH_LABEL,
 };
@@ -69,7 +68,7 @@ pub fn create_master_pods() -> Vec<Pod> {
                 ContainerBuilder::new("spark")
                     .image(format!("spark:{}", version))
                     .command(vec![SparkRole::Master.get_command(version)])
-                    .add_configmapvolume(pod_utils::CONFIG_VOLUME, "conf".to_string())
+                    .add_configmapvolume("master_1_pod_config".to_string(), "conf".to_string())
                     .build(),
             )
             .node_name(TestSparkCluster::MASTER_1_NODE_NAME)
@@ -96,7 +95,7 @@ pub fn create_master_pods() -> Vec<Pod> {
                 ContainerBuilder::new("spark")
                     .image(format!("spark:{}", version))
                     .command(vec![SparkRole::Master.get_command(version)])
-                    .add_configmapvolume(pod_utils::CONFIG_VOLUME, "conf".to_string())
+                    .add_configmapvolume("master_2_pod_config".to_string(), "conf".to_string())
                     .build(),
             )
             .node_name(TestSparkCluster::MASTER_2_NODE_NAME)
@@ -123,7 +122,7 @@ pub fn create_master_pods() -> Vec<Pod> {
                 ContainerBuilder::new("spark")
                     .image(format!("spark:{}", version))
                     .command(vec![SparkRole::Master.get_command(version)])
-                    .add_configmapvolume(pod_utils::CONFIG_VOLUME, "conf".to_string())
+                    .add_configmapvolume("master_3_pod_config".to_string(), "conf".to_string())
                     .build(),
             )
             .node_name(TestSparkCluster::MASTER_3_NODE_NAME)
@@ -170,7 +169,7 @@ pub fn create_worker_pods() -> Vec<Pod> {
                         master_urls.as_slice(),
                     )
                     .unwrap()])
-                    .add_configmapvolume(pod_utils::CONFIG_VOLUME, "conf".to_string())
+                    .add_configmapvolume("worker_1_pod_config".to_string(), "conf".to_string())
                     .build(),
             )
             .node_name(TestSparkCluster::WORKER_1_NODE_NAME)
@@ -206,7 +205,7 @@ pub fn create_worker_pods() -> Vec<Pod> {
                         master_urls.as_slice(),
                     )
                     .unwrap()])
-                    .add_configmapvolume(pod_utils::CONFIG_VOLUME, "conf".to_string())
+                    .add_configmapvolume("worker_2_pod_config".to_string(), "conf".to_string())
                     .build(),
             )
             .node_name(TestSparkCluster::WORKER_2_NODE_NAME)

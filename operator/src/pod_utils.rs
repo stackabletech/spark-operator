@@ -11,10 +11,6 @@ pub const APP_NAME: &str = "spark";
 pub const MANAGED_BY: &str = "stackable-spark";
 /// Pod label which indicates the known master urls for a worker pod
 pub const MASTER_URLS_HASH_LABEL: &str = "spark.stackable.tech/masterUrls";
-/// Name of the config volume to store configmap data
-pub const CONFIG_VOLUME: &str = "config-volume";
-/// Name of the logging / event volume for SparkNode logs required by the history server
-pub const EVENT_VOLUME: &str = "event-volume";
 
 /// All pod names follow a simple pattern: spark-<cluster_name>-<role_group>-<node_type>-<node_name>
 ///
