@@ -22,7 +22,8 @@ use stackable_operator::error::OperatorResult;
 use stackable_operator::k8s_utils;
 use stackable_operator::labels::{
     build_common_labels_for_all_managed_resources, get_recommended_labels, APP_COMPONENT_LABEL,
-    APP_INSTANCE_LABEL, APP_ROLE_GROUP_LABEL, APP_VERSION_LABEL,
+    APP_INSTANCE_LABEL, APP_MANAGED_BY_LABEL, APP_NAME_LABEL, APP_ROLE_GROUP_LABEL,
+    APP_VERSION_LABEL,
 };
 use stackable_operator::product_config_utils::{
     config_for_role_and_group, ValidatedRoleConfigByPropertyKind,
@@ -47,7 +48,7 @@ use stackable_spark_crd::{
 use crate::config::validated_product_config;
 use crate::error::Error;
 use crate::pod_utils::{
-    filter_pods_for_type, get_hashed_master_urls, APP_NAME, MASTER_URLS_HASH_LABEL,
+    filter_pods_for_type, get_hashed_master_urls, APP_NAME, MANAGED_BY, MASTER_URLS_HASH_LABEL,
 };
 
 mod command_utils;
@@ -302,7 +303,7 @@ impl SparkState {
     }
 
     /// Required labels for pods. Pods without any of these will deleted and replaced.
-    pub fn deletion_labels(&self) -> BTreeMap<String, Option<Vec<String>>> {
+    pub fn required_pod_labels(&self) -> BTreeMap<String, Option<Vec<String>>> {
         let roles = SparkRole::iter()
             .map(|role| role.to_string())
             .collect::<Vec<_>>();
@@ -317,6 +318,15 @@ impl SparkState {
             String::from(APP_VERSION_LABEL),
             Some(vec![self.context.resource.spec.version.to_string()]),
         );
+        mandatory_labels.insert(
+            String::from(APP_NAME_LABEL),
+            Some(vec![String::from(APP_NAME)]),
+        );
+        mandatory_labels.insert(
+            String::from(APP_MANAGED_BY_LABEL),
+            Some(vec![String::from(MANAGED_BY)]),
+        );
+
         mandatory_labels
     }
 
@@ -444,11 +454,11 @@ impl SparkState {
                             )
                             .await?;
 
-                        self.context.client.create(&pod).await?;
-
                         for config_map in config_maps {
                             self.create_config_map(config_map).await?;
                         }
+
+                        self.context.client.create(&pod).await?;
 
                         changes_applied = true;
                     }
@@ -736,7 +746,7 @@ impl ReconciliationState for SparkState {
     ) -> Pin<Box<dyn Future<Output = Result<ReconcileFunctionAction, Self::Error>> + Send + '_>>
     {
         info!("========================= Starting reconciliation =========================");
-        debug!("Deletion Labels: [{:?}]", &self.deletion_labels());
+        debug!("Deletion Labels: [{:?}]", &self.required_pod_labels());
 
         Box::pin(async move {
             self.init_status()
@@ -749,7 +759,7 @@ impl ReconciliationState for SparkState {
                 .await?
                 .then(self.context.delete_illegal_pods(
                     self.existing_pods.as_slice(),
-                    &self.deletion_labels(),
+                    &self.required_pod_labels(),
                     ContinuationStrategy::OneRequeue,
                 ))
                 .await?

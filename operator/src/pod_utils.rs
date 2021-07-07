@@ -8,7 +8,7 @@ use std::hash::{Hash, Hasher};
 /// Value for the APP_NAME_LABEL label key
 pub const APP_NAME: &str = "spark";
 /// Value for the APP_MANAGED_BY_LABEL label key
-pub const MANAGED_BY: &str = "stackable-spark";
+pub const MANAGED_BY: &str = "spark-operator";
 /// Pod label which indicates the known master urls for a worker pod
 pub const MASTER_URLS_HASH_LABEL: &str = "spark.stackable.tech/masterUrls";
 
