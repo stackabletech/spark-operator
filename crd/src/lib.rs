@@ -1,7 +1,7 @@
 //! This module provides all required CRD definitions and additional helper methods.
-use std::collections::BTreeMap;
-use std::hash::Hash;
+pub mod commands;
 
+pub use commands::{Restart, Start, Stop};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::CustomResource;
 use schemars::JsonSchema;
@@ -11,9 +11,6 @@ use stackable_operator::product_config_utils::{ConfigError, Configuration};
 use stackable_operator::role_utils::{CommonConfiguration, Role};
 use stackable_operator::status::Conditions;
 use stackable_operator::Crd;
-use strum_macros::EnumIter;
-
-pub use commands::{Restart, Start, Stop};
 use stackable_spark_common::constants::{
     SPARK_DEFAULTS_AUTHENTICATE, SPARK_DEFAULTS_AUTHENTICATE_SECRET, SPARK_DEFAULTS_EVENT_LOG_DIR,
     SPARK_DEFAULTS_HISTORY_FS_LOG_DIRECTORY, SPARK_DEFAULTS_HISTORY_STORE_PATH,
@@ -21,11 +18,9 @@ use stackable_spark_common::constants::{
     SPARK_ENV_MASTER_WEBUI_PORT, SPARK_ENV_WORKER_CORES, SPARK_ENV_WORKER_MEMORY,
     SPARK_ENV_WORKER_PORT, SPARK_ENV_WORKER_WEBUI_PORT,
 };
-
-pub use crate::error::CrdError;
-
-pub mod commands;
-pub mod error;
+use std::collections::BTreeMap;
+use std::hash::Hash;
+use strum_macros::EnumIter;
 
 const DEFAULT_LOG_DIR: &str = "/tmp";
 const SPARK_DEFAULTS_CONF: &str = "spark-defaults.conf";

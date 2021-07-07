@@ -20,6 +20,7 @@ pub const MASTER_URLS_HASH_LABEL: &str = "spark.stackable.tech/masterUrls";
 /// * `role_group` - The role group of the selector
 /// * `node_name` - The node or host name
 ///
+// TODO: Remove (move to) for operator-rs method
 pub fn create_pod_name(
     context_name: &str,
     role: &str,

@@ -24,12 +24,6 @@ pub enum Error {
         source: semver::Error,
     },
 
-    #[error("Pod contains invalid node type: {source}")]
-    InvalidNodeType {
-        #[from]
-        source: stackable_spark_crd::CrdError,
-    },
-
     #[error("Invalid Configmap. No name found which is required to query the ConfigMap.")]
     InvalidConfigMap,
 }
