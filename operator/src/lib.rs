@@ -341,6 +341,7 @@ impl SparkState {
     /// - Create if no config map of that name exists
     /// - Update if config map exists but the content differs
     /// - Do nothing if the config map exists and the content is identical
+    // TODO: move to operator-rs
     async fn create_config_map(&self, config_map: ConfigMap) -> Result<(), Error> {
         let cm_name = match config_map.metadata.name.as_deref() {
             None => return Err(Error::InvalidConfigMap),
@@ -446,7 +447,7 @@ impl SparkState {
                                 &role,
                                 role_group,
                                 &node_name,
-                                &config_for_role_and_group(
+                                config_for_role_and_group(
                                     role_str,
                                     role_group,
                                     &self.validated_role_config,
@@ -600,6 +601,8 @@ impl SparkState {
             }
         }
 
+        // add remaining env variables
+        // TODO: operator-rs builder should offer an add_env_vars to avoid that loop
         for env in env_vars {
             if let Some(val) = env.value {
                 container_builder.add_env_var(env.name, val);

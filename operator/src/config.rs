@@ -22,7 +22,7 @@ use stackable_spark_crd::{SparkCluster, SparkRole};
 /// spark://<master-node-name-1>:<master-port-1>,<master-node-name-2>:<master-port-2>
 ///
 /// # Arguments
-/// * `role` - The cluster role (e.g. master, worker, history-server)
+/// * `role`        - The cluster role (e.g. master, worker, history-server)
 /// * `master_urls` - Slice of master urls in format <node_name>:<port>
 ///
 pub fn adapt_worker_command(role: &SparkRole, master_urls: &[String]) -> Option<String> {
@@ -47,7 +47,7 @@ pub fn adapt_worker_command(role: &SparkRole, master_urls: &[String]) -> Option<
 /// Unroll a map into a String using a given assignment character (for writing config maps)
 ///
 /// # Arguments
-/// * `map` - Map containing option_name:option_value pairs
+/// * `map`        - Map containing option_name:option_value pairs
 /// * `assignment` - Used character to assign option_value to option_name (e.g. "=", " ", ":" ...)
 ///
 pub fn convert_map_to_string(map: &BTreeMap<String, String>, assignment: &str) -> String {
@@ -72,9 +72,9 @@ pub fn create_config_map_name(pod_name: &str) -> String {
 /// the master urls for each pod.
 ///
 /// # Arguments
-/// * `pods` - Slice of all existing pods
-/// * `role_config` - The precalculated role and role group configuration with properties
-///                   split by PropertyNameKind
+/// * `pods`             - Slice of all existing pods
+/// * `validated_config` - The precalculated role and role group configuration with properties
+///                        split by PropertyNameKind
 pub fn get_master_urls(
     pods: &[Pod],
     validated_config: &ValidatedRoleConfigByPropertyKind,
@@ -130,6 +130,17 @@ pub fn get_master_urls(
     Ok(master_urls)
 }
 
+/// Defines all required spark roles (Master, Worker, History-Server) and their required
+/// configuration. In this case we need two files: `spark-defaults.conf` and `spark-env.sh`.
+/// Additionally require some env variables like `SPARK_NO_DAEMONIZE` and `SPARK_CONFIG_DIR`,
+/// (which will be added automatically by the product config).
+///
+/// The roles and their configs are then validated and complemented by the product config.
+///
+/// # Arguments
+/// * `resource`        - The SparkCluster containing the role definitions.
+/// * `product_config`  - The product config to validate and complement the user config.
+///
 pub fn validated_product_config(
     resource: &SparkCluster,
     product_config: &ProductConfigManager,
@@ -143,7 +154,7 @@ pub fn validated_product_config(
                 PropertyNameKind::File(SPARK_DEFAULTS_CONF.to_string()),
                 PropertyNameKind::Env,
             ],
-            resource.spec.masters.clone().into_dyn(),
+            resource.spec.masters.clone().into(),
         ),
     );
 
@@ -155,7 +166,7 @@ pub fn validated_product_config(
                 PropertyNameKind::File(SPARK_DEFAULTS_CONF.to_string()),
                 PropertyNameKind::Env,
             ],
-            resource.spec.workers.clone().into_dyn(),
+            resource.spec.workers.clone().into(),
         ),
     );
 
@@ -168,7 +179,7 @@ pub fn validated_product_config(
                     PropertyNameKind::File(SPARK_DEFAULTS_CONF.to_string()),
                     PropertyNameKind::Env,
                 ],
-                history_servers.clone().into_dyn(),
+                history_servers.clone().into(),
             ),
         );
     }
