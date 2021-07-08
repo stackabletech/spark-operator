@@ -6,7 +6,7 @@ spec:
         regex: "^[a-zA-Z]\\w{5,20}$"
     - unit: &unitDirectory
         name: "directory"
-        regex: "^/|(/[\\w-]+)+$"
+        regex: "^(.+)/([^/]+)$"
         examples:
           - "/tmp/xyz"
     - unit: &unitMemory
