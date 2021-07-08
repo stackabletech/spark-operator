@@ -466,7 +466,7 @@ impl SparkState {
 
                     // we do this here to make sure pods of each role are started after each other
                     // roles start in rolling fashion
-                    // pods of each role start non rolling
+                    // pods of each role group start in parallel
                     // master > worker > history server
                     if changes_applied {
                         return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));

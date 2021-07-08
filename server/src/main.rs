@@ -1,4 +1,4 @@
-use stackable_operator::crd::Crd;
+use stackable_operator::crd::CustomResourceExt;
 use stackable_operator::{client, error};
 use stackable_spark_crd::SparkCluster;
 use stackable_spark_crd::{Restart, Start, Stop};
@@ -15,10 +15,10 @@ async fn main() -> Result<(), error::Error> {
     if let Err(error) = stackable_operator::crd::wait_until_crds_present(
         &client,
         vec![
-            SparkCluster::RESOURCE_NAME,
-            Restart::RESOURCE_NAME,
-            Start::RESOURCE_NAME,
-            Stop::RESOURCE_NAME,
+            &SparkCluster::crd_name(),
+            &Restart::crd_name(),
+            &Start::crd_name(),
+            &Stop::crd_name(),
         ],
         None,
     )

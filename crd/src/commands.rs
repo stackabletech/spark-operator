@@ -2,12 +2,11 @@ use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use stackable_operator::command_controller::Command;
-use stackable_operator::Crd;
 
 #[derive(Clone, CustomResource, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[kube(
     group = "command.spark.stackable.tech",
-    version = "v1",
+    version = "v1alpha1",
     kind = "Restart",
     namespaced
 )]
@@ -15,11 +14,6 @@ use stackable_operator::Crd;
 #[serde(rename_all = "camelCase")]
 pub struct RestartCommandSpec {
     pub name: String,
-}
-
-impl Crd for Restart {
-    const RESOURCE_NAME: &'static str = "restarts.command.spark.stackable.tech";
-    const CRD_DEFINITION: &'static str = include_str!("../../deploy/crd/restart.command.crd.yaml");
 }
 
 impl Command for Restart {
@@ -31,7 +25,7 @@ impl Command for Restart {
 #[derive(Clone, CustomResource, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[kube(
     group = "command.spark.stackable.tech",
-    version = "v1",
+    version = "v1alpha1",
     kind = "Start",
     namespaced
 )]
@@ -39,11 +33,6 @@ impl Command for Restart {
 #[serde(rename_all = "camelCase")]
 pub struct StartCommandSpec {
     pub name: String,
-}
-
-impl Crd for Start {
-    const RESOURCE_NAME: &'static str = "starts.command.spark.stackable.tech";
-    const CRD_DEFINITION: &'static str = include_str!("../../deploy/crd/start.command.crd.yaml");
 }
 
 impl Command for Start {
@@ -55,7 +44,7 @@ impl Command for Start {
 #[derive(Clone, CustomResource, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[kube(
     group = "command.spark.stackable.tech",
-    version = "v1",
+    version = "v1alpha1",
     kind = "Stop",
     namespaced
 )]
@@ -63,11 +52,6 @@ impl Command for Start {
 #[serde(rename_all = "camelCase")]
 pub struct StopCommandSpec {
     pub name: String,
-}
-
-impl Crd for Stop {
-    const RESOURCE_NAME: &'static str = "stops.command.spark.stackable.tech";
-    const CRD_DEFINITION: &'static str = include_str!("../../deploy/crd/stop.command.crd.yaml");
 }
 
 impl Command for Stop {

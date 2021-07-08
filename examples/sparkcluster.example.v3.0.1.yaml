@@ -1,4 +1,4 @@
-apiVersion: spark.stackable.tech/v1
+apiVersion: spark.stackable.tech/v1alpha1
 kind: SparkCluster
 metadata:
   name: simple

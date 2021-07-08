@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 use stackable_operator::product_config_utils::{ConfigError, Configuration};
 use stackable_operator::role_utils::{CommonConfiguration, Role};
 use stackable_operator::status::Conditions;
-use stackable_operator::Crd;
 use stackable_spark_common::constants::{
     SPARK_DEFAULTS_AUTHENTICATE, SPARK_DEFAULTS_AUTHENTICATE_SECRET, SPARK_DEFAULTS_EVENT_LOG_DIR,
     SPARK_DEFAULTS_HISTORY_FS_LOG_DIRECTORY, SPARK_DEFAULTS_HISTORY_STORE_PATH,
@@ -29,7 +28,7 @@ const SPARK_ENV_SH: &str = "spark-env.sh";
 #[derive(Clone, CustomResource, Debug, Deserialize, JsonSchema, Serialize)]
 #[kube(
     group = "spark.stackable.tech",
-    version = "v1",
+    version = "v1alpha1",
     kind = "SparkCluster",
     shortname = "sc",
     namespaced
@@ -373,11 +372,6 @@ impl Conditions for SparkCluster {
         }
         return &mut self.status.as_mut().unwrap().conditions;
     }
-}
-
-impl Crd for SparkCluster {
-    const RESOURCE_NAME: &'static str = "sparkclusters.spark.stackable.tech";
-    const CRD_DEFINITION: &'static str = include_str!("../../deploy/crd/sparkcluster.crd.yaml");
 }
 
 #[allow(non_camel_case_types)]
