@@ -2,7 +2,7 @@
 authors = ["Malte Sander <malte.sander.it@gmail.com>"]
 description = "Contains the Apache Spark CRD structs and utilities"
 edition = "2018"
-license = "Apache-2.0"
+license = "OSL-3.0"
 name = "stackable-spark-crd"
 version = "0.1.0"
 
