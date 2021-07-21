@@ -11,47 +11,29 @@ spec:
       default:
         selector:
           matchLabels:
-            kubernetes.io/hostname: mdesktop
+            kubernetes.io/arch: stackable-linux
         replicas: 1
         config:
           masterPort: 7078
           masterWebUiPort: 8081
-      default2:
-        selector:
-          matchLabels:
-            kubernetes.io/hostname: mdesktop
-        replicas: 1
-        config:
-          masterPort: 7079
-          masterWebUiPort: 8082
   workers:
     roleGroups:
-      1core1g:
-        selector:
-          matchLabels:
-            kubernetes.io/hostname: mdesktop
-        replicas: 1
-        config:
-          cores: 1
-          memory: "1g"
-          workerPort: 3031
-          workerWebUiPort: 8083
       2core2g:
         selector:
           matchLabels:
-            kubernetes.io/hostname: mdesktop
+            kubernetes.io/arch: stackable-linux
         replicas: 1
         config:
           cores: 2
           memory: "2g"
-          workerPort: 3032
-          workerWebUiPort: 8084
+          workerPort: 3031
+          workerWebUiPort: 8083
   historyServers:
     roleGroups:
       default:
         selector:
           matchLabels:
-            kubernetes.io/hostname: mdesktop
+            kubernetes.io/arch: stackable-linux
         replicas: 1
         config:
           historyWebUiPort: 18081

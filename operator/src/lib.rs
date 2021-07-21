@@ -50,6 +50,7 @@ use crate::error::Error;
 use crate::pod_utils::{
     filter_pods_for_type, get_hashed_master_urls, APP_NAME, MANAGED_BY, MASTER_URLS_HASH_LABEL,
 };
+use kube::error::ErrorResponse;
 
 mod command_utils;
 pub mod config;
@@ -341,6 +342,7 @@ impl SparkState {
     /// - Create if no config map of that name exists
     /// - Update if config map exists but the content differs
     /// - Do nothing if the config map exists and the content is identical
+    /// - Forward any kube errors that may appear
     // TODO: move to operator-rs
     async fn create_config_map(&self, config_map: ConfigMap) -> Result<(), Error> {
         let cm_name = match config_map.metadata.name.as_deref() {
@@ -370,12 +372,13 @@ impl SparkState {
                 );
                 self.context.client.update(&config_map).await?;
             }
-            Err(e) => {
-                // TODO: This is shit, but works for now. If there is an actual error in comes with
-                //   K8S, it will most probably also occur further down and be properly handled
-                debug!("Error getting ConfigMap [{}]: [{:?}]", cm_name, e);
+            Err(stackable_operator::error::Error::KubeError {
+                source: kube::error::Error::Api(ErrorResponse { reason, .. }),
+            }) if reason == "NotFound" => {
+                debug!("Error getting ConfigMap [{}]: [{:?}]", cm_name, reason);
                 self.context.client.create(&config_map).await?;
             }
+            Err(e) => return Err(Error::OperatorError { source: e }),
         }
 
         Ok(())
