@@ -4,7 +4,7 @@ description = "Kubernetes Operator library to handle Apache Spark custom resourc
 version = "0.1.0"
 authors = ["Malte Sander <malte.sander.it@gmail.com>"]
 edition = "2018"
-license = "Apache-2.0"
+license = "OSL-3.0"
 
 [dependencies]
 product-config = { git = "https://github.com/stackabletech/product-config.git", branch = "main" }

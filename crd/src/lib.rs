@@ -440,33 +440,21 @@ mod tests {
 
     #[test]
     fn test_spark_version_is_upgrade() {
-        assert_eq!(
-            SparkVersion::v2_4_7
-                .is_upgrade(&SparkVersion::v3_0_1)
-                .unwrap(),
-            true
-        );
-        assert_eq!(
-            SparkVersion::v3_0_1
-                .is_upgrade(&SparkVersion::v3_0_1)
-                .unwrap(),
-            false
-        );
+        assert!(SparkVersion::v2_4_7
+            .is_upgrade(&SparkVersion::v3_0_1)
+            .unwrap());
+        assert!(!SparkVersion::v3_0_1
+            .is_upgrade(&SparkVersion::v3_0_1)
+            .unwrap());
     }
 
     #[test]
     fn test_spark_version_is_downgrade() {
-        assert_eq!(
-            SparkVersion::v3_0_1
-                .is_downgrade(&SparkVersion::v2_4_7)
-                .unwrap(),
-            true
-        );
-        assert_eq!(
-            SparkVersion::v3_0_1
-                .is_downgrade(&SparkVersion::v3_0_1)
-                .unwrap(),
-            false
-        );
+        assert!(SparkVersion::v3_0_1
+            .is_downgrade(&SparkVersion::v2_4_7)
+            .unwrap());
+        assert!(!SparkVersion::v3_0_1
+            .is_downgrade(&SparkVersion::v3_0_1)
+            .unwrap());
     }
 }
