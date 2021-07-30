@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use k8s_openapi::api::core::v1::{ConfigMap, EnvVar, Node, Pod};
+use k8s_openapi::api::core::v1::{ConfigMap, EnvVar, Pod};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::api::{ListParams, ResourceExt};
 use kube::Api;
@@ -33,7 +33,7 @@ use stackable_operator::reconcile::{
 };
 use stackable_operator::role_utils::{
     find_nodes_that_fit_selectors, get_role_and_group_labels,
-    list_eligible_nodes_for_role_and_group, CommonConfiguration,
+    list_eligible_nodes_for_role_and_group, CommonConfiguration, EligibleNodesForRoleAndGroup,
 };
 use strum::IntoEnumIterator;
 use tracing::{debug, info, trace, warn};
@@ -64,7 +64,7 @@ type SparkReconcileResult = ReconcileResult<error::Error>;
 struct SparkState {
     context: ReconciliationContext<SparkCluster>,
     existing_pods: Vec<Pod>,
-    eligible_nodes: HashMap<String, HashMap<String, Vec<Node>>>,
+    eligible_nodes: EligibleNodesForRoleAndGroup,
     validated_role_config: ValidatedRoleConfigByPropertyKind,
 }
 
@@ -396,7 +396,7 @@ impl SparkState {
         for role in SparkRole::iter() {
             let role_str = &role.to_string();
             if let Some(nodes_for_role) = self.eligible_nodes.get(role_str) {
-                for (role_group, nodes) in nodes_for_role {
+                for (role_group, (nodes, replicas)) in nodes_for_role {
                     debug!(
                         "Identify missing pods for [{}] role and group [{}]",
                         role_str, role_group
@@ -426,6 +426,7 @@ impl SparkState {
                         nodes,
                         &self.existing_pods,
                         &get_role_and_group_labels(role_str, role_group),
+                        *replicas,
                     );
 
                     for node in nodes_that_need_pods {
