@@ -1,5 +1,5 @@
 #[derive(Debug, thiserror::Error)]
-pub enum Error {
+pub enum SparkError {
     #[error("Kubernetes reported error: {source}")]
     KubeError {
         #[from]

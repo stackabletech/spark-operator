@@ -91,7 +91,7 @@ pub fn get_master_urls(
             }
 
             let validated_config_for_role_and_group =
-                config_for_role_and_group(role, group, &validated_config)?;
+                config_for_role_and_group(role, group, validated_config)?;
 
             let mut port = "7077";
             // The order for spark properties:
@@ -189,7 +189,7 @@ pub fn validated_product_config(
     validate_all_roles_and_groups_config(
         &resource.spec.version.to_string(),
         &role_config,
-        &product_config,
+        product_config,
         false,
         false,
     )
@@ -227,7 +227,7 @@ mod tests {
         let pod_name = "my_pod";
 
         assert_eq!(
-            create_config_map_name(&pod_name),
+            create_config_map_name(pod_name),
             format!("{}-config", pod_name)
         );
     }

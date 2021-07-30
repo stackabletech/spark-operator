@@ -46,7 +46,7 @@ use stackable_spark_crd::{
 };
 
 use crate::config::validated_product_config;
-use crate::error::Error;
+use crate::error::SparkError;
 use crate::pod_utils::{
     filter_pods_for_type, get_hashed_master_urls, APP_NAME, MANAGED_BY, MASTER_URLS_HASH_LABEL,
 };
@@ -59,7 +59,7 @@ pub mod pod_utils;
 
 const FINALIZER_NAME: &str = "spark.stackable.tech/cleanup";
 
-type SparkReconcileResult = ReconcileResult<error::Error>;
+type SparkReconcileResult = ReconcileResult<error::SparkError>;
 
 struct SparkState {
     context: ReconciliationContext<SparkCluster>,
@@ -214,7 +214,7 @@ impl SparkState {
                     .set_installing_condition(
                         &status.conditions,
                         &message,
-                        &reason,
+                        reason,
                         ConditionStatus::False,
                     )
                     .await?
@@ -344,9 +344,9 @@ impl SparkState {
     /// - Do nothing if the config map exists and the content is identical
     /// - Forward any kube errors that may appear
     // TODO: move to operator-rs
-    async fn create_config_map(&self, config_map: ConfigMap) -> Result<(), Error> {
+    async fn create_config_map(&self, config_map: ConfigMap) -> Result<(), SparkError> {
         let cm_name = match config_map.metadata.name.as_deref() {
-            None => return Err(Error::InvalidConfigMap),
+            None => return Err(SparkError::InvalidConfigMap),
             Some(name) => name,
         };
 
@@ -378,7 +378,7 @@ impl SparkState {
                 debug!("Error getting ConfigMap [{}]: [{:?}]", cm_name, reason);
                 self.context.client.create(&config_map).await?;
             }
-            Err(e) => return Err(Error::OperatorError { source: e }),
+            Err(e) => return Err(SparkError::OperatorError { source: e }),
         }
 
         Ok(())
@@ -450,7 +450,7 @@ impl SparkState {
                             .create_pod_and_config_maps(
                                 &role,
                                 role_group,
-                                &node_name,
+                                node_name,
                                 config_for_role_and_group(
                                     role_str,
                                     role_group,
@@ -488,7 +488,7 @@ impl SparkState {
         role_group: &str,
         node_name: &str,
         validated_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
-    ) -> Result<(Pod, Vec<ConfigMap>), Error> {
+    ) -> Result<(Pod, Vec<ConfigMap>), SparkError> {
         let mut config_maps = vec![];
         let mut cli_arguments = vec![];
         let mut env_vars = vec![];
@@ -722,10 +722,8 @@ impl SparkState {
                 );
 
                 self.context.resource.status = self.set_target_version(None).await?.status;
-                self.context.resource.status = self
-                    .set_current_version(Some(&target_version))
-                    .await?
-                    .status;
+                self.context.resource.status =
+                    self.set_current_version(Some(target_version)).await?.status;
                 self.context.resource.status = self
                     .set_installing_condition(
                         &status.conditions,
@@ -746,7 +744,7 @@ impl SparkState {
 }
 
 impl ReconciliationState for SparkState {
-    type Error = error::Error;
+    type Error = error::SparkError;
 
     fn reconcile(
         &mut self,
@@ -816,7 +814,7 @@ impl SparkStrategy {
 impl ControllerStrategy for SparkStrategy {
     type Item = SparkCluster;
     type State = SparkState;
-    type Error = error::Error;
+    type Error = error::SparkError;
 
     async fn init_reconcile_state(
         &self,
