@@ -12,28 +12,6 @@ pub const MANAGED_BY: &str = "spark-operator";
 /// Pod label which indicates the known master urls for a worker pod
 pub const MASTER_URLS_HASH_LABEL: &str = "spark.stackable.tech/masterUrls";
 
-/// All pod names follow a simple pattern: spark-<cluster_name>-<role_group>-<node_type>-<node_name>
-///
-/// # Arguments
-/// * `context_name` - The name of the cluster as specified in the custom resource
-/// * `role` - The cluster role (e.g. master, worker, history-server)
-/// * `role_group` - The role group of the selector
-/// * `node_name` - The node or host name
-///
-// TODO: Remove (move to) for operator-rs method
-pub fn create_pod_name(
-    context_name: &str,
-    role: &str,
-    role_group: &str,
-    node_name: &str,
-) -> String {
-    format!(
-        "{}-{}-{}-{}-{}",
-        APP_NAME, context_name, role_group, role, node_name
-    )
-    .to_lowercase()
-}
-
 /// Get all master urls and hash them. This is required to keep track of which workers
 /// are connected to which masters. In case masters are added / deleted, this hash changes
 /// and we need to restart the worker pods to keep them up to date with all known masters.

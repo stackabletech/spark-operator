@@ -551,10 +551,11 @@ impl SparkState {
             }
         }
 
-        let pod_name = pod_utils::create_pod_name(
+        let pod_name = stackable_operator::pod_utils::get_pod_name(
+            APP_NAME,
             &self.context.name(),
-            &role.to_string(),
             role_group,
+            &role.to_string(),
             node_name,
         );
 
