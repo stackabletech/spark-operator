@@ -547,10 +547,8 @@ impl SparkState {
                 );
 
                 self.context.resource.status = self.set_target_version(None).await?.status;
-                self.context.resource.status = self
-                    .set_current_version(Some(target_version))
-                    .await?
-                    .status;
+                self.context.resource.status =
+                    self.set_current_version(Some(target_version)).await?.status;
                 self.context.resource.status = self
                     .set_installing_condition(
                         &status.conditions,
