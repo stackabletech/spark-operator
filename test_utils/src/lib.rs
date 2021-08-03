@@ -51,7 +51,7 @@ pub fn create_master_pods() -> Vec<Pod> {
             TestSparkCluster::MASTER_1_NODE_NAME,
             TestSparkCluster::MASTER_1_ROLE_GROUP,
             &SparkNodeType::Master,
-            &master_urls.as_slice(),
+            master_urls.as_slice(),
         )
         .unwrap(),
         build_pod(
@@ -59,7 +59,7 @@ pub fn create_master_pods() -> Vec<Pod> {
             TestSparkCluster::MASTER_2_NODE_NAME,
             TestSparkCluster::MASTER_2_ROLE_GROUP,
             &SparkNodeType::Master,
-            &master_urls.as_slice(),
+            master_urls.as_slice(),
         )
         .unwrap(),
         build_pod(
@@ -67,7 +67,7 @@ pub fn create_master_pods() -> Vec<Pod> {
             TestSparkCluster::MASTER_3_NODE_NAME,
             TestSparkCluster::MASTER_3_ROLE_GROUP,
             &SparkNodeType::Master,
-            &master_urls.as_slice(),
+            master_urls.as_slice(),
         )
         .unwrap(),
     ]

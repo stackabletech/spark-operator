@@ -157,7 +157,7 @@ where
     T: Config,
 {
     fn get_spark_defaults_conf(&self, spec: &SparkClusterSpec) -> BTreeMap<String, String> {
-        (**self).get_spark_defaults_conf(&spec)
+        (**self).get_spark_defaults_conf(spec)
     }
 
     fn get_spark_env_sh(&self) -> BTreeMap<String, String> {
@@ -392,7 +392,7 @@ pub struct CurrentCommand {
 impl Conditions for SparkCluster {
     fn conditions(&self) -> Option<&[Condition]> {
         if let Some(status) = &self.status {
-            return Some(&status.conditions.as_slice());
+            return Some(status.conditions.as_slice());
         }
         None
     }

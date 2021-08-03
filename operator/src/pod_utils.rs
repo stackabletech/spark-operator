@@ -114,7 +114,7 @@ fn build_containers(
         ..Container::default()
     }];
 
-    let volumes = create_volumes(&cm_name, spec.log_dir.clone());
+    let volumes = create_volumes(cm_name, spec.log_dir.clone());
 
     (containers, volumes)
 }

@@ -108,7 +108,7 @@ where
     data.insert(SPARK_DEFAULTS_CONF.to_string(), conf);
     data.insert(SPARK_ENV_SH.to_string(), env);
 
-    let cm = create_config_map(resource, &cm_name, data)?;
+    let cm = create_config_map(resource, cm_name, data)?;
 
     Ok(cm)
 }
@@ -226,7 +226,7 @@ mod tests {
         let pod_name = "my_pod";
 
         assert_eq!(
-            create_config_map_name(&pod_name),
+            create_config_map_name(pod_name),
             format!("{}-config", pod_name)
         );
     }

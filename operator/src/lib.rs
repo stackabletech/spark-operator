@@ -193,7 +193,7 @@ impl SparkState {
                     .set_installing_condition(
                         &status.conditions,
                         &message,
-                        &reason,
+                        reason,
                         ConditionStatus::False,
                     )
                     .await?
@@ -375,7 +375,7 @@ impl SparkState {
         // - Roles (for example master, worker, history-server)
         //   - Node groups for this role (user defined)
         //      - Individual nodes
-        if let Some(nodes_for_role) = self.eligible_nodes.get(&node_type) {
+        if let Some(nodes_for_role) = self.eligible_nodes.get(node_type) {
             for (role_group, nodes) in nodes_for_role {
                 // Create config map for this role group (without node_name)
                 let pod_name = pod_utils::create_pod_name(
@@ -415,12 +415,12 @@ impl SparkState {
                 );
                 trace!(
                     "labels: [{:?}]",
-                    get_node_and_group_labels(role_group, &node_type)
+                    get_node_and_group_labels(role_group, node_type)
                 );
                 let nodes_that_need_pods = k8s_utils::find_nodes_that_need_pods(
                     nodes,
                     &self.existing_pods,
-                    &get_node_and_group_labels(role_group, &node_type),
+                    &get_node_and_group_labels(role_group, node_type),
                 );
 
                 for node in nodes_that_need_pods {
@@ -452,9 +452,9 @@ impl SparkState {
 
                     let pod = pod_utils::build_pod(
                         &self.context.resource,
-                        &node_name,
+                        node_name,
                         role_group,
-                        &node_type,
+                        node_type,
                         &master_urls,
                     )?;
 
@@ -548,7 +548,7 @@ impl SparkState {
 
                 self.context.resource.status = self.set_target_version(None).await?.status;
                 self.context.resource.status = self
-                    .set_current_version(Some(&target_version))
+                    .set_current_version(Some(target_version))
                     .await?
                     .status;
                 self.context.resource.status = self
@@ -662,7 +662,7 @@ impl ControllerStrategy for SparkStrategy {
         if let Some(history_servers) = &cluster_spec.history_servers {
             eligible_nodes.insert(
                 SparkNodeType::HistoryServer,
-                get_nodes_that_fit_selectors(&context.client, &history_servers).await?,
+                get_nodes_that_fit_selectors(&context.client, history_servers).await?,
             );
         }
 
