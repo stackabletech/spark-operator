@@ -30,7 +30,7 @@ properties:
             file: "spark-env.sh"
       datatype:
         type: "integer"
-        min: "1"
+        min: "1024"
         max: "65535"
         unit: *unitPort
       defaultValues:
@@ -50,7 +50,7 @@ properties:
             file: "spark-env.sh"
       datatype:
         type: "integer"
-        min: "1"
+        min: "1024"
         max: "65535"
         unit: *unitPort
       defaultValues:
@@ -99,7 +99,7 @@ properties:
             file: "spark-env.sh"
       datatype:
         type: "integer"
-        min: "1"
+        min: "1024"
         max: "65535"
         unit: *unitPort
       roles:
@@ -116,7 +116,7 @@ properties:
             file: "spark-env.sh"
       datatype:
         type: "integer"
-        min: "1"
+        min: "1024"
         max: "65535"
         unit: *unitPort
       defaultValues:
@@ -208,7 +208,7 @@ properties:
             file: "spark-defaults.conf"
       datatype:
         type: "integer"
-        min: "1"
+        min: "1024"
         max: "65535"
         unit: *unitPort
       defaultValues:
