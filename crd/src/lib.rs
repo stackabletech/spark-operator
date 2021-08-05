@@ -4,21 +4,23 @@ pub mod commands;
 pub use commands::{Restart, Start, Stop};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::api::ApiResource;
-use kube::{CustomResource, CustomResourceExt};
+use kube::{CustomResource, CustomResourceExt, ResourceExt};
 use schemars::JsonSchema;
 use semver::{Error as SemVerError, Version};
 use serde::{Deserialize, Serialize};
 use stackable_operator::command::{CommandRef, HasCommands};
 use stackable_operator::controller::HasOwned;
+use stackable_operator::crd::{HasApplication, HasInstance};
 use stackable_operator::product_config_utils::{ConfigError, Configuration};
 use stackable_operator::role_utils::{CommonConfiguration, Role};
 use stackable_operator::status::{Conditions, HasCurrentCommand};
 use stackable_spark_common::constants::{
-    SPARK_DEFAULTS_AUTHENTICATE, SPARK_DEFAULTS_AUTHENTICATE_SECRET, SPARK_DEFAULTS_EVENT_LOG_DIR,
-    SPARK_DEFAULTS_HISTORY_FS_LOG_DIRECTORY, SPARK_DEFAULTS_HISTORY_STORE_PATH,
-    SPARK_DEFAULTS_HISTORY_WEBUI_PORT, SPARK_DEFAULTS_PORT_MAX_RETRIES, SPARK_ENV_MASTER_PORT,
-    SPARK_ENV_MASTER_WEBUI_PORT, SPARK_ENV_WORKER_CORES, SPARK_ENV_WORKER_MEMORY,
-    SPARK_ENV_WORKER_PORT, SPARK_ENV_WORKER_WEBUI_PORT,
+    APP_NAME, SPARK_DEFAULTS_AUTHENTICATE, SPARK_DEFAULTS_AUTHENTICATE_SECRET,
+    SPARK_DEFAULTS_EVENT_LOG_DIR, SPARK_DEFAULTS_HISTORY_FS_LOG_DIRECTORY,
+    SPARK_DEFAULTS_HISTORY_STORE_PATH, SPARK_DEFAULTS_HISTORY_WEBUI_PORT,
+    SPARK_DEFAULTS_PORT_MAX_RETRIES, SPARK_ENV_MASTER_PORT, SPARK_ENV_MASTER_WEBUI_PORT,
+    SPARK_ENV_WORKER_CORES, SPARK_ENV_WORKER_MEMORY, SPARK_ENV_WORKER_PORT,
+    SPARK_ENV_WORKER_WEBUI_PORT,
 };
 use std::collections::BTreeMap;
 use std::hash::Hash;
@@ -60,6 +62,12 @@ impl HasCommands for SparkCluster {
 impl HasOwned for SparkCluster {
     fn owned_objects() -> Vec<&'static str> {
         vec![&Restart::crd_name(), &Start::crd_name(), &Stop::crd_name()]
+    }
+}
+
+impl HasApplication for SparkCluster {
+    fn get_application_name() -> &'static str {
+        APP_NAME
     }
 }
 
@@ -430,6 +438,10 @@ impl HasCurrentCommand for SparkClusterStatus {
 
     fn set_current_command(&mut self, command: CommandRef) {
         self.current_command = Some(command);
+    }
+
+    fn clear_current_command(&mut self) {
+        self.current_command = None
     }
 }
 

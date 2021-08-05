@@ -242,7 +242,7 @@ async fn finalize_current_command(
 /// * `cluster` - Spark cluster custom resource
 /// * `cluster_status` - Desired cluster status to be set
 ///
-async fn update_cluster_execution_status(
+pub async fn update_cluster_execution_status(
     client: &Client,
     cluster: &SparkCluster,
     cluster_execution_status: &ClusterExecutionStatus,

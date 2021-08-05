@@ -5,13 +5,6 @@ use stackable_spark_crd::SparkRole;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-/// Value for the APP_NAME_LABEL label key
-pub const APP_NAME: &str = "spark";
-/// Value for the APP_MANAGED_BY_LABEL label key
-pub const MANAGED_BY: &str = "spark-operator";
-/// Pod label which indicates the known master urls for a worker pod
-pub const MASTER_URLS_HASH_LABEL: &str = "spark.stackable.tech/masterUrls";
-
 /// Get all master urls and hash them. This is required to keep track of which workers
 /// are connected to which masters. In case masters are added / deleted, this hash changes
 /// and we need to restart the worker pods to keep them up to date with all known masters.

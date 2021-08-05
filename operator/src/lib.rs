@@ -38,18 +38,22 @@ use stackable_operator::role_utils::{
 use strum::IntoEnumIterator;
 use tracing::{debug, error, info, trace, warn};
 
-use stackable_spark_common::constants::{SPARK_DEFAULTS_CONF, SPARK_ENV_SH};
+use stackable_spark_common::constants::{
+    APP_NAME, MANAGED_BY, MASTER_URLS_HASH_LABEL, SPARK_DEFAULTS_CONF, SPARK_ENV_SH,
+};
 use stackable_spark_crd::commands::{Restart, Start, Stop};
-use stackable_spark_crd::{SparkCluster, SparkClusterStatus, SparkRole, SparkVersion};
+use stackable_spark_crd::{
+    ClusterExecutionStatus, SparkCluster, SparkClusterStatus, SparkRole, SparkVersion,
+};
 
+use crate::command_utils::update_cluster_execution_status;
 use crate::config::validated_product_config;
 use crate::error::SparkError;
-use crate::pod_utils::{
-    filter_pods_for_type, get_hashed_master_urls, APP_NAME, MANAGED_BY, MASTER_URLS_HASH_LABEL,
-};
+use crate::pod_utils::{filter_pods_for_type, get_hashed_master_urls};
 use kube::error::ErrorResponse;
 use stackable_operator::command::{
-    materialize_command, maybe_update_current_command, CommandRef, HasCommands,
+    clear_current_command, materialize_command, maybe_update_current_command, CommandRef,
+    HasCommands,
 };
 
 mod command_utils;
@@ -251,27 +255,84 @@ impl SparkState {
         Ok(ReconcileFunctionAction::Continue)
     }
 
-    pub fn handle_start(&mut self, _command: Start) -> SparkReconcileResult {
+    pub async fn handle_start(&mut self, _command: Start) -> SparkReconcileResult {
         info!("Starting");
-        Ok(ReconcileFunctionAction::Continue)
+        // TODO: traitify this
+        let _ = update_cluster_execution_status(
+            &self.context.client,
+            &self.context.resource,
+            &ClusterExecutionStatus::Running,
+        )
+        .await?;
+
+        // TODO: We should probably only clear the command after it has finished starting
+        //  but that will require some thought about the code structure
+        clear_current_command(&mut self.context.resource, &self.context.client).await?;
+
+        Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(5)))
     }
 
-    pub fn handle_stop(&mut self, _command: Stop) -> SparkReconcileResult {
+    pub async fn handle_stop(&mut self, command: CommandRef) -> SparkReconcileResult {
         info!("Stöpping");
-        Ok(ReconcileFunctionAction::Continue)
+        let stop_command: Stop = materialize_command(&command, &self.context.client).await?;
+
+        // TODO: traitify this
+        let _ = update_cluster_execution_status(
+            &self.context.client,
+            &self.context.resource,
+            &ClusterExecutionStatus::Stopped,
+        )
+        .await?;
+
+        match self.context.remove_pods(
+            &command,
+            vec![
+                SparkRole::Master.to_string().as_str(),
+                SparkRole::Worker.to_string().as_str(),
+                SparkRole::HistoryServer.to_string().as_str(),
+            ],
+            ContinuationStrategy::AllRequeue,
+        ) {
+            Ok(ReconcileFunctionAction::Done) => {
+                clear_current_command(&mut self.context.resource, &self.context.client).await?;
+                Ok(ReconcileFunctionAction::Continue)
+            }
+            Ok(_) => Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(5))),
+            Err(e) => Err(e),
+        }
     }
 
-    pub fn handle_restart(&mut self, _command: Restart) -> SparkReconcileResult {
+    pub async fn handle_restart(&mut self, command: CommandRef) -> SparkReconcileResult {
         info!("Restarting");
-        Ok(ReconcileFunctionAction::Continue)
+        let restart_command: Restart = materialize_command(&command, &self.context.client).await?;
+
+        // The returned value from this indicates if all eligible pods have been restarted already
+        // if this returns ::Done the command has been finished, we can remove it from the status
+        // and continue
+        // TODO: Should we continue or reque to check for a new command?
+        match self.context.remove_pods(
+            &command,
+            vec![
+                SparkRole::Master.to_string().as_str(),
+                SparkRole::Worker.to_string().as_str(),
+                SparkRole::HistoryServer.to_string().as_str(),
+            ],
+            ContinuationStrategy::OneRequeue,
+        ) {
+            Ok(ReconcileFunctionAction::Done) => {
+                clear_current_command(&mut self.context.resource, &self.context.client).await?;
+                Ok(ReconcileFunctionAction::Continue)
+            }
+            Ok(_) => Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(5))),
+            Err(e) => Err(e),
+        }
     }
 
     pub async fn process_command(&mut self) -> SparkReconcileResult {
         match self.context.retrieve_current_command().await? {
             None => Ok(ReconcileFunctionAction::Continue),
             Some(command_ref) => match command_ref.command_kind.as_str() {
-                "Restart" => self
-                    .handle_restart(materialize_command(&command_ref, &self.context.client).await?),
+                "Restart" => self.handle_restart(command_ref).await,
                 "Start" => self
                     .handle_start(materialize_command(&command_ref, &self.context.client).await?),
                 "Stop" => {
@@ -646,7 +707,7 @@ impl SparkState {
 
         for pod in &worker_pods {
             if let (Some(label_hashed_master_urls), Some(role), Some(group)) = (
-                pod.metadata.labels.get(pod_utils::MASTER_URLS_HASH_LABEL),
+                pod.metadata.labels.get(MASTER_URLS_HASH_LABEL),
                 pod.metadata.labels.get(APP_COMPONENT_LABEL),
                 pod.metadata.labels.get(APP_ROLE_GROUP_LABEL),
             ) {
@@ -656,7 +717,7 @@ impl SparkState {
                         &pod.name(),
                         role,
                         group,
-                        pod_utils::MASTER_URLS_HASH_LABEL,
+                        MASTER_URLS_HASH_LABEL,
                         label_hashed_master_urls,
                         current_hashed_master_urls,
                     );
