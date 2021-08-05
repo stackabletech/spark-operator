@@ -1,3 +1,4 @@
+use stackable_operator::controller::HasOwned;
 use stackable_operator::{client, error};
 use stackable_spark_crd::SparkCluster;
 use stackable_spark_crd::{Restart, Start, Stop};
@@ -13,7 +14,7 @@ async fn main() -> Result<(), error::Error> {
 
     if let Err(error) = stackable_operator::crd::wait_until_crds_present(
         &client,
-        SparkCluster::related_crds(),
+        <SparkCluster as HasOwned>::owned_objects(),
         None,
     )
     .await

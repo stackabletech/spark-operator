@@ -694,6 +694,7 @@ impl SparkState {
     /// After pod reconcile, if a command has startedAt but no finishedAt timestamp, set finishedAt
     /// timestamp and finalize command.
     pub async fn finalize_commands(&mut self) -> SparkReconcileResult {
+        /*
         if let Some(status) = &self.context.resource.status {
             // if a current_command is available we are currently
             // processing that command and are finished here.
@@ -711,7 +712,7 @@ impl SparkState {
                     .await?);
             }
         }
-
+        */
         Ok(ReconcileFunctionAction::Continue)
     }
 
