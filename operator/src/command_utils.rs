@@ -317,3 +317,42 @@ where
 pub fn get_current_timestamp() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
+
+/// Retrieve the command custom resource depending on the type and name.
+///
+/// # Arguments
+/// * `client` - Kubernetes client
+/// * `command_type` - Command type like Restart, Start, Stop etc.
+/// * `command` - Reference to meta.name in the command resource
+/// * `namespace` - Namespace of the resource
+///
+pub async fn get_command_from_ref(
+    client: &Client,
+    command_type: &str,
+    command: &str,
+    namespace: Option<&str>,
+) -> OperatorResult<CommandType> {
+    if command_type == Restart::kind(&()) {
+        Ok(CommandType::Restart(
+            client
+                .get::<stackable_spark_crd::Restart>(command, namespace)
+                .await?,
+        ))
+    } else if command_type == Start::kind(&()) {
+        Ok(CommandType::Start(
+            client
+                .get::<stackable_spark_crd::Start>(command, namespace)
+                .await?,
+        ))
+    } else if command_type == Stop::kind(&()) {
+        Ok(CommandType::Stop(
+            client
+                .get::<stackable_spark_crd::Stop>(command, namespace)
+                .await?,
+        ))
+    } else {
+        Err(stackable_operator::error::Error::MissingCustomResource {
+            name: command.to_string(),
+        })
+    }
+}
