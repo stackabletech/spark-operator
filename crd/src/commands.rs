@@ -89,11 +89,3 @@ pub enum CommandStatusMessage {
     Finished,
     Error,
 }
-
-pub fn get_command_types() -> Vec<ApiResource> {
-    vec![
-        Start::api_resource(),
-        Stop::api_resource(),
-        Restart::api_resource(),
-    ]
-}

@@ -36,10 +36,10 @@ use stackable_operator::role_utils::{
     list_eligible_nodes_for_role_and_group, CommonConfiguration, EligibleNodesForRoleAndGroup,
 };
 use strum::IntoEnumIterator;
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use stackable_spark_common::constants::{SPARK_DEFAULTS_CONF, SPARK_ENV_SH};
-use stackable_spark_crd::commands::{get_command_types, Restart, Start, Stop};
+use stackable_spark_crd::commands::{Restart, Start, Stop};
 use stackable_spark_crd::{SparkCluster, SparkClusterStatus, SparkRole, SparkVersion};
 
 use crate::config::validated_product_config;
@@ -48,7 +48,9 @@ use crate::pod_utils::{
     filter_pods_for_type, get_hashed_master_urls, APP_NAME, MANAGED_BY, MASTER_URLS_HASH_LABEL,
 };
 use kube::error::ErrorResponse;
-use stackable_operator::command::{materialize_command, maybe_update_current_command, CommandRef};
+use stackable_operator::command::{
+    materialize_command, maybe_update_current_command, CommandRef, HasCommands,
+};
 
 mod command_utils;
 pub mod config;
@@ -249,62 +251,37 @@ impl SparkState {
         Ok(ReconcileFunctionAction::Continue)
     }
 
-    pub fn handle_start(&mut self, _command: Start) {
+    pub fn handle_start(&mut self, _command: Start) -> SparkReconcileResult {
         info!("Starting");
-    }
-
-    pub fn handle_stop(&mut self, _command: Stop) {
-        info!("Stöpping");
-    }
-
-    pub fn handle_restart(&mut self, _command: Restart) {
-        info!("Restarting")
-    }
-
-    pub async fn process_command(&mut self, command_ref: CommandRef) -> SparkReconcileResult {
-        info!("Got command: {:?}", command_ref);
-        match command_ref.command_kind.as_str() {
-            "Restart" => {
-                self.handle_restart(materialize_command(&command_ref, &self.context.client).await?)
-            }
-            "Start" => {
-                self.handle_start(materialize_command(&command_ref, &self.context.client).await?)
-            }
-            "Stop" => {
-                self.handle_stop(materialize_command(&command_ref, &self.context.client).await?)
-            }
-            _ => {}
-        }
-
         Ok(ReconcileFunctionAction::Continue)
     }
 
-    /// Process available / running commands. If current_command in the status is set, we have
-    /// a running command. If it is not set, but commands are available, start the oldest command.
-    /// If no command is running, no command is waiting and the cluster_status field is "Stopped",
-    /// abort the reconcile action.
-    pub async fn process_commands(&mut self) -> SparkReconcileResult {
-        let current_command_ref = stackable_operator::command::current_command(
-            &self.context.resource,
-            get_command_types().as_slice(),
-            &self.context.client,
-        )
-        .await?;
+    pub fn handle_stop(&mut self, _command: Stop) -> SparkReconcileResult {
+        info!("Stöpping");
+        Ok(ReconcileFunctionAction::Continue)
+    }
 
-        // Check if the one that should be running has already been set in the Status => was
-        // already started
-        if let Some(current_command) = &current_command_ref {
-            maybe_update_current_command(
-                &mut self.context.resource,
-                &current_command,
-                &self.context.client,
-            )
-            .await?;
-        }
+    pub fn handle_restart(&mut self, _command: Restart) -> SparkReconcileResult {
+        info!("Restarting");
+        Ok(ReconcileFunctionAction::Continue)
+    }
 
-        match current_command_ref {
+    pub async fn process_command(&mut self) -> SparkReconcileResult {
+        match self.context.retrieve_current_command().await? {
             None => Ok(ReconcileFunctionAction::Continue),
-            Some(command_ref) => self.process_command(command_ref).await,
+            Some(command_ref) => match command_ref.command_kind.as_str() {
+                "Restart" => self
+                    .handle_restart(materialize_command(&command_ref, &self.context.client).await?),
+                "Start" => self
+                    .handle_start(materialize_command(&command_ref, &self.context.client).await?),
+                "Stop" => {
+                    self.handle_stop(materialize_command(&command_ref, &self.context.client).await?)
+                }
+                _ => {
+                    error!("Got unknown type of command: [{:?}]", command_ref);
+                    Ok(ReconcileFunctionAction::Done)
+                }
+            },
         }
     }
 
@@ -785,7 +762,7 @@ impl ReconciliationState for SparkState {
                         .wait_for_running_and_ready_pods(&self.existing_pods),
                 )
                 .await?
-                .then(self.process_commands())
+                .then(self.process_command())
                 .await?
                 .then(self.context.delete_excess_pods(
                     list_eligible_nodes_for_role_and_group(&self.eligible_nodes).as_slice(),
