@@ -467,8 +467,7 @@ impl SparkState {
                             .await?;
 
                         for config_map in config_maps {
-                            self.context.create_config_map(config_map).await?;
-                            //self.create_config_map(config_map).await?;
+                            self.create_config_map(config_map).await?;
                         }
 
                         self.context.client.create(&pod).await?;
