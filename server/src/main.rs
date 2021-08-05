@@ -1,4 +1,3 @@
-use stackable_operator::crd::CustomResourceExt;
 use stackable_operator::{client, error};
 use stackable_spark_crd::SparkCluster;
 use stackable_spark_crd::{Restart, Start, Stop};

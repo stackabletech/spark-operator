@@ -40,10 +40,7 @@ use tracing::{debug, info, trace, warn};
 
 use stackable_spark_common::constants::{SPARK_DEFAULTS_CONF, SPARK_ENV_SH};
 use stackable_spark_crd::commands::{get_command_types, Restart, Start, Stop};
-use stackable_spark_crd::{
-    ClusterExecutionStatus, CurrentCommand, SparkCluster, SparkClusterStatus, SparkRole,
-    SparkVersion,
-};
+use stackable_spark_crd::{SparkCluster, SparkClusterStatus, SparkRole, SparkVersion};
 
 use crate::config::validated_product_config;
 use crate::error::SparkError;
@@ -252,15 +249,15 @@ impl SparkState {
         Ok(ReconcileFunctionAction::Continue)
     }
 
-    pub fn handle_start(&mut self, command: Start) {
+    pub fn handle_start(&mut self, _command: Start) {
         info!("Starting");
     }
 
-    pub fn handle_stop(&mut self, command: Stop) {
+    pub fn handle_stop(&mut self, _command: Stop) {
         info!("Stöpping");
     }
 
-    pub fn handle_restart(&mut self, command: Restart) {
+    pub fn handle_restart(&mut self, _command: Restart) {
         info!("Restarting")
     }
 
@@ -288,7 +285,7 @@ impl SparkState {
     /// abort the reconcile action.
     pub async fn process_commands(&mut self) -> SparkReconcileResult {
         let current_command_ref = stackable_operator::command::current_command(
-            self.context.resource,
+            &self.context.resource,
             get_command_types().as_slice(),
             &self.context.client,
         )
@@ -301,7 +298,8 @@ impl SparkState {
                 &mut self.context.resource,
                 &current_command,
                 &self.context.client,
-            );
+            )
+            .await?;
         }
 
         match current_command_ref {
