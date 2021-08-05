@@ -7,6 +7,7 @@ use kube::{CustomResource, CustomResourceExt};
 use schemars::JsonSchema;
 use semver::{Error as SemVerError, Version};
 use serde::{Deserialize, Serialize};
+use stackable_operator::command::{CommandRef, HasCurrentCommand};
 use stackable_operator::product_config_utils::{ConfigError, Configuration};
 use stackable_operator::role_utils::{CommonConfiguration, Role};
 use stackable_operator::status::Conditions;
@@ -349,7 +350,7 @@ pub struct SparkClusterStatus {
     #[schemars(schema_with = "stackable_operator::conditions::schema")]
     pub conditions: Vec<Condition>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub current_command: Option<CurrentCommand>,
+    pub current_command: Option<CommandRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cluster_execution_status: Option<ClusterExecutionStatus>,
 }
@@ -413,6 +414,17 @@ pub enum SparkVersion {
     #[serde(rename = "3.1.1")]
     #[strum(serialize = "3.1.1")]
     v3_1_1,
+}
+
+impl HasCurrentCommand for SparkClusterStatus {
+    fn current_command(&self) -> Option<CommandRef> {
+        //self.status.current_command
+        Some(CommandRef::default())
+    }
+
+    fn set_current_command(&mut self, command: CommandRef) {
+        //self.status.current_command = command;
+    }
 }
 
 impl SparkVersion {

@@ -1,4 +1,5 @@
-use kube::CustomResource;
+use kube::api::ApiResource;
+use kube::{CustomResource, CustomResourceExt};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use stackable_operator::command_controller::Command;
@@ -87,4 +88,12 @@ pub enum CommandStatusMessage {
     Running,
     Finished,
     Error,
+}
+
+pub fn get_command_types() -> Vec<ApiResource> {
+    vec![
+        Start::api_resource(),
+        Stop::api_resource(),
+        Restart::api_resource(),
+    ]
 }

@@ -39,7 +39,7 @@ use strum::IntoEnumIterator;
 use tracing::{debug, info, trace, warn};
 
 use stackable_spark_common::constants::{SPARK_DEFAULTS_CONF, SPARK_ENV_SH};
-use stackable_spark_crd::commands::{Restart, Start, Stop};
+use stackable_spark_crd::commands::{get_command_types, Restart, Start, Stop};
 use stackable_spark_crd::{
     ClusterExecutionStatus, CurrentCommand, SparkCluster, SparkClusterStatus, SparkRole,
     SparkVersion,
@@ -51,6 +51,7 @@ use crate::pod_utils::{
     filter_pods_for_type, get_hashed_master_urls, APP_NAME, MANAGED_BY, MASTER_URLS_HASH_LABEL,
 };
 use kube::error::ErrorResponse;
+use stackable_operator::command::{materialize_command, maybe_update_current_command, CommandRef};
 
 mod command_utils;
 pub mod config;
@@ -251,56 +252,62 @@ impl SparkState {
         Ok(ReconcileFunctionAction::Continue)
     }
 
+    pub fn handle_start(&mut self, command: Start) {
+        info!("Starting");
+    }
+
+    pub fn handle_stop(&mut self, command: Stop) {
+        info!("Stöpping");
+    }
+
+    pub fn handle_restart(&mut self, command: Restart) {
+        info!("Restarting")
+    }
+
+    pub async fn process_command(&mut self, command_ref: CommandRef) -> SparkReconcileResult {
+        info!("Got command: {:?}", command_ref);
+        match command_ref.command_kind.as_str() {
+            "Restart" => {
+                self.handle_restart(materialize_command(&command_ref, &self.context.client).await?)
+            }
+            "Start" => {
+                self.handle_start(materialize_command(&command_ref, &self.context.client).await?)
+            }
+            "Stop" => {
+                self.handle_stop(materialize_command(&command_ref, &self.context.client).await?)
+            }
+            _ => {}
+        }
+
+        Ok(ReconcileFunctionAction::Continue)
+    }
+
     /// Process available / running commands. If current_command in the status is set, we have
     /// a running command. If it is not set, but commands are available, start the oldest command.
     /// If no command is running, no command is waiting and the cluster_status field is "Stopped",
     /// abort the reconcile action.
     pub async fn process_commands(&mut self) -> SparkReconcileResult {
-        if let Some(status) = self.context.resource.status.clone() {
-            // if a current_command is available we are currently processing that command
-            if let Some(current_command) = &status.current_command {
-                let running_command = command_utils::get_command_from_ref(
-                    &self.context.client,
-                    &current_command.command_type,
-                    &current_command.command_ref,
-                    self.context.resource.namespace().as_deref(),
-                )
-                .await?;
+        let current_command_ref = stackable_operator::command::current_command(
+            self.context.resource,
+            get_command_types().as_slice(),
+            &self.context.client,
+        )
+        .await?;
 
-                return Ok(running_command
-                    .process_command_running(
-                        &self.context.client,
-                        &mut self.context.resource,
-                        current_command,
-                    )
-                    .await?);
-            // if no current commands are running, check if any commands are available
-            } else if let Some(next_command) =
-                command_utils::get_next_command(&self.context.client).await?
-            {
-                let current_command = CurrentCommand {
-                    command_ref: next_command.get_name(),
-                    command_type: next_command.get_type(),
-                    started_at: command_utils::get_current_timestamp(),
-                };
-
-                return Ok(next_command
-                    .process_command_execute(
-                        &self.context.client,
-                        &self.context.resource,
-                        &current_command,
-                        &self.existing_pods,
-                    )
-                    .await?);
-
-            // if no next command check if cluster is stopped
-            } else if Some(ClusterExecutionStatus::Stopped) == status.cluster_execution_status {
-                info!("Cluster is stopped. Waiting for next command!");
-                return Ok(ReconcileFunctionAction::Done);
-            }
+        // Check if the one that should be running has already been set in the Status => was
+        // already started
+        if let Some(current_command) = &current_command_ref {
+            maybe_update_current_command(
+                &mut self.context.resource,
+                &current_command,
+                &self.context.client,
+            );
         }
 
-        Ok(ReconcileFunctionAction::Continue)
+        match current_command_ref {
+            None => Ok(ReconcileFunctionAction::Continue),
+            Some(command_ref) => self.process_command(command_ref).await,
+        }
     }
 
     /// Required labels for pods. Pods without any of these will deleted and replaced.
@@ -696,8 +703,8 @@ impl SparkState {
             if let Some(current_command) = &status.current_command {
                 let current_command = command_utils::get_command_from_ref(
                     &self.context.client,
-                    &current_command.command_type,
-                    &current_command.command_ref,
+                    &current_command.command_name,
+                    &current_command.command_uid,
                     self.context.resource.namespace().as_deref(),
                 )
                 .await?;
