@@ -14,7 +14,12 @@ async fn main() -> Result<(), error::Error> {
 
     if let Err(error) = stackable_operator::crd::wait_until_crds_present(
         &client,
-        SparkCluster::related_crds(),
+        vec![
+            &SparkCluster::crd_name(),
+            &Restart::crd_name(),
+            &Start::crd_name(),
+            &Stop::crd_name(),
+        ],
         None,
     )
     .await

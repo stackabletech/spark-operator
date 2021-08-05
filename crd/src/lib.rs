@@ -3,7 +3,7 @@ pub mod commands;
 
 pub use commands::{Restart, Start, Stop};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
-use kube::{CustomResource, CustomResourceExt};
+use kube::CustomResource;
 use schemars::JsonSchema;
 use semver::{Error as SemVerError, Version};
 use serde::{Deserialize, Serialize};
@@ -42,17 +42,6 @@ pub struct SparkClusterSpec {
     pub history_servers: Option<Role<HistoryServerConfig>>,
     #[serde(flatten)]
     pub config: Option<CommonConfiguration<CommonConfig>>,
-}
-
-impl SparkCluster {
-    pub fn related_crds() -> Vec<&'static str> {
-        vec![
-            &SparkCluster::crd_name(),
-            &Restart::crd_name(),
-            &Start::crd_name(),
-            &Stop::crd_name(),
-        ]
-    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
