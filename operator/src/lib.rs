@@ -29,7 +29,8 @@ use stackable_operator::product_config_utils::{
     config_for_role_and_group, ValidatedRoleConfigByPropertyKind,
 };
 use stackable_operator::reconcile::{
-    ContinuationStrategy, ReconcileFunctionAction, ReconcileResult, ReconciliationContext,
+    ContinuationStrategy, ProvidesPod, ReconcileFunctionAction, ReconcileResult,
+    ReconciliationContext,
 };
 use stackable_operator::role_utils::{
     find_nodes_that_fit_selectors, get_role_and_group_labels,
@@ -45,16 +46,15 @@ use stackable_spark_crd::commands::{Restart, Start, Stop};
 use stackable_spark_crd::{
     ClusterExecutionStatus, SparkCluster, SparkClusterStatus, SparkRole, SparkVersion,
 };
+use std::str::FromStr;
 
 use crate::command_utils::update_cluster_execution_status;
 use crate::config::validated_product_config;
 use crate::error::SparkError;
 use crate::pod_utils::{filter_pods_for_type, get_hashed_master_urls};
 use kube::error::ErrorResponse;
-use stackable_operator::command::{
-    clear_current_command, materialize_command, maybe_update_current_command, CommandRef,
-    HasCommands,
-};
+use stackable_operator::command::{clear_current_command, materialize_command, CommandRef};
+use stackable_operator::error::Error::InvalidName;
 
 mod command_utils;
 pub mod config;
@@ -70,6 +70,27 @@ struct SparkState {
     existing_pods: Vec<Pod>,
     eligible_nodes: EligibleNodesForRoleAndGroup,
     validated_role_config: ValidatedRoleConfigByPropertyKind,
+}
+
+#[async_trait]
+impl ProvidesPod for SparkState {
+    async fn get_pod_and_context(
+        &self,
+        role: &str,
+        role_group: &str,
+        node: &str,
+    ) -> OperatorResult<(Pod, Vec<ConfigMap>)> {
+        self.create_pod_and_config_maps(
+            &SparkRole::from_str(role).unwrap(),
+            role_group,
+            node,
+            config_for_role_and_group(role, role_group, &self.validated_role_config)?,
+        )
+        .await
+        .map_err(|_| InvalidName {
+            errors: vec!["Stuff went wrong!".to_string()],
+        })
+    }
 }
 
 impl SparkState {
@@ -292,31 +313,22 @@ impl SparkState {
             &ClusterExecutionStatus::Stopped,
         )
         .await?;
+        /*
+               match self.context.default_restart(&stop_command).await {
+                   Ok(ReconcileFunctionAction::Done) => {
+                       clear_current_command(&mut self.context.resource, &self.context.client).await?;
 
-        match self
-            .context
-            .remove_pods(
-                &command,
-                vec![
-                    SparkRole::Master.to_string().as_str(),
-                    SparkRole::Worker.to_string().as_str(),
-                    SparkRole::HistoryServer.to_string().as_str(),
-                ],
-                ContinuationStrategy::AllRequeue,
-            )
-            .await
-        {
-            Ok(ReconcileFunctionAction::Done) => {
-                clear_current_command(&mut self.context.resource, &self.context.client).await?;
+                       // TODO: This is a temporary "fix", the proper way would be to handle the return value
+                       //  from `remove_pods()` - but I don't trust that yet
+                       self.context.client.delete(&stop_command).await?;
+                       Ok(ReconcileFunctionAction::Continue)
+                   }
+                   Ok(_) => Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(5))),
+                   Err(e) => Err(SparkError::OperatorError { source: e }),
+               }
 
-                // TODO: This is a temporary "fix", the proper way would be to handle the return value
-                //  from `remove_pods()` - but I don't trust that yet
-                self.context.client.delete(&stop_command).await?;
-                Ok(ReconcileFunctionAction::Continue)
-            }
-            Ok(_) => Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(5))),
-            Err(e) => Err(SparkError::OperatorError { source: e }),
-        }
+        */
+        Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(5)))
     }
 
     pub async fn handle_restart(&mut self, command: CommandRef) -> SparkReconcileResult {
@@ -326,20 +338,8 @@ impl SparkState {
         // The returned value from this indicates if all eligible pods have been restarted already
         // if this returns ::Done the command has been finished, we can remove it from the status
         // and continue
-        // TODO: Should we continue or reque to check for a new command?
-        match self
-            .context
-            .remove_pods(
-                &command,
-                vec![
-                    SparkRole::Master.to_string().as_str(),
-                    SparkRole::Worker.to_string().as_str(),
-                    SparkRole::HistoryServer.to_string().as_str(),
-                ],
-                ContinuationStrategy::OneRequeue,
-            )
-            .await
-        {
+        // TODO: Should we continue or requeue to check for a new command?
+        match self.context.default_restart(&restart_command, self).await {
             Ok(ReconcileFunctionAction::Done) => {
                 clear_current_command(&mut self.context.resource, &self.context.client).await?;
                 Ok(ReconcileFunctionAction::Continue)

@@ -1,7 +1,10 @@
+use crate::SparkRole;
+use k8s_openapi::chrono::{DateTime, Utc};
 use kube::api::ApiResource;
 use kube::{CustomResource, CustomResourceExt};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use stackable_operator::command::{CanBeRolling, HasRoles};
 use stackable_operator::command_controller::Command;
 
 #[derive(Clone, CustomResource, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
@@ -15,11 +18,40 @@ use stackable_operator::command_controller::Command;
 #[serde(rename_all = "camelCase")]
 pub struct RestartCommandSpec {
     pub name: String,
+    pub rolling: bool,
+    pub roles: Option<Vec<SparkRole>>,
 }
 
 impl Command for Restart {
     fn get_owner_name(&self) -> String {
         self.spec.name.clone()
+    }
+
+    fn start(&mut self) {
+        todo!()
+    }
+
+    fn done(&mut self) {
+        todo!()
+    }
+
+    fn start_time(&self) -> Option<DateTime<Utc>> {
+        todo!()
+    }
+}
+
+impl CanBeRolling for Restart {
+    fn is_rolling(&self) -> bool {
+        self.spec.rolling
+    }
+}
+
+impl HasRoles for Restart {
+    fn get_role_order(&self) -> Option<Vec<String>> {
+        self.spec
+            .roles
+            .clone()
+            .map(|roles| roles.into_iter().map(|role| role.to_string()).collect())
     }
 }
 
@@ -40,6 +72,18 @@ impl Command for Start {
     fn get_owner_name(&self) -> String {
         self.spec.name.clone()
     }
+
+    fn start(&mut self) {
+        todo!()
+    }
+
+    fn done(&mut self) {
+        todo!()
+    }
+
+    fn start_time(&self) -> Option<DateTime<Utc>> {
+        todo!()
+    }
 }
 
 #[derive(Clone, CustomResource, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
@@ -58,6 +102,18 @@ pub struct StopCommandSpec {
 impl Command for Stop {
     fn get_owner_name(&self) -> String {
         self.spec.name.clone()
+    }
+
+    fn start(&mut self) {
+        todo!()
+    }
+
+    fn done(&mut self) {
+        todo!()
+    }
+
+    fn start_time(&self) -> Option<DateTime<Utc>> {
+        todo!()
     }
 }
 

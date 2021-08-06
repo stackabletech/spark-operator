@@ -20,8 +20,21 @@ spec:
               properties:
                 name:
                   type: string
+                roles:
+                  items:
+                    description: "Enum to manage the different Spark roles. `WARNING`: Do not alter the order of the roles because they are iterated over (via strum) and it always has to start with master (then worker, then history server)."
+                    enum:
+                      - master
+                      - slave
+                      - history-server
+                    type: string
+                  nullable: true
+                  type: array
+                rolling:
+                  type: boolean
               required:
                 - name
+                - rolling
               type: object
             status:
               nullable: true

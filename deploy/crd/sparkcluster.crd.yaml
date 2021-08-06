@@ -465,13 +465,13 @@ spec:
                     commandUid:
                       type: string
                     startedAt:
+                      nullable: true
                       type: string
                   required:
                     - commandKind
                     - commandName
                     - commandNs
                     - commandUid
-                    - startedAt
                   type: object
                 currentVersion:
                   enum:

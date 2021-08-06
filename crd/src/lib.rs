@@ -2,16 +2,19 @@
 pub mod commands;
 
 pub use commands::{Restart, Start, Stop};
+use k8s_openapi::api::core::v1::Pod;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::api::ApiResource;
+use kube::core::DynamicObject;
 use kube::{CustomResource, CustomResourceExt, ResourceExt};
 use schemars::JsonSchema;
 use semver::{Error as SemVerError, Version};
 use serde::{Deserialize, Serialize};
-use stackable_operator::command::{CommandRef, HasCommands};
+use stackable_operator::command::{CommandRef, HasCommands, HasRoleRestartOrder};
 use stackable_operator::controller::HasOwned;
 use stackable_operator::crd::{HasApplication, HasInstance};
 use stackable_operator::product_config_utils::{ConfigError, Configuration};
+use stackable_operator::reconcile::ProvidesPod;
 use stackable_operator::role_utils::{CommonConfiguration, Role};
 use stackable_operator::status::{Conditions, HasCurrentCommand};
 use stackable_spark_common::constants::{
@@ -47,6 +50,16 @@ pub struct SparkClusterSpec {
     pub history_servers: Option<Role<HistoryServerConfig>>,
     #[serde(flatten)]
     pub config: Option<CommonConfiguration<CommonConfig>>,
+}
+
+impl HasRoleRestartOrder for SparkCluster {
+    fn get_role_restart_order() -> Vec<String> {
+        vec![
+            SparkRole::Master.to_string(),
+            SparkRole::Worker.to_string(),
+            SparkRole::HistoryServer.to_string(),
+        ]
+    }
 }
 
 impl HasCommands for SparkCluster {
