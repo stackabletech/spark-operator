@@ -255,7 +255,7 @@ impl SparkState {
         Ok(ReconcileFunctionAction::Continue)
     }
 
-    pub async fn handle_start(&mut self, _command: Start) -> SparkReconcileResult {
+    pub async fn handle_start(&mut self, command: CommandRef) -> SparkReconcileResult {
         info!("Starting");
         // TODO: traitify this
         let _ = update_cluster_execution_status(
@@ -269,6 +269,11 @@ impl SparkState {
         //  but that will require some thought about the code structure
         clear_current_command(&mut self.context.resource, &self.context.client).await?;
 
+        // Clearing the stopped condition and reqeuing will cause the operator to add all missing
+        // pods (should be all of them) which effectively causes the service to start again
+        // TODO: By handling this in the normal pod start functionality we loose control over
+        //   whether to start all pods at once one by one, ...
+        //   might be worthwhile adding starting behavior to the command handling instead
         Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(5)))
     }
 
@@ -284,21 +289,25 @@ impl SparkState {
         )
         .await?;
 
-        match self.context.remove_pods(
-            &command,
-            vec![
-                SparkRole::Master.to_string().as_str(),
-                SparkRole::Worker.to_string().as_str(),
-                SparkRole::HistoryServer.to_string().as_str(),
-            ],
-            ContinuationStrategy::AllRequeue,
-        ) {
+        match self
+            .context
+            .remove_pods(
+                &command,
+                vec![
+                    SparkRole::Master.to_string().as_str(),
+                    SparkRole::Worker.to_string().as_str(),
+                    SparkRole::HistoryServer.to_string().as_str(),
+                ],
+                ContinuationStrategy::AllRequeue,
+            )
+            .await
+        {
             Ok(ReconcileFunctionAction::Done) => {
                 clear_current_command(&mut self.context.resource, &self.context.client).await?;
                 Ok(ReconcileFunctionAction::Continue)
             }
             Ok(_) => Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(5))),
-            Err(e) => Err(e),
+            Err(e) => Err(SparkError::OperatorError { source: e }),
         }
     }
 
@@ -310,21 +319,25 @@ impl SparkState {
         // if this returns ::Done the command has been finished, we can remove it from the status
         // and continue
         // TODO: Should we continue or reque to check for a new command?
-        match self.context.remove_pods(
-            &command,
-            vec![
-                SparkRole::Master.to_string().as_str(),
-                SparkRole::Worker.to_string().as_str(),
-                SparkRole::HistoryServer.to_string().as_str(),
-            ],
-            ContinuationStrategy::OneRequeue,
-        ) {
+        match self
+            .context
+            .remove_pods(
+                &command,
+                vec![
+                    SparkRole::Master.to_string().as_str(),
+                    SparkRole::Worker.to_string().as_str(),
+                    SparkRole::HistoryServer.to_string().as_str(),
+                ],
+                ContinuationStrategy::OneRequeue,
+            )
+            .await
+        {
             Ok(ReconcileFunctionAction::Done) => {
                 clear_current_command(&mut self.context.resource, &self.context.client).await?;
                 Ok(ReconcileFunctionAction::Continue)
             }
             Ok(_) => Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(5))),
-            Err(e) => Err(e),
+            Err(e) => Err(SparkError::OperatorError { source: e }),
         }
     }
 
@@ -333,11 +346,9 @@ impl SparkState {
             None => Ok(ReconcileFunctionAction::Continue),
             Some(command_ref) => match command_ref.command_kind.as_str() {
                 "Restart" => self.handle_restart(command_ref).await,
-                "Start" => self
-                    .handle_start(materialize_command(&command_ref, &self.context.client).await?),
-                "Stop" => {
-                    self.handle_stop(materialize_command(&command_ref, &self.context.client).await?)
-                }
+                "Start" => self.handle_start(command_ref).await,
+                "Stop" => self.handle_stop(command_ref).await,
+
                 _ => {
                     error!("Got unknown type of command: [{:?}]", command_ref);
                     Ok(ReconcileFunctionAction::Done)
