@@ -271,9 +271,13 @@ impl SparkState {
 
         // Clearing the stopped condition and reqeuing will cause the operator to add all missing
         // pods (should be all of them) which effectively causes the service to start again
-        // TODO: By handling this in the normal pod start functionality we loose control over
+        // TODO: By handling this in the normal pod start functionality we lose control over
         //   whether to start all pods at once one by one, ...
         //   might be worthwhile adding starting behavior to the command handling instead
+        //   As discussed with Lars, the way forward might be to create a "ProvidesPods" trait
+        //   which the Operator needs to implement, which would enable the framework to ask for
+        //   the pod that should be created for this "node, role, rolegroup" combination (all of
+        //   which are provided by the labels, so should be available)
         Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(5)))
     }
 
@@ -304,6 +308,10 @@ impl SparkState {
         {
             Ok(ReconcileFunctionAction::Done) => {
                 clear_current_command(&mut self.context.resource, &self.context.client).await?;
+
+                // TODO: This is a temporary "fix", the proper way would be to handle the return value
+                //  from `remove_pods()` - but I don't trust that yet
+                self.context.client.delete(&stop_command).await?;
                 Ok(ReconcileFunctionAction::Continue)
             }
             Ok(_) => Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(5))),
