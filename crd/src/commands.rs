@@ -1,9 +1,11 @@
 use crate::SparkRole;
-use k8s_openapi::chrono::{DateTime, Utc};
+use k8s_openapi::chrono::{DateTime, FixedOffset, Utc};
 use kube::api::ApiResource;
 use kube::{CustomResource, CustomResourceExt};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
+use serde_json::Value;
 use stackable_operator::command::{CanBeRolling, HasRoles};
 use stackable_operator::command_controller::Command;
 
@@ -20,6 +22,9 @@ pub struct RestartCommandSpec {
     pub name: String,
     pub rolling: bool,
     pub roles: Option<Vec<SparkRole>>,
+    // TODO: Change these to some form of Time type
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
 }
 
 impl Command for Restart {
@@ -28,15 +33,26 @@ impl Command for Restart {
     }
 
     fn start(&mut self) {
-        todo!()
+        self.spec.started_at = Some(Utc::now().to_rfc3339());
     }
 
     fn done(&mut self) {
-        todo!()
+        self.spec.finished_at = Some(Utc::now().to_rfc3339());
     }
 
-    fn start_time(&self) -> Option<DateTime<Utc>> {
-        todo!()
+    fn start_time(&self) -> Option<DateTime<FixedOffset>> {
+        self.spec
+            .started_at
+            .as_ref()
+            .map(|time_string| DateTime::<FixedOffset>::parse_from_rfc3339(time_string).unwrap())
+    }
+
+    fn get_start_patch(&self) -> Value {
+        json!({
+            "spec": {
+                "startedAt": &self.spec.started_at
+            }
+        })
     }
 }
 
@@ -81,7 +97,11 @@ impl Command for Start {
         todo!()
     }
 
-    fn start_time(&self) -> Option<DateTime<Utc>> {
+    fn start_time(&self) -> Option<DateTime<FixedOffset>> {
+        todo!()
+    }
+
+    fn get_start_patch(&self) -> Value {
         todo!()
     }
 }
@@ -112,7 +132,10 @@ impl Command for Stop {
         todo!()
     }
 
-    fn start_time(&self) -> Option<DateTime<Utc>> {
+    fn start_time(&self) -> Option<DateTime<FixedOffset>> {
+        todo!()
+    }
+    fn get_start_patch(&self) -> Value {
         todo!()
     }
 }

@@ -52,8 +52,10 @@ use crate::command_utils::update_cluster_execution_status;
 use crate::config::validated_product_config;
 use crate::error::SparkError;
 use crate::pod_utils::{filter_pods_for_type, get_hashed_master_urls};
+use chrono::Utc;
 use kube::error::ErrorResponse;
 use stackable_operator::command::{clear_current_command, materialize_command, CommandRef};
+use stackable_operator::command_controller::Command;
 use stackable_operator::error::Error::InvalidName;
 
 mod command_utils;
@@ -333,8 +335,18 @@ impl SparkState {
 
     pub async fn handle_restart(&mut self, command: CommandRef) -> SparkReconcileResult {
         info!("Restarting");
-        let restart_command: Restart = materialize_command(&command, &self.context.client).await?;
+        let mut restart_command: Restart =
+            materialize_command(&command, &self.context.client).await?;
 
+        Command::start(&mut restart_command);
+        // TODO: Can we maybe have a patch method that accepts something than needs to implement a
+        //   get_patch() trait?
+        let patch = Command::get_start_patch(&restart_command);
+        // TODO: patch start time
+        self.context
+            .client
+            .merge_patch(&restart_command, &patch)
+            .await?;
         // The returned value from this indicates if all eligible pods have been restarted already
         // if this returns ::Done the command has been finished, we can remove it from the status
         // and continue
@@ -815,6 +827,7 @@ impl ReconciliationState for SparkState {
     ) -> Pin<Box<dyn Future<Output = Result<ReconcileFunctionAction, Self::Error>> + Send + '_>>
     {
         info!("========================= Starting reconciliation =========================");
+        warn!("{}", Utc::now().to_rfc3339());
         debug!("Deletion Labels: [{:?}]", &self.required_pod_labels());
 
         Box::pin(async move {

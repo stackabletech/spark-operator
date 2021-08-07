@@ -4,3 +4,6 @@ metadata:
   name: spark-cluster-command-restart
 spec:
   name: "simple"
+  rolling: true
+  roles:
+    - slave

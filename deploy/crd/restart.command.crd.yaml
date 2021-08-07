@@ -18,6 +18,9 @@ spec:
           properties:
             spec:
               properties:
+                finishedAt:
+                  nullable: true
+                  type: string
                 name:
                   type: string
                 roles:
@@ -32,6 +35,9 @@ spec:
                   type: array
                 rolling:
                   type: boolean
+                startedAt:
+                  nullable: true
+                  type: string
               required:
                 - name
                 - rolling
