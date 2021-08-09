@@ -1,50 +1,71 @@
-mod command_utils;
-mod config;
-mod error;
-pub mod pod_utils;
+use std::collections::{BTreeMap, HashMap};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::time::Duration;
 
-use crate::error::Error;
-
-use crate::config::{create_config_map_name, create_config_map_with_data};
-use crate::pod_utils::filter_pods_for_type;
 use async_trait::async_trait;
-use k8s_openapi::api::core::v1::{ConfigMap, Node, Pod};
+use k8s_openapi::api::core::v1::{ConfigMap, EnvVar, Pod};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::api::{ListParams, ResourceExt};
 use kube::Api;
+use product_config::types::PropertyNameKind;
+use product_config::ProductConfigManager;
 use serde_json::json;
+use stackable_operator::builder::{
+    ConfigMapBuilder, ContainerBuilder, ObjectMetaBuilder, PodBuilder,
+};
 use stackable_operator::client::Client;
 use stackable_operator::conditions::ConditionStatus;
 use stackable_operator::controller::{Controller, ControllerStrategy, ReconciliationState};
 use stackable_operator::error::OperatorResult;
 use stackable_operator::k8s_utils;
-use stackable_operator::k8s_utils::LabelOptionalValueMap;
 use stackable_operator::labels::{
-    APP_COMPONENT_LABEL, APP_INSTANCE_LABEL, APP_ROLE_GROUP_LABEL, APP_VERSION_LABEL,
+    build_common_labels_for_all_managed_resources, get_recommended_labels, APP_COMPONENT_LABEL,
+    APP_INSTANCE_LABEL, APP_MANAGED_BY_LABEL, APP_NAME_LABEL, APP_ROLE_GROUP_LABEL,
+    APP_VERSION_LABEL,
+};
+use stackable_operator::product_config_utils::{
+    config_for_role_and_group, ValidatedRoleConfigByPropertyKind,
 };
 use stackable_operator::reconcile::{
     ContinuationStrategy, ReconcileFunctionAction, ReconcileResult, ReconciliationContext,
 };
-use stackable_operator::role_utils;
-use stackable_operator::role_utils::RoleGroup;
-use stackable_spark_crd::commands::{Restart, Start, Stop};
-use stackable_spark_crd::{
-    ClusterExecutionStatus, Config, CurrentCommand, NodeGroup, SparkCluster, SparkClusterStatus,
-    SparkNodeType, SparkVersion,
+use stackable_operator::role_utils::{
+    find_nodes_that_fit_selectors, get_role_and_group_labels,
+    list_eligible_nodes_for_role_and_group, CommonConfiguration, EligibleNodesForRoleAndGroup,
 };
-use std::collections::{BTreeMap, HashMap};
-use std::future::Future;
-use std::pin::Pin;
-use std::time::Duration;
 use strum::IntoEnumIterator;
 use tracing::{debug, info, trace, warn};
 
-type SparkReconcileResult = ReconcileResult<error::Error>;
+use stackable_spark_common::constants::{SPARK_DEFAULTS_CONF, SPARK_ENV_SH};
+use stackable_spark_crd::commands::{Restart, Start, Stop};
+use stackable_spark_crd::{
+    ClusterExecutionStatus, CurrentCommand, SparkCluster, SparkClusterStatus, SparkRole,
+    SparkVersion,
+};
+
+use crate::config::validated_product_config;
+use crate::error::SparkError;
+use crate::pod_utils::{
+    filter_pods_for_type, get_hashed_master_urls, APP_NAME, MANAGED_BY, MASTER_URLS_HASH_LABEL,
+};
+use kube::error::ErrorResponse;
+
+mod command_utils;
+pub mod config;
+mod error;
+pub mod pod_utils;
+
+const FINALIZER_NAME: &str = "spark.stackable.tech/cleanup";
+
+type SparkReconcileResult = ReconcileResult<error::SparkError>;
 
 struct SparkState {
     context: ReconciliationContext<SparkCluster>,
     existing_pods: Vec<Pod>,
-    eligible_nodes: HashMap<SparkNodeType, HashMap<String, Vec<Node>>>,
+    eligible_nodes: EligibleNodesForRoleAndGroup,
+    validated_role_config: ValidatedRoleConfigByPropertyKind,
 }
 
 impl SparkState {
@@ -193,7 +214,7 @@ impl SparkState {
                     .set_installing_condition(
                         &status.conditions,
                         &message,
-                        &reason,
+                        reason,
                         ConditionStatus::False,
                     )
                     .await?
@@ -282,32 +303,9 @@ impl SparkState {
         Ok(ReconcileFunctionAction::Continue)
     }
 
-    pub fn get_full_pod_node_map(&self) -> Vec<(Vec<Node>, LabelOptionalValueMap)> {
-        let mut eligible_nodes_map = vec![];
-
-        for node_type in SparkNodeType::iter() {
-            if let Some(eligible_nodes_for_role) = self.eligible_nodes.get(&node_type) {
-                for (group_name, eligible_nodes) in eligible_nodes_for_role {
-                    // Create labels to identify eligible nodes
-                    trace!(
-                        "Adding [{}] nodes to eligible node list for role [{}] and group [{}].",
-                        eligible_nodes.len(),
-                        node_type,
-                        group_name
-                    );
-                    eligible_nodes_map.push((
-                        eligible_nodes.clone(),
-                        get_node_and_group_labels(group_name, &node_type),
-                    ))
-                }
-            }
-        }
-        eligible_nodes_map
-    }
-
     /// Required labels for pods. Pods without any of these will deleted and replaced.
-    pub fn get_deletion_labels(&self) -> BTreeMap<String, Option<Vec<String>>> {
-        let roles = SparkNodeType::iter()
+    pub fn required_pod_labels(&self) -> BTreeMap<String, Option<Vec<String>>> {
+        let roles = SparkRole::iter()
             .map(|role| role.to_string())
             .collect::<Vec<_>>();
         let mut mandatory_labels = BTreeMap::new();
@@ -321,18 +319,36 @@ impl SparkState {
             String::from(APP_VERSION_LABEL),
             Some(vec![self.context.resource.spec.version.to_string()]),
         );
+        mandatory_labels.insert(
+            String::from(APP_NAME_LABEL),
+            Some(vec![String::from(APP_NAME)]),
+        );
+        mandatory_labels.insert(
+            String::from(APP_MANAGED_BY_LABEL),
+            Some(vec![String::from(MANAGED_BY)]),
+        );
+
         mandatory_labels
+    }
+
+    async fn delete_all_pods(&self) -> OperatorResult<ReconcileFunctionAction> {
+        for pod in &self.existing_pods {
+            self.context.client.delete(pod).await?;
+        }
+        Ok(ReconcileFunctionAction::Done)
     }
 
     /// Create or update a config map.
     /// - Create if no config map of that name exists
     /// - Update if config map exists but the content differs
     /// - Do nothing if the config map exists and the content is identical
-    async fn create_config_map<T>(&self, cm_name: &str, config: Option<T>) -> Result<(), Error>
-    where
-        T: Config,
-    {
-        let config_map = create_config_map_with_data(&self.context.resource, config, cm_name)?;
+    /// - Forward any kube errors that may appear
+    // TODO: move to operator-rs
+    async fn create_config_map(&self, config_map: ConfigMap) -> Result<(), SparkError> {
+        let cm_name = match config_map.metadata.name.as_deref() {
+            None => return Err(SparkError::InvalidConfigMap),
+            Some(name) => name,
+        };
 
         match self
             .context
@@ -356,121 +372,274 @@ impl SparkState {
                 );
                 self.context.client.update(&config_map).await?;
             }
-            Err(e) => {
-                // TODO: This is shit, but works for now. If there is an actual error in comes with
-                //   K8S, it will most probably also occur further down and be properly handled
-                debug!("Error getting ConfigMap [{}]: [{:?}]", cm_name, e);
+            Err(stackable_operator::error::Error::KubeError {
+                source: kube::error::Error::Api(ErrorResponse { reason, .. }),
+            }) if reason == "NotFound" => {
+                debug!("Error getting ConfigMap [{}]: [{:?}]", cm_name, reason);
                 self.context.client.create(&config_map).await?;
             }
+            Err(e) => return Err(SparkError::OperatorError { source: e }),
         }
 
         Ok(())
     }
 
-    async fn create_missing_pods(&mut self, node_type: &SparkNodeType) -> SparkReconcileResult {
+    async fn create_missing_pods(&mut self) -> SparkReconcileResult {
+        trace!("Starting `create_missing_pods`");
+
         let mut changes_applied = false;
         // The iteration happens in two stages here, to accommodate the way our operators think
-        // about nodes and roles.
+        // about roles and role groups.
         // The hierarchy is:
-        // - Roles (for example master, worker, history-server)
-        //   - Node groups for this role (user defined)
-        //      - Individual nodes
-        if let Some(nodes_for_role) = self.eligible_nodes.get(&node_type) {
-            for (role_group, nodes) in nodes_for_role {
-                // Create config map for this role group (without node_name)
-                let pod_name = pod_utils::create_pod_name(
-                    &self.context.name(),
-                    role_group,
-                    &node_type.to_string(),
-                    None,
-                );
-
-                let cm_name = create_config_map_name(&pod_name);
-                debug!("pod_name: [{}], cm_name: [{}]", pod_name, cm_name);
-
-                // extract config
-                let config = self.context.resource.spec.get_config(node_type, role_group);
-                self.create_config_map(&cm_name, config).await?;
-
-                debug!(
-                    "Identify missing pods for [{}] role and group [{}]",
-                    node_type, role_group
-                );
-                trace!(
-                    "candidate_nodes[{}]: [{:?}]",
-                    nodes.len(),
-                    nodes
-                        .iter()
-                        .map(|node| node.metadata.name.as_ref().unwrap())
-                        .collect::<Vec<_>>()
-                );
-                trace!(
-                    "existing_pods[{}]: [{:?}]",
-                    &self.existing_pods.len(),
-                    &self
-                        .existing_pods
-                        .iter()
-                        .map(|pod| pod.metadata.name.as_ref().unwrap())
-                        .collect::<Vec<_>>()
-                );
-                trace!(
-                    "labels: [{:?}]",
-                    get_node_and_group_labels(role_group, &node_type)
-                );
-                let nodes_that_need_pods = k8s_utils::find_nodes_that_need_pods(
-                    nodes,
-                    &self.existing_pods,
-                    &get_node_and_group_labels(role_group, &node_type),
-                );
-
-                for node in nodes_that_need_pods {
-                    let node_name = if let Some(node_name) = &node.metadata.name {
-                        node_name
-                    } else {
-                        warn!("No name found in metadata, this should not happen! Skipping node: [{:?}]", node);
-                        continue;
-                    };
+        // - Roles (Master, Worker, History-Server)
+        //   - Role groups (user defined)
+        for role in SparkRole::iter() {
+            let role_str = &role.to_string();
+            if let Some(nodes_for_role) = self.eligible_nodes.get(role_str) {
+                for (role_group, (nodes, replicas)) in nodes_for_role {
                     debug!(
-                        "Creating pod on node [{}] for [{}] role and group [{}]",
-                        node.metadata
-                            .name
-                            .as_deref()
-                            .unwrap_or("<no node name found>"),
-                        node_type,
-                        role_group
+                        "Identify missing pods for [{}] role and group [{}]",
+                        role_str, role_group
+                    );
+                    trace!(
+                        "candidate_nodes[{}]: [{:?}]",
+                        nodes.len(),
+                        nodes
+                            .iter()
+                            .map(|node| node.metadata.name.as_ref().unwrap())
+                            .collect::<Vec<_>>()
+                    );
+                    trace!(
+                        "existing_pods[{}]: [{:?}]",
+                        &self.existing_pods.len(),
+                        &self
+                            .existing_pods
+                            .iter()
+                            .map(|pod| pod.metadata.name.as_ref().unwrap())
+                            .collect::<Vec<_>>()
+                    );
+                    trace!(
+                        "labels: [{:?}]",
+                        get_role_and_group_labels(role_str, role_group)
+                    );
+                    let nodes_that_need_pods = k8s_utils::find_nodes_that_need_pods(
+                        nodes,
+                        &self.existing_pods,
+                        &get_role_and_group_labels(role_str, role_group),
+                        *replicas,
                     );
 
-                    let master_pods =
-                        filter_pods_for_type(&self.existing_pods, &SparkNodeType::Master);
+                    for node in nodes_that_need_pods {
+                        let node_name = if let Some(node_name) = &node.metadata.name {
+                            node_name
+                        } else {
+                            warn!("No name found in metadata, this should not happen! Skipping node: [{:?}]", node);
+                            continue;
+                        };
+                        debug!(
+                            "Creating pod on node [{}] for [{}] role and group [{}]",
+                            node.metadata
+                                .name
+                                .as_deref()
+                                .unwrap_or("<no node name found>"),
+                            role_str,
+                            role_group
+                        );
 
-                    let master_urls = stackable_spark_crd::get_master_urls(
-                        master_pods.as_slice(),
-                        &self.context.resource.spec,
-                    );
+                        let (pod, config_maps) = self
+                            .create_pod_and_config_maps(
+                                &role,
+                                role_group,
+                                node_name,
+                                config_for_role_and_group(
+                                    role_str,
+                                    role_group,
+                                    &self.validated_role_config,
+                                )?,
+                            )
+                            .await?;
 
-                    debug!("Found master urls: {:?}", master_urls);
+                        for config_map in config_maps {
+                            self.create_config_map(config_map).await?;
+                        }
 
-                    let pod = pod_utils::build_pod(
-                        &self.context.resource,
-                        &node_name,
-                        role_group,
-                        &node_type,
-                        &master_urls,
-                    )?;
+                        self.context.client.create(&pod).await?;
 
-                    self.context.client.create(&pod).await?;
-                    changes_applied = true;
+                        changes_applied = true;
+                    }
+
+                    // we do this here to make sure pods of each role are started after each other
+                    // roles start in rolling fashion
+                    // pods of each role group start in parallel
+                    // master > worker > history server
+                    if changes_applied {
+                        return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
+                    }
                 }
             }
-            // we do this here to make sure pods of each role are started after each other
-            // roles start in rolling fashion
-            // pods of each role start non rolling
-            // master > worker > history server
-            if changes_applied {
-                return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
+        }
+
+        Ok(ReconcileFunctionAction::Continue)
+    }
+
+    async fn create_pod_and_config_maps(
+        &self,
+        role: &SparkRole,
+        role_group: &str,
+        node_name: &str,
+        validated_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
+    ) -> Result<(Pod, Vec<ConfigMap>), SparkError> {
+        let mut config_maps = vec![];
+        let mut cli_arguments = vec![];
+        let mut env_vars = vec![];
+        let mut cm_data = BTreeMap::new();
+
+        for (property_name_kind, config) in validated_config {
+            // we need to convert to <String, String> to <String, Option<String>> to deal with
+            // CLI flags etc. We can not currently represent that via operator-rs / product-config.
+            // This is a preparation for that.
+            let transformed_config: BTreeMap<String, Option<String>> = config
+                .iter()
+                .map(|(k, v)| (k.to_string(), Some(v.to_string())))
+                .collect();
+
+            match property_name_kind {
+                PropertyNameKind::File(file_name) => match file_name.as_str() {
+                    SPARK_DEFAULTS_CONF => {
+                        let config_as_string = config::convert_map_to_string(config, " ");
+                        cm_data.insert(SPARK_DEFAULTS_CONF.to_string(), config_as_string);
+                    }
+                    SPARK_ENV_SH => {
+                        let config_as_string = config::convert_map_to_string(config, "=");
+                        cm_data.insert(SPARK_ENV_SH.to_string(), config_as_string);
+                    }
+                    _ => {}
+                },
+                PropertyNameKind::Env => {
+                    for (property_name, property_value) in transformed_config {
+                        if property_name.is_empty() {
+                            warn!("Received empty property_name for ENV... skipping");
+                            continue;
+                        }
+
+                        env_vars.push(EnvVar {
+                            name: property_name,
+                            value: property_value,
+                            value_from: None,
+                        });
+                    }
+                }
+                PropertyNameKind::Cli => {
+                    for (property_name, property_value) in transformed_config {
+                        if property_name.is_empty() {
+                            warn!("Received empty property_name for CLI... skipping");
+                            continue;
+                        }
+                        // single argument / flag
+                        if property_value.is_none() {
+                            cli_arguments.push(property_name);
+                        } else {
+                            // key value pair
+                            cli_arguments.push(format!(
+                                "--{} {}",
+                                property_name,
+                                property_value.unwrap()
+                            ));
+                        }
+                    }
+                }
             }
         }
-        Ok(ReconcileFunctionAction::Continue)
+
+        let pod_name = stackable_operator::pod_utils::get_pod_name(
+            APP_NAME,
+            &self.context.name(),
+            role_group,
+            &role.to_string(),
+            node_name,
+        );
+
+        let cm_name = config::create_config_map_name(&pod_name);
+
+        let master_pods = filter_pods_for_type(&self.existing_pods, &SparkRole::Master);
+        let master_urls = &config::get_master_urls(&master_pods, &self.validated_role_config)?;
+
+        let version = &self.context.resource.spec.version.to_string();
+
+        let mut labels = get_recommended_labels(
+            &self.context.resource,
+            APP_NAME,
+            version,
+            &role.to_string(),
+            role_group,
+        );
+
+        let mut args = vec![];
+        // add hashed master url label to workers and adapt start command and
+        // adapt worker command with master url(s)
+        if role == &SparkRole::Worker {
+            labels.insert(
+                MASTER_URLS_HASH_LABEL.to_string(),
+                get_hashed_master_urls(master_urls),
+            );
+
+            if let Some(master_urls) = config::adapt_worker_command(role, master_urls) {
+                args.push(master_urls);
+            }
+        }
+
+        // add cli arguments from product config / user config
+        args.append(&mut cli_arguments);
+
+        let mut container_builder = ContainerBuilder::new("spark");
+        container_builder.image(format!("spark:{}", version));
+        container_builder.command(vec![role.get_command(version)]);
+        container_builder.args(args);
+        container_builder.add_configmapvolume(cm_name.clone(), "conf".to_string());
+
+        if let Some(CommonConfiguration {
+            config: Some(cfg), ..
+        }) = &self.context.resource.spec.config
+        {
+            if let Some(log_dir) = &cfg.log_dir {
+                container_builder.add_configmapvolume(cm_name.clone(), log_dir);
+            }
+        }
+
+        container_builder.add_env_vars(env_vars);
+
+        let pod = PodBuilder::new()
+            .metadata(
+                ObjectMetaBuilder::new()
+                    .name(pod_name)
+                    .namespace(&self.context.client.default_namespace)
+                    .with_labels(labels)
+                    .ownerreference_from_resource(&self.context.resource, Some(true), Some(true))?
+                    .build()?,
+            )
+            .add_stackable_agent_tolerations()
+            .add_container(container_builder.build())
+            .node_name(node_name)
+            .build()?;
+
+        config_maps.push(
+            ConfigMapBuilder::new()
+                .metadata(
+                    ObjectMetaBuilder::new()
+                        .name(cm_name)
+                        .ownerreference_from_resource(
+                            &self.context.resource,
+                            Some(true),
+                            Some(true),
+                        )?
+                        .namespace(&self.context.client.default_namespace)
+                        .build()?,
+                )
+                .data(cm_data)
+                .build()?,
+        );
+
+        Ok((pod, config_maps))
     }
 
     /// In spark stand alone, workers are started via script and require the master urls to connect to.
@@ -478,32 +647,33 @@ impl SparkState {
     /// to fall back on other masters, if the primary master fails.
     /// Therefore we always need to keep the workers updated in terms of available master urls.
     /// Available master urls are hashed and stored as label in the worker pod. If the label differs
-    /// from the spec, we need to replace (delete and and) the workers in a rolling fashion.
+    /// from the spec, we need to replace (delete and create) the workers in a rolling fashion.
     pub async fn check_worker_master_urls(&self) -> SparkReconcileResult {
-        let worker_pods = filter_pods_for_type(&self.existing_pods, &SparkNodeType::Worker);
-        let master_pods = filter_pods_for_type(&self.existing_pods, &SparkNodeType::Master);
+        let worker_pods = filter_pods_for_type(&self.existing_pods, &SparkRole::Worker);
+        let master_pods = filter_pods_for_type(&self.existing_pods, &SparkRole::Master);
+
+        let current_hashed_master_urls = pod_utils::get_hashed_master_urls(
+            &config::get_master_urls(&master_pods, &self.validated_role_config)?,
+        );
 
         for pod in &worker_pods {
-            if let Some(labels) = &pod.metadata.labels {
-                if let Some(label_hashed_master_urls) =
-                    labels.get(pod_utils::MASTER_URLS_HASH_LABEL)
-                {
-                    let current_hashed_master_urls =
-                        pod_utils::get_hashed_master_urls(&stackable_spark_crd::get_master_urls(
-                            &master_pods,
-                            &self.context.resource.spec,
-                        ));
-                    if label_hashed_master_urls != &current_hashed_master_urls {
-                        debug!(
-                            "Pod [{}] has an outdated '{}' [{}] - required is [{}], deleting it",
-                            &pod.name(),
-                            pod_utils::MASTER_URLS_HASH_LABEL,
-                            label_hashed_master_urls,
-                            current_hashed_master_urls,
-                        );
-                        self.context.client.delete(pod).await?;
-                        return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
-                    }
+            if let (Some(label_hashed_master_urls), Some(role), Some(group)) = (
+                pod.metadata.labels.get(pod_utils::MASTER_URLS_HASH_LABEL),
+                pod.metadata.labels.get(APP_COMPONENT_LABEL),
+                pod.metadata.labels.get(APP_ROLE_GROUP_LABEL),
+            ) {
+                if label_hashed_master_urls != &current_hashed_master_urls {
+                    debug!(
+                        "Pod [{}] with Role [{}] and Group [{}] has an outdated '{}' [{}] - required is [{}], deleting it",
+                        &pod.name(),
+                        role,
+                        group,
+                        pod_utils::MASTER_URLS_HASH_LABEL,
+                        label_hashed_master_urls,
+                        current_hashed_master_urls,
+                    );
+                    self.context.client.delete(pod).await?;
+                    return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
                 }
             }
         }
@@ -547,10 +717,8 @@ impl SparkState {
                 );
 
                 self.context.resource.status = self.set_target_version(None).await?.status;
-                self.context.resource.status = self
-                    .set_current_version(Some(&target_version))
-                    .await?
-                    .status;
+                self.context.resource.status =
+                    self.set_current_version(Some(target_version)).await?.status;
                 self.context.resource.status = self
                     .set_installing_condition(
                         &status.conditions,
@@ -571,21 +739,27 @@ impl SparkState {
 }
 
 impl ReconciliationState for SparkState {
-    type Error = error::Error;
+    type Error = error::SparkError;
 
     fn reconcile(
         &mut self,
     ) -> Pin<Box<dyn Future<Output = Result<ReconcileFunctionAction, Self::Error>> + Send + '_>>
     {
         info!("========================= Starting reconciliation =========================");
-        debug!("Deletion Labels: [{:?}]", &self.get_deletion_labels());
+        debug!("Deletion Labels: [{:?}]", &self.required_pod_labels());
 
         Box::pin(async move {
             self.init_status()
                 .await?
+                .then(self.context.handle_deletion(
+                    Box::pin(self.delete_all_pods()),
+                    FINALIZER_NAME,
+                    true,
+                ))
+                .await?
                 .then(self.context.delete_illegal_pods(
                     self.existing_pods.as_slice(),
-                    &self.get_deletion_labels(),
+                    &self.required_pod_labels(),
                     ContinuationStrategy::OneRequeue,
                 ))
                 .await?
@@ -602,16 +776,12 @@ impl ReconciliationState for SparkState {
                 .then(self.process_commands())
                 .await?
                 .then(self.context.delete_excess_pods(
-                    self.get_full_pod_node_map().as_slice(),
+                    list_eligible_nodes_for_role_and_group(&self.eligible_nodes).as_slice(),
                     &self.existing_pods,
                     ContinuationStrategy::OneRequeue,
                 ))
                 .await?
-                .then(self.create_missing_pods(&SparkNodeType::Master))
-                .await?
-                .then(self.create_missing_pods(&SparkNodeType::Worker))
-                .await?
-                .then(self.create_missing_pods(&SparkNodeType::HistoryServer))
+                .then(self.create_missing_pods())
                 .await?
                 .then(self.check_worker_master_urls())
                 .await?
@@ -623,12 +793,15 @@ impl ReconciliationState for SparkState {
     }
 }
 
-#[derive(Debug)]
-struct SparkStrategy {}
+struct SparkStrategy {
+    config: Arc<ProductConfigManager>,
+}
 
 impl SparkStrategy {
-    pub fn new() -> SparkStrategy {
-        SparkStrategy {}
+    pub fn new(config: ProductConfigManager) -> SparkStrategy {
+        SparkStrategy {
+            config: Arc::new(config),
+        }
     }
 }
 
@@ -636,71 +809,52 @@ impl SparkStrategy {
 impl ControllerStrategy for SparkStrategy {
     type Item = SparkCluster;
     type State = SparkState;
-    type Error = error::Error;
+    type Error = error::SparkError;
 
     async fn init_reconcile_state(
         &self,
         context: ReconciliationContext<Self::Item>,
     ) -> Result<Self::State, Self::Error> {
-        let existing_pods = context.list_owned().await?;
-        trace!("Found [{}] pods", existing_pods.len());
+        let existing_pods = context
+            .list_owned(build_common_labels_for_all_managed_resources(
+                APP_NAME,
+                &context.resource.name(),
+            ))
+            .await?;
+        trace!(
+            "{}: Found [{}] pods",
+            context.log_name(),
+            existing_pods.len()
+        );
 
         let cluster_spec = &context.resource.spec;
 
         let mut eligible_nodes = HashMap::new();
 
         eligible_nodes.insert(
-            SparkNodeType::Master,
-            get_nodes_that_fit_selectors(&context.client, &cluster_spec.masters).await?,
+            SparkRole::Master.to_string(),
+            find_nodes_that_fit_selectors(&context.client, None, &cluster_spec.masters).await?,
         );
 
         eligible_nodes.insert(
-            SparkNodeType::Worker,
-            get_nodes_that_fit_selectors(&context.client, &cluster_spec.workers).await?,
+            SparkRole::Worker.to_string(),
+            find_nodes_that_fit_selectors(&context.client, None, &cluster_spec.workers).await?,
         );
 
         if let Some(history_servers) = &cluster_spec.history_servers {
             eligible_nodes.insert(
-                SparkNodeType::HistoryServer,
-                get_nodes_that_fit_selectors(&context.client, &history_servers).await?,
+                SparkRole::HistoryServer.to_string(),
+                find_nodes_that_fit_selectors(&context.client, None, history_servers).await?,
             );
         }
 
         Ok(SparkState {
+            validated_role_config: validated_product_config(&context.resource, &self.config)?,
             context,
             existing_pods,
             eligible_nodes,
         })
     }
-}
-
-async fn get_nodes_that_fit_selectors<T>(
-    client: &Client,
-    group: &NodeGroup<T>,
-) -> OperatorResult<HashMap<String, Vec<Node>>> {
-    let role_groups: Vec<RoleGroup> = group
-        .selectors
-        .iter()
-        .map(|(group_name, selector_config)| RoleGroup {
-            name: group_name.to_string(),
-            selector: selector_config.selector.clone().unwrap(),
-        })
-        .collect();
-
-    role_utils::find_nodes_that_fit_selectors(client, None, role_groups.as_slice()).await
-}
-
-fn get_node_and_group_labels(group_name: &str, node_type: &SparkNodeType) -> LabelOptionalValueMap {
-    let mut node_labels = BTreeMap::new();
-    node_labels.insert(
-        String::from(APP_COMPONENT_LABEL),
-        Some(node_type.to_string()),
-    );
-    node_labels.insert(
-        String::from(APP_ROLE_GROUP_LABEL),
-        Some(String::from(group_name)),
-    );
-    node_labels
 }
 
 /// This creates an instance of a [`Controller`] which waits for incoming events and reconciles them.
@@ -721,7 +875,9 @@ pub async fn create_controller(client: Client) {
         .owns(cmd_start_api, ListParams::default())
         .owns(cmd_stop_api, ListParams::default());
 
-    let strategy = SparkStrategy::new();
+    let product_config =
+        ProductConfigManager::from_yaml_file("deploy/config-spec/properties.yaml").unwrap();
+    let strategy = SparkStrategy::new(product_config);
 
     controller
         .run(client, strategy, Duration::from_secs(10))

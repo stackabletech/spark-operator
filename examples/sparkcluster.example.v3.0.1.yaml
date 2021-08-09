@@ -1,61 +1,40 @@
-apiVersion: spark.stackable.tech/v1
+apiVersion: spark.stackable.tech/v1alpha1
 kind: SparkCluster
 metadata:
   name: simple
 spec:
   version: "3.0.1"
+  config:
+    logDir: "file:///tmp"
   masters:
-    selectors:
+    roleGroups:
       default:
         selector:
           matchLabels:
-            kubernetes.io/hostname: mdesktop
-        instances: 1
-        instancesPerNode: 1
+            kubernetes.io/arch: stackable-linux
+        replicas: 1
         config:
           masterPort: 7078
           masterWebUiPort: 8081
-      default2:
-        selector:
-          matchLabels:
-            kubernetes.io/hostname: mdesktop
-        instances: 1
-        instancesPerNode: 1
-        config:
-          masterPort: 7079
-          masterWebUiPort: 8082
   workers:
-    selectors:
-      1core1g:
-        selector:
-          matchLabels:
-            kubernetes.io/hostname: mdesktop
-        instances: 1
-        instancesPerNode: 1
-        config:
-          cores: 1
-          memory: "1g"
-          workerPort: 3031
-          workerWebUiPort: 8083
+    roleGroups:
       2core2g:
         selector:
           matchLabels:
-            kubernetes.io/hostname: mdesktop
-        instances: 1
-        instancesPerNode: 1
+            kubernetes.io/arch: stackable-linux
+        replicas: 1
         config:
           cores: 2
           memory: "2g"
-          workerPort: 3032
-          workerWebUiPort: 8084
+          workerPort: 3031
+          workerWebUiPort: 8083
   historyServers:
-    selectors:
+    roleGroups:
       default:
         selector:
           matchLabels:
-            kubernetes.io/hostname: mdesktop
-        instances: 1
-        instancesPerNode: 1
+            kubernetes.io/arch: stackable-linux
+        replicas: 1
         config:
           historyWebUiPort: 18081
 

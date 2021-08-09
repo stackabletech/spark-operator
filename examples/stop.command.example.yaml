@@ -1,4 +1,4 @@
-apiVersion: command.spark.stackable.tech/v1
+apiVersion: command.spark.stackable.tech/v1alpha1
 kind: Stop
 metadata:
   name: spark-cluster-command-stop
