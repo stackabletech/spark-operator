@@ -606,13 +606,7 @@ impl SparkState {
             }
         }
 
-        // add remaining env variables
-        // TODO: operator-rs builder should offer an add_env_vars to avoid that loop
-        for env in env_vars {
-            if let Some(val) = env.value {
-                container_builder.add_env_var(env.name, val);
-            }
-        }
+        container_builder.add_env_vars(env_vars);
 
         let pod = PodBuilder::new()
             .metadata(
