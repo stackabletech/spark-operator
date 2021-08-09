@@ -63,6 +63,11 @@ spec:
                     config:
                       nullable: true
                       properties:
+                        historyMetricsPort:
+                          format: uint16
+                          minimum: 0.0
+                          nullable: true
+                          type: integer
                         historyWebUiPort:
                           format: uint16
                           minimum: 0.0
@@ -95,6 +100,11 @@ spec:
                           config:
                             nullable: true
                             properties:
+                              historyMetricsPort:
+                                format: uint16
+                                minimum: 0.0
+                                nullable: true
+                                type: integer
                               historyWebUiPort:
                                 format: uint16
                                 minimum: 0.0
@@ -168,6 +178,11 @@ spec:
                     config:
                       nullable: true
                       properties:
+                        masterMetricsPort:
+                          format: uint16
+                          minimum: 0.0
+                          nullable: true
+                          type: integer
                         masterPort:
                           format: uint16
                           minimum: 0.0
@@ -202,6 +217,11 @@ spec:
                           config:
                             nullable: true
                             properties:
+                              masterMetricsPort:
+                                format: uint16
+                                minimum: 0.0
+                                nullable: true
+                                type: integer
                               masterPort:
                                 format: uint16
                                 minimum: 0.0
@@ -292,6 +312,11 @@ spec:
                         memory:
                           nullable: true
                           type: string
+                        workerMetricsPort:
+                          format: uint16
+                          minimum: 0.0
+                          nullable: true
+                          type: integer
                         workerPort:
                           format: uint16
                           minimum: 0.0
@@ -334,6 +359,11 @@ spec:
                               memory:
                                 nullable: true
                                 type: string
+                              workerMetricsPort:
+                                format: uint16
+                                minimum: 0.0
+                                nullable: true
+                                type: integer
                               workerPort:
                                 format: uint16
                                 minimum: 0.0

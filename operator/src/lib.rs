@@ -38,7 +38,9 @@ use stackable_operator::role_utils::{
 use strum::IntoEnumIterator;
 use tracing::{debug, info, trace, warn};
 
-use stackable_spark_common::constants::{SPARK_DEFAULTS_CONF, SPARK_ENV_SH};
+use stackable_spark_common::constants::{
+    SPARK_DEFAULTS_CONF, SPARK_ENV_SH, SPARK_METRICS_PROPERTIES,
+};
 use stackable_spark_crd::commands::{Restart, Start, Stop};
 use stackable_spark_crd::{
     ClusterExecutionStatus, CurrentCommand, SparkCluster, SparkClusterStatus, SparkRole,
@@ -512,6 +514,12 @@ impl SparkState {
                     SPARK_ENV_SH => {
                         let config_as_string = config::convert_map_to_string(config, "=");
                         cm_data.insert(SPARK_ENV_SH.to_string(), config_as_string);
+                    }
+                    SPARK_METRICS_PROPERTIES => {
+                        cm_data.insert(
+                            SPARK_METRICS_PROPERTIES.to_string(),
+                            "*.sink.jmx.class=org.apache.spark.metrics.sink.JmxSink".to_string(),
+                        );
                     }
                     _ => {}
                 },
