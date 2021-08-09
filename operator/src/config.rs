@@ -93,6 +93,9 @@ pub fn get_master_urls(
             let validated_config_for_role_and_group =
                 config_for_role_and_group(role, group, validated_config)?;
 
+            // TODO: fall back on container ports or default from product config
+            //    The "7077" is a placeholder. This value will always be overwritten
+            //    by the default or recommended value in the product config (if not set).
             let mut port = "7077";
             // The order for spark properties:
             // SparkConf > spark-submit / spark-shell > spark-defaults.conf > spark-env.sh
@@ -106,16 +109,15 @@ pub fn get_master_urls(
                 {
                     port = defaults_conf_port;
                 }
-                // 2) check spark-env.sh
-                else if let Some(spark_env_sh) = validated_config_for_role_and_group
-                    .get(&PropertyNameKind::File(SPARK_ENV_SH.to_string()))
-                {
-                    if let Some(env_port) = spark_env_sh.get(SPARK_ENV_MASTER_PORT) {
-                        port = env_port;
-                    }
+            }
+            // 2) check spark-env.sh
+            else if let Some(spark_env_sh) = validated_config_for_role_and_group
+                .get(&PropertyNameKind::File(SPARK_ENV_SH.to_string()))
+            {
+                if let Some(env_port) = spark_env_sh.get(SPARK_ENV_MASTER_PORT) {
+                    port = env_port;
                 }
             }
-            // TODO: 3) default value will be provided via product config
 
             if let Some(PodSpec {
                 node_name: Some(node),

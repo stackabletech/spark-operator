@@ -1,51 +1,65 @@
 = Usage
 
 The cluster can be configured via a YAML file.
-Each node type (Master, Worker, History Server) can have multiple instances within multiple selectors.
-Multiple instances in the same selector can lead to port duplicates which results in the affected node
-to increase the port one by one. Keep that in mind when e.g. running multiple masters without specified ports
-on the same node.
+Each role (Master, Worker, History-Server) can have multiple instances within multiple role groups.
+Multiple instances in the same selector may lead to port duplicates which results in the affected node
+to increase the port one by one (if max_port_retries is not set to 0). Keep that in mind when, for example running multiple masters without specified ports on the same node.
 
-    apiVersion: spark.stackable.tech/v1
-    kind: SparkCluster
-    metadata:
-    name: spark-cluster
-      spec:
-        master:
-          selectors:
-            - nodeName: "some_master_node"
-              instances: 1
-        worker:
-          selectors:
-            - nodeName: "some_worker_node"
-              instances: 1
-              cores: 2
-              memory: "2g"
-        historyServer:
-          selectors:
-            - nodeName: "some_history_server_node"
-              instances: 1
-      version: "3.0.1"
-      secret: "my_secret"
-      logDir: "/tmp/spark-events"
+  apiVersion: spark.stackable.tech/v1
+  kind: SparkCluster
+  metadata:
+    name: simple
+  spec:
+    version: "3.0.1"
+    masters:
+      roleGroups:
+        default:
+          selector:
+            matchLabels:
+              kubernetes.io/arch: stackable-linux
+          replicas: 1
+          config:
+            masterPort: 7078
+            masterWebUiPort: 8081
+    workers:
+      roleGroups:
+        1core1g:
+          selector:
+            matchLabels:
+              kubernetes.io/arch: stackable-linux
+          replicas: 2
+          config:
+            cores: 1
+            memory: "1g"
+            workerPort: 3031
+            workerWebUiPort: 8083
+    historyServers:
+      roleGroups:
+        default:
+          selector:
+            matchLabels:
+              kubernetes.io/arch: stackable-linux
+          replicas: 1
+          config:
+            historyWebUiPort: 18081
 
-== Structure
+=== Structure
 
 There are three levels of configuration:
 
 [cols="1,1"]
 |===
-|Common shared options
-|Contains configuration that is shared within the whole cluster. E.g. the spark image, secrets, encryption or logging options.
+|Common properties
+|Contains configuration that is shared within the whole cluster. For example the spark version, secrets, encryption or logging options.
 
-|Node type options
+|Role properties
 |This configuration is shared for all nodes of a certain type (Master, Worker, History-Server)
 
-|Selector specific options
-|Options provided in the selector are limited to one specific node of a node type (Master, Worker, History-Server) and apply to one physical machine.
+|Role Group properties
+|Options provided in the role group are limited to one specific role and role group.
 |===
 
-== Common shared options
+=== Common properties
 [cols="1,1,1,1"]
 |===
 |Name
@@ -74,11 +88,11 @@ There are three levels of configuration:
 |spark.port.maxRetries
 |===
 
-== Node type options
+=== Role properties
 T.b.d.
 
-== Selector specific options
-=== Master
+=== Role Group properties
+==== Master
 [cols="1,1,1,1"]
 |===
 |Name
@@ -96,8 +110,7 @@ T.b.d.
 |Port for the master web UI (default: 8080).
 |SPARK_MASTER_WEBUI_PORT
 |===
-
-=== Worker
+==== Worker
 [cols="1,1,1,1"]
 |===
 |Name
@@ -126,7 +139,7 @@ T.b.d.
 |SPARK_WORKER_MEMORY
 |===
 
-=== History Server
+==== History Server
 [cols="1,1,1,1"]
 |===
 |Name
@@ -136,7 +149,7 @@ T.b.d.
 
 |storePath
 |string
-|A local directory where to cache application history data. If set, the history server will store application data on disk instead of keeping it in memory. The data written to disk will be re-used in the event of a history server restart.
+|A local directory where to cache application data. If set, the history server will store application data on disk instead of keeping it in memory. The data written to disk will be re-used in the event of a history server restart.
 |spark.history.store.path
 
 |historyUiPort
