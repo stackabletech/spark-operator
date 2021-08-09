@@ -109,13 +109,13 @@ pub fn get_master_urls(
                 {
                     port = defaults_conf_port;
                 }
-            }
-            // 2) check spark-env.sh
-            else if let Some(spark_env_sh) = validated_config_for_role_and_group
-                .get(&PropertyNameKind::File(SPARK_ENV_SH.to_string()))
-            {
-                if let Some(env_port) = spark_env_sh.get(SPARK_ENV_MASTER_PORT) {
-                    port = env_port;
+                // 2) check spark-env.sh
+                else if let Some(spark_env_sh) = validated_config_for_role_and_group
+                    .get(&PropertyNameKind::File(SPARK_ENV_SH.to_string()))
+                {
+                    if let Some(env_port) = spark_env_sh.get(SPARK_ENV_MASTER_PORT) {
+                        port = env_port;
+                    }
                 }
             }
 
