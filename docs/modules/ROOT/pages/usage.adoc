@@ -1,47 +1,56 @@
 = Usage
 
+After installation, the CRD for this operator must be created:
+
+    kubectl apply -f /etc/stackable/spark-operator/crd/sparkcluster.crd.yaml
+
 The cluster can be configured via a YAML file.
 Each role (Master, Worker, History-Server) can have multiple instances within multiple role groups.
 Multiple instances in the same selector may lead to port duplicates which results in the affected node
 to increase the port one by one (if max_port_retries is not set to 0). Keep that in mind when, for example running multiple masters without specified ports on the same node.
 
-  apiVersion: spark.stackable.tech/v1
-  kind: SparkCluster
-  metadata:
-    name: simple
-  spec:
-    version: "3.0.1"
-    masters:
-      roleGroups:
-        default:
-          selector:
-            matchLabels:
-              kubernetes.io/arch: stackable-linux
-          replicas: 1
-          config:
-            masterPort: 7078
-            masterWebUiPort: 8081
-    workers:
-      roleGroups:
-        1core1g:
-          selector:
-            matchLabels:
-              kubernetes.io/arch: stackable-linux
-          replicas: 2
-          config:
-            cores: 1
-            memory: "1g"
-            workerPort: 3031
-            workerWebUiPort: 8083
-    historyServers:
-      roleGroups:
-        default:
-          selector:
-            matchLabels:
-              kubernetes.io/arch: stackable-linux
-          replicas: 1
-          config:
-            historyWebUiPort: 18081
+    cat <<EOF | kubectl apply -f -
+    apiVersion: spark.stackable.tech/v1alpha1
+    kind: SparkCluster
+    metadata:
+      name: simple
+    spec:
+      version: "3.0.1"
+      config:
+        logDir: "file:///tmp"
+        enableMonitoring: true
+      masters:
+        roleGroups:
+          default:
+            selector:
+              matchLabels:
+                kubernetes.io/arch: stackable-linux
+            replicas: 1
+            config:
+              masterPort: 7078
+              masterWebUiPort: 8081
+      workers:
+        roleGroups:
+          2core2g:
+            selector:
+              matchLabels:
+                kubernetes.io/arch: stackable-linux
+            replicas: 1
+            config:
+              cores: 2
+              memory: "2g"
+              workerPort: 3031
+              workerWebUiPort: 8083
+      historyServers:
+        roleGroups:
+          default:
+            selector:
+              matchLabels:
+                kubernetes.io/arch: stackable-linux
+            replicas: 1
+            config:
+              historyWebUiPort: 18081
+    EOF
 
 === Structure
 
