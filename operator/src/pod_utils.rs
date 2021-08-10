@@ -87,7 +87,7 @@ mod tests {
             let container = containers.get(0).unwrap();
             assert_eq!(
                 container.command,
-                vec![node_type.get_command(&spark_cluster.spec.version.to_string())]
+                vec![node_type.get_command(&spark_cluster.spec.version)]
             );
             // only start command for masters
             assert_eq!(container.command.len(), 1);
@@ -139,7 +139,7 @@ mod tests {
             assert_eq!(command.len(), 1);
             assert_eq!(
                 command,
-                vec![node_type.get_command(&spark_cluster.spec.version.to_string()),]
+                vec![node_type.get_command(&spark_cluster.spec.version),]
             );
 
             assert_eq!(args.len(), 1);

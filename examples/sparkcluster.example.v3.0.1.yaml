@@ -6,6 +6,7 @@ spec:
   version: "3.0.1"
   config:
     logDir: "file:///tmp"
+    enableMonitoring: true
   masters:
     roleGroups:
       default:
@@ -16,7 +17,6 @@ spec:
         config:
           masterPort: 7078
           masterWebUiPort: 8081
-          masterMetricsPort: 9101
   workers:
     roleGroups:
       2core2g:
@@ -29,7 +29,6 @@ spec:
           memory: "2g"
           workerPort: 3031
           workerWebUiPort: 8083
-          workerMetricsPort: 9102
   historyServers:
     roleGroups:
       default:
@@ -39,5 +38,4 @@ spec:
         replicas: 1
         config:
           historyWebUiPort: 18081
-          historyMetricsPort: 9103
 
