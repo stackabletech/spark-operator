@@ -4,10 +4,11 @@ After installation, the CRD for this operator must be created:
 
     kubectl apply -f /etc/stackable/spark-operator/crd/sparkcluster.crd.yaml
 
-The cluster can be configured via a YAML file.
-Each role (Master, Worker, History-Server) can have multiple instances within multiple role groups.
+The example below creates an Apache Spark 3.0.1 cluster with one master (because of `replicas: 1`), one history server and as many workers as nodes available.
 Multiple instances in the same selector may lead to port duplicates which results in the affected node
 to increase the port one by one (if max_port_retries is not set to 0). Keep that in mind when, for example running multiple masters without specified ports on the same node.
+
+Because of `enableMonitoring: true`, all pods will be annotated for metric scraping. Metrics are retrieved from Spark's built in Prometheus Servlet. Only cluster-wide metrics are scraped currently (no application metrics).
 
     cat <<EOF | kubectl apply -f -
     apiVersion: spark.stackable.tech/v1alpha1
@@ -35,7 +36,6 @@ to increase the port one by one (if max_port_retries is not set to 0). Keep that
             selector:
               matchLabels:
                 kubernetes.io/arch: stackable-linux
-            replicas: 1
             config:
               cores: 2
               memory: "2g"
