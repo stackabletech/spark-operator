@@ -28,11 +28,8 @@ async fn main() -> Result<(), error::Error> {
         return Err(error);
     };
 
-    // TODO: the call to create_controller() cannot be made inside the join! below because
-    //       that would ignore possible Err returned. A better approach would be to use
-    //       try_join! and refactor the create_command_controller() to return a Result.
-    stackable_spark_operator::create_controller(client.clone()).await?;
-    tokio::join!(
+    tokio::try_join!(
+        stackable_spark_operator::create_controller(client.clone()),
         stackable_operator::command_controller::create_command_controller::<Restart, SparkCluster>(
             client.clone()
         ),
@@ -42,7 +39,7 @@ async fn main() -> Result<(), error::Error> {
         stackable_operator::command_controller::create_command_controller::<Stop, SparkCluster>(
             client.clone()
         )
-    );
+    )?;
 
     Ok(())
 }
