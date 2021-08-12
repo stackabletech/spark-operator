@@ -1444,6 +1444,37 @@ checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
 [[package]]
 name = "stackable-operator"
 version = "0.1.0-nightly"
+dependencies = [
+ "async-trait",
+ "backoff",
+ "chrono",
+ "clap",
+ "const_format",
+ "either",
+ "futures",
+ "json-patch",
+ "k8s-openapi",
+ "kube",
+ "kube-runtime",
+ "lazy_static",
+ "product-config",
+ "rand",
+ "regex",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-futures",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "stackable-operator"
+version = "0.1.0-nightly"
 source = "git+https://github.com/stackabletech/operator-rs.git?branch=main#4394131b2c1326129b97a1b8b97d24dc85c30f70"
 dependencies = [
  "async-trait",
@@ -1489,7 +1520,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
- "stackable-operator",
+ "stackable-operator 0.1.0-nightly",
  "stackable-spark-common",
  "stackable-spark-test-utils",
  "strum",
@@ -1511,7 +1542,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "stackable-operator",
+ "stackable-operator 0.1.0-nightly",
  "stackable-spark-common",
  "stackable-spark-crd",
  "stackable-spark-test-utils",
@@ -1528,7 +1559,7 @@ dependencies = [
  "anyhow",
  "clap",
  "serde_yaml",
- "stackable-operator",
+ "stackable-operator 0.1.0-nightly",
  "stackable-spark-crd",
  "stackable-spark-operator",
  "tokio",
@@ -1543,7 +1574,7 @@ dependencies = [
  "kube",
  "serde",
  "serde_yaml",
- "stackable-operator",
+ "stackable-operator 0.1.0-nightly (git+https://github.com/stackabletech/operator-rs.git?branch=main)",
  "stackable-spark-crd",
  "stackable-spark-operator",
 ]
