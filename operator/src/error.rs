@@ -1,3 +1,5 @@
+use std::num::ParseIntError;
+
 #[derive(Debug, thiserror::Error)]
 pub enum SparkError {
     #[error("Kubernetes reported error: {source}")]
@@ -22,6 +24,12 @@ pub enum SparkError {
     SemVerError {
         #[from]
         source: semver::Error,
+    },
+
+    #[error("Error from parsing integer: {source}")]
+    ParseFromIntError {
+        #[from]
+        source: ParseIntError,
     },
 
     #[error("Invalid Configmap. No name found which is required to query the ConfigMap.")]

@@ -13,13 +13,12 @@ use product_config::types::PropertyNameKind;
 use product_config::ProductConfigManager;
 use serde_json::json;
 use stackable_operator::builder::{
-    ConfigMapBuilder, ContainerBuilder, ObjectMetaBuilder, PodBuilder,
+    ConfigMapBuilder, ContainerBuilder, ContainerPortBuilder, ObjectMetaBuilder, PodBuilder,
 };
 use stackable_operator::client::Client;
 use stackable_operator::conditions::ConditionStatus;
 use stackable_operator::controller::{Controller, ControllerStrategy, ReconciliationState};
 use stackable_operator::error::OperatorResult;
-use stackable_operator::k8s_utils;
 use stackable_operator::labels::{
     build_common_labels_for_all_managed_resources, get_recommended_labels, APP_COMPONENT_LABEL,
     APP_INSTANCE_LABEL, APP_MANAGED_BY_LABEL, APP_NAME_LABEL, APP_ROLE_GROUP_LABEL,
@@ -33,12 +32,15 @@ use stackable_operator::reconcile::{
 };
 use stackable_operator::role_utils::{
     find_nodes_that_fit_selectors, get_role_and_group_labels,
-    list_eligible_nodes_for_role_and_group, CommonConfiguration, EligibleNodesForRoleAndGroup,
+    list_eligible_nodes_for_role_and_group, EligibleNodesForRoleAndGroup,
 };
+use stackable_operator::{cli, k8s_utils};
 use strum::IntoEnumIterator;
 use tracing::{debug, info, trace, warn};
 
-use stackable_spark_common::constants::{SPARK_DEFAULTS_CONF, SPARK_ENV_SH};
+use stackable_spark_common::constants::{
+    SPARK_DEFAULTS_CONF, SPARK_ENV_SH, SPARK_METRICS_PROPERTIES,
+};
 use stackable_spark_crd::commands::{Restart, Start, Stop};
 use stackable_spark_crd::{
     ClusterExecutionStatus, CurrentCommand, SparkCluster, SparkClusterStatus, SparkRole,
@@ -58,6 +60,7 @@ mod error;
 pub mod pod_utils;
 
 const FINALIZER_NAME: &str = "spark.stackable.tech/cleanup";
+const SHOULD_BE_SCRAPED: &str = "monitoring.stackable.tech/should_be_scraped";
 
 type SparkReconcileResult = ReconcileResult<error::SparkError>;
 
@@ -494,6 +497,11 @@ impl SparkState {
         let mut env_vars = vec![];
         let mut cm_data = BTreeMap::new();
 
+        let mut container_ports = (None, None);
+
+        let monitoring_enabled = self.context.resource.spec.monitoring_enabled();
+        let version: &SparkVersion = &self.context.resource.spec.version;
+
         for (property_name_kind, config) in validated_config {
             // we need to convert to <String, String> to <String, Option<String>> to deal with
             // CLI flags etc. We can not currently represent that via operator-rs / product-config.
@@ -512,6 +520,25 @@ impl SparkState {
                     SPARK_ENV_SH => {
                         let config_as_string = config::convert_map_to_string(config, "=");
                         cm_data.insert(SPARK_ENV_SH.to_string(), config_as_string);
+
+                        // retrieve required container ports
+                        container_ports = role.container_ports(config);
+                    }
+                    SPARK_METRICS_PROPERTIES => {
+                        // We need to enable the PrometheusServlet, edit the metrics path to
+                        // "/metrics" and add the JVM Source for JVM metrics
+                        if monitoring_enabled {
+                            // TODO: we could specify the role here instead of using the wildcard '*'
+                            let metrics_properties = "\
+                            *.sink.prometheusServlet.class=org.apache.spark.metrics.sink.PrometheusServlet\n\
+                            *.sink.prometheusServlet.path=/metrics\n\
+                            *.source.jvm.class=org.apache.spark.metrics.source.JvmSource";
+
+                            cm_data.insert(
+                                SPARK_METRICS_PROPERTIES.to_string(),
+                                metrics_properties.to_string(),
+                            );
+                        }
                     }
                     _ => {}
                 },
@@ -564,12 +591,10 @@ impl SparkState {
         let master_pods = filter_pods_for_type(&self.existing_pods, &SparkRole::Master);
         let master_urls = &config::get_master_urls(&master_pods, &self.validated_role_config)?;
 
-        let version = &self.context.resource.spec.version.to_string();
-
         let mut labels = get_recommended_labels(
             &self.context.resource,
             APP_NAME,
-            version,
+            &version.to_string(),
             &role.to_string(),
             role_group,
         );
@@ -592,21 +617,39 @@ impl SparkState {
         args.append(&mut cli_arguments);
 
         let mut container_builder = ContainerBuilder::new("spark");
-        container_builder.image(format!("spark:{}", version));
+        container_builder.image(format!("spark:{}", version.to_string()));
         container_builder.command(vec![role.get_command(version)]);
         container_builder.args(args);
         container_builder.add_configmapvolume(cm_name.clone(), "conf".to_string());
-
-        if let Some(CommonConfiguration {
-            config: Some(cfg), ..
-        }) = &self.context.resource.spec.config
-        {
-            if let Some(log_dir) = &cfg.log_dir {
-                container_builder.add_configmapvolume(cm_name.clone(), log_dir);
-            }
-        }
-
         container_builder.add_env_vars(env_vars);
+
+        let mut annotations = BTreeMap::new();
+        let (protocol_port, http_port) = container_ports;
+        // only add metrics container port and annotation if required
+        if let (Some(metrics_port), true) = (http_port, monitoring_enabled) {
+            annotations.insert(SHOULD_BE_SCRAPED.to_string(), "true".to_string());
+            container_builder.add_container_port(
+                ContainerPortBuilder::new(metrics_port.parse()?)
+                    .name("metrics")
+                    .build(),
+            );
+        }
+        // add protocol port if available
+        if let Some(protocol_port) = protocol_port {
+            container_builder.add_container_port(
+                ContainerPortBuilder::new(protocol_port.parse()?)
+                    .name("protocol")
+                    .build(),
+            );
+        }
+        // add web ui port if available
+        if let Some(web_ui_port) = http_port {
+            container_builder.add_container_port(
+                ContainerPortBuilder::new(web_ui_port.parse()?)
+                    .name("http")
+                    .build(),
+            );
+        }
 
         let pod = PodBuilder::new()
             .metadata(
@@ -614,6 +657,7 @@ impl SparkState {
                     .name(pod_name)
                     .namespace(&self.context.client.default_namespace)
                     .with_labels(labels)
+                    .with_annotations(annotations)
                     .ownerreference_from_resource(&self.context.resource, Some(true), Some(true))?
                     .build()?,
             )
@@ -860,7 +904,7 @@ impl ControllerStrategy for SparkStrategy {
 /// This creates an instance of a [`Controller`] which waits for incoming events and reconciles them.
 ///
 /// This is an async method and the returned future needs to be consumed to make progress.
-pub async fn create_controller(client: Client) {
+pub async fn create_controller(client: Client) -> OperatorResult<()> {
     let spark_api: Api<SparkCluster> = client.get_all_api();
     let pods_api: Api<Pod> = client.get_all_api();
     let config_maps_api: Api<ConfigMap> = client.get_all_api();
@@ -875,11 +919,22 @@ pub async fn create_controller(client: Client) {
         .owns(cmd_start_api, ListParams::default())
         .owns(cmd_stop_api, ListParams::default());
 
+    let product_config_path = cli::product_config_path(
+        "spark-operator",
+        vec![
+            "deploy/config-spec/properties.yaml",
+            "/etc/stackable/spark-operator/config-spec/properties.yaml",
+        ],
+    )?;
+
     let product_config =
-        ProductConfigManager::from_yaml_file("deploy/config-spec/properties.yaml").unwrap();
+        ProductConfigManager::from_yaml_file(product_config_path.as_str()).unwrap();
+
     let strategy = SparkStrategy::new(product_config);
 
     controller
         .run(client, strategy, Duration::from_secs(10))
         .await;
+
+    Ok(())
 }
