@@ -44,7 +44,7 @@ pub fn create_master_urls() -> Vec<String> {
 pub fn create_master_pods() -> Vec<Pod> {
     let mut spark_cluster: SparkCluster = setup_test_cluster();
     spark_cluster.metadata.uid = Some("12345".to_string());
-    let version = &spark_cluster.spec.version.to_string();
+    let version = &spark_cluster.spec.version;
 
     vec![
         PodBuilder::new()
@@ -54,7 +54,7 @@ pub fn create_master_pods() -> Vec<Pod> {
                     .with_recommended_labels(
                         &spark_cluster,
                         APP_NAME,
-                        version,
+                        &version.to_string(),
                         &SparkRole::Master.to_string(),
                         TestSparkCluster::MASTER_1_ROLE_GROUP,
                     )
@@ -66,7 +66,7 @@ pub fn create_master_pods() -> Vec<Pod> {
             .add_stackable_agent_tolerations()
             .add_container(
                 ContainerBuilder::new("spark")
-                    .image(format!("spark:{}", version))
+                    .image(format!("spark:{}", version.to_string()))
                     .command(vec![SparkRole::Master.get_command(version)])
                     .add_configmapvolume("master_1_pod_config".to_string(), "conf".to_string())
                     .build(),
@@ -81,7 +81,7 @@ pub fn create_master_pods() -> Vec<Pod> {
                     .with_recommended_labels(
                         &spark_cluster,
                         APP_NAME,
-                        version,
+                        &version.to_string(),
                         &SparkRole::Master.to_string(),
                         TestSparkCluster::MASTER_2_ROLE_GROUP,
                     )
@@ -93,7 +93,7 @@ pub fn create_master_pods() -> Vec<Pod> {
             .add_stackable_agent_tolerations()
             .add_container(
                 ContainerBuilder::new("spark")
-                    .image(format!("spark:{}", version))
+                    .image(format!("spark:{}", version.to_string()))
                     .command(vec![SparkRole::Master.get_command(version)])
                     .add_configmapvolume("master_2_pod_config".to_string(), "conf".to_string())
                     .build(),
@@ -108,7 +108,7 @@ pub fn create_master_pods() -> Vec<Pod> {
                     .with_recommended_labels(
                         &spark_cluster,
                         APP_NAME,
-                        version,
+                        &version.to_string(),
                         &SparkRole::Master.to_string(),
                         TestSparkCluster::MASTER_3_ROLE_GROUP,
                     )
@@ -120,7 +120,7 @@ pub fn create_master_pods() -> Vec<Pod> {
             .add_stackable_agent_tolerations()
             .add_container(
                 ContainerBuilder::new("spark")
-                    .image(format!("spark:{}", version))
+                    .image(format!("spark:{}", version.to_string()))
                     .command(vec![SparkRole::Master.get_command(version)])
                     .add_configmapvolume("master_3_pod_config".to_string(), "conf".to_string())
                     .build(),
@@ -134,7 +134,7 @@ pub fn create_master_pods() -> Vec<Pod> {
 pub fn create_worker_pods() -> Vec<Pod> {
     let mut spark_cluster: SparkCluster = setup_test_cluster();
     spark_cluster.metadata.uid = Some("12345".to_string());
-    let version = &spark_cluster.spec.version.to_string();
+    let version = &spark_cluster.spec.version;
 
     let master_urls = create_master_urls();
 
@@ -146,7 +146,7 @@ pub fn create_worker_pods() -> Vec<Pod> {
                     .with_recommended_labels(
                         &spark_cluster,
                         APP_NAME,
-                        version,
+                        &version.to_string(),
                         &SparkRole::Worker.to_string(),
                         TestSparkCluster::WORKER_1_ROLE_GROUP,
                     )
@@ -162,7 +162,7 @@ pub fn create_worker_pods() -> Vec<Pod> {
             .add_stackable_agent_tolerations()
             .add_container(
                 ContainerBuilder::new("spark")
-                    .image(format!("spark:{}", version))
+                    .image(format!("spark:{}", version.to_string()))
                     .command(vec![SparkRole::Worker.get_command(version)])
                     .args(vec![adapt_worker_command(
                         &SparkRole::Worker,
@@ -182,7 +182,7 @@ pub fn create_worker_pods() -> Vec<Pod> {
                     .with_recommended_labels(
                         &spark_cluster,
                         APP_NAME,
-                        version,
+                        &version.to_string(),
                         &SparkRole::Worker.to_string(),
                         TestSparkCluster::WORKER_2_ROLE_GROUP,
                     )
@@ -198,7 +198,7 @@ pub fn create_worker_pods() -> Vec<Pod> {
             .add_stackable_agent_tolerations()
             .add_container(
                 ContainerBuilder::new("spark")
-                    .image(format!("spark:{}", version))
+                    .image(format!("spark:{}", version.to_string()))
                     .command(vec![SparkRole::Worker.get_command(version)])
                     .args(vec![adapt_worker_command(
                         &SparkRole::Worker,

@@ -6,6 +6,7 @@ spec:
   version: "3.0.1"
   config:
     logDir: "file:///tmp"
+    enableMonitoring: true
   masters:
     roleGroups:
       default:

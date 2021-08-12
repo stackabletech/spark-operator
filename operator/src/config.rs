@@ -154,6 +154,7 @@ pub fn validated_product_config(
             vec![
                 PropertyNameKind::File(SPARK_ENV_SH.to_string()),
                 PropertyNameKind::File(SPARK_DEFAULTS_CONF.to_string()),
+                PropertyNameKind::File(SPARK_METRICS_PROPERTIES.to_string()),
                 PropertyNameKind::Env,
             ],
             resource.spec.masters.clone().into(),
@@ -166,6 +167,7 @@ pub fn validated_product_config(
             vec![
                 PropertyNameKind::File(SPARK_ENV_SH.to_string()),
                 PropertyNameKind::File(SPARK_DEFAULTS_CONF.to_string()),
+                PropertyNameKind::File(SPARK_METRICS_PROPERTIES.to_string()),
                 PropertyNameKind::Env,
             ],
             resource.spec.workers.clone().into(),
@@ -179,6 +181,7 @@ pub fn validated_product_config(
                 vec![
                     PropertyNameKind::File(SPARK_ENV_SH.to_string()),
                     PropertyNameKind::File(SPARK_DEFAULTS_CONF.to_string()),
+                    PropertyNameKind::File(SPARK_METRICS_PROPERTIES.to_string()),
                     PropertyNameKind::Env,
                 ],
                 history_servers.clone().into(),

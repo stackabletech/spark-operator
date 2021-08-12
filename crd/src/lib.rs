@@ -44,12 +44,30 @@ pub struct SparkClusterSpec {
     pub config: Option<CommonConfiguration<CommonConfig>>,
 }
 
+impl SparkClusterSpec {
+    pub fn monitoring_enabled(&self) -> bool {
+        if let Some(CommonConfiguration {
+            config:
+                Some(CommonConfig {
+                    enable_monitoring: Some(enabled),
+                    ..
+                }),
+            ..
+        }) = &self.config
+        {
+            return *enabled;
+        }
+        false
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommonConfig {
     pub secret: Option<String>,
     pub log_dir: Option<String>,
     pub max_port_retries: Option<usize>,
+    pub enable_monitoring: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
@@ -311,13 +329,35 @@ impl SparkRole {
     /// # Arguments
     ///
     /// * `version` - Current specified cluster version
-    pub fn get_command(&self, version: &str) -> String {
-        // TODO: remove hardcoded and adapt for versioning
+    pub fn get_command(&self, version: &SparkVersion) -> String {
         format!(
-            "spark-{}-bin-hadoop2.7/sbin/start-{}.sh",
-            version,
+            "{}/sbin/start-{}.sh",
+            version.package_name(),
             self.to_string()
         )
+    }
+
+    /// Returns a tuple of the required container ports for each role.
+    /// (protocol_port, web_ui_port / metrics_port)
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - The validated product-config containing user defined or default ports
+    pub fn container_ports<'a>(
+        &self,
+        config: &'a BTreeMap<String, String>,
+    ) -> (Option<&'a String>, Option<&'a String>) {
+        return match &self {
+            SparkRole::Master => (
+                config.get(SPARK_ENV_MASTER_PORT),
+                config.get(SPARK_ENV_MASTER_WEBUI_PORT),
+            ),
+            SparkRole::Worker => (
+                config.get(SPARK_ENV_WORKER_PORT),
+                config.get(SPARK_ENV_WORKER_WEBUI_PORT),
+            ),
+            SparkRole::HistoryServer => (None, config.get(SPARK_DEFAULTS_HISTORY_WEBUI_PORT)),
+        };
     }
 }
 
@@ -416,6 +456,10 @@ impl SparkVersion {
         let to_version = Version::parse(&to.to_string())?;
         Ok(to_version < from_version)
     }
+
+    pub fn package_name(&self) -> String {
+        format!("spark-{}-bin-hadoop2.7", self.to_string())
+    }
 }
 
 #[cfg(test)]
@@ -429,10 +473,10 @@ mod tests {
         let version = &spark_cluster.spec.version;
 
         assert_eq!(
-            SparkRole::Master.get_command(&version.to_string()),
+            SparkRole::Master.get_command(version),
             format!(
                 "spark-{}-bin-hadoop2.7/sbin/start-{}.sh",
-                &version.to_string(),
+                version.to_string(),
                 SparkRole::Master.to_string()
             )
         );

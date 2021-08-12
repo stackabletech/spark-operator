@@ -63,7 +63,7 @@ async fn main() -> Result<()> {
         return Err(error);
     };
 
-    tokio::join!(
+    tokio::try_join!(
         stackable_spark_operator::create_controller(client.clone()),
         stackable_operator::command_controller::create_command_controller::<Restart, SparkCluster>(
             client.clone()
@@ -74,7 +74,7 @@ async fn main() -> Result<()> {
         stackable_operator::command_controller::create_command_controller::<Stop, SparkCluster>(
             client.clone()
         )
-    );
+    )?;
 
     Ok(())
     */

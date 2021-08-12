@@ -27,4 +27,9 @@ maintainer-scripts = "packaging/debian/"
 systemd-units = { enable = false }
 assets = [
     ["../target/release/stackable-spark-operator-server", "opt/stackable/spark-operator/", "755"],
+    ["../deploy/crd/sparkcluster.crd.yaml", "etc/stackable/spark-operator/crd/", "644"],
+    ["../deploy/crd/start.command.crd.yaml", "etc/stackable/spark-operator/crd/", "644"],
+    ["../deploy/crd/restart.command.crd.yaml", "etc/stackable/spark-operator/crd/", "644"],
+    ["../deploy/crd/stop.command.crd.yaml", "etc/stackable/spark-operator/crd/", "644"],
+    ["../deploy/config-spec/properties.yaml", "etc/stackable/spark-operator/config-spec/", "644"],
 ]

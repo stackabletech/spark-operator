@@ -28,6 +28,9 @@ spec:
                 config:
                   nullable: true
                   properties:
+                    enableMonitoring:
+                      nullable: true
+                      type: boolean
                     logDir:
                       nullable: true
                       type: string
