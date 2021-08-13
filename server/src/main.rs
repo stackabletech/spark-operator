@@ -11,6 +11,7 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Starting Stackable Operator for Apache Spark");
 
+    // Handle CLI arguments
     let matches = App::new("Spark Operator")
         .author("Stackable GmbH - info@stackable.de")
         .about("Stackable Operator for Apache Spark")
@@ -25,22 +26,19 @@ async fn main() -> anyhow::Result<()> {
         )
         .get_matches();
 
-    match matches.subcommand() {
-        ("crd", Some(subcommand)) => {
-            if cli::handle_crd_subcommand::<SparkCluster>(subcommand)? {
-                return Ok(());
-            };
-            if cli::handle_crd_subcommand::<Restart>(subcommand)? {
-                return Ok(());
-            };
-            if cli::handle_crd_subcommand::<Start>(subcommand)? {
-                return Ok(());
-            };
-            if cli::handle_crd_subcommand::<Stop>(subcommand)? {
-                return Ok(());
-            };
-        }
-        _ => {}
+    if let ("crd", Some(subcommand)) = matches.subcommand() {
+        if cli::handle_crd_subcommand::<SparkCluster>(subcommand)? {
+            return Ok(());
+        };
+        if cli::handle_crd_subcommand::<Restart>(subcommand)? {
+            return Ok(());
+        };
+        if cli::handle_crd_subcommand::<Start>(subcommand)? {
+            return Ok(());
+        };
+        if cli::handle_crd_subcommand::<Stop>(subcommand)? {
+            return Ok(());
+        };
     }
 
     let paths = vec![
@@ -51,6 +49,7 @@ async fn main() -> anyhow::Result<()> {
 
     let client = client::create_client(Some("spark.stackable.tech".to_string())).await?;
 
+    // This will wait for (but not create) all CRDs we need.
     if let Err(error) = stackable_operator::crd::wait_until_crds_present(
         &client,
         vec![
