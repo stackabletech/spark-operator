@@ -4,11 +4,23 @@ use stackable_spark_crd::SparkCluster;
 use stackable_spark_crd::{Restart, Start, Stop};
 use tracing::{error, info};
 
+mod built_info {
+    // The file has been placed there by the build script.
+    include!(concat!(env!("OUT_DIR"), "/built.rs"));
+}
+
 #[tokio::main]
 async fn main() -> Result<(), error::Error> {
     stackable_operator::logging::initialize_logging("SPARK_OPERATOR_LOG");
 
-    info!("Starting Stackable Operator for Apache Spark");
+    stackable_operator::utils::print_startup_string(
+        built_info::PKG_DESCRIPTION,
+        built_info::PKG_VERSION,
+        built_info::GIT_VERSION,
+        built_info::TARGET,
+        built_info::BUILT_TIME_UTC,
+        built_info::RUSTC_VERSION,
+    );
 
     let client = client::create_client(Some("spark.stackable.tech".to_string())).await?;
 
