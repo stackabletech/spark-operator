@@ -43,11 +43,11 @@ async fn main() -> anyhow::Result<()> {
         _ => {}
     }
 
-    let paths = [
+    let paths = vec![
         "deploy/config-spec/properties.yaml",
         "/etc/stackable/spark-operator/config-spec/properties.yaml",
     ];
-    let product_config_path = cli::handle_productconfig_arg(&matches, &paths)?;
+    let product_config_path = cli::handle_productconfig_arg(&matches, paths)?;
 
     let client = client::create_client(Some("spark.stackable.tech".to_string())).await?;
 
