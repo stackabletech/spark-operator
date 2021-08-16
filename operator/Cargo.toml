@@ -8,7 +8,7 @@ license = "OSL-3.0"
 
 [dependencies]
 product-config = { git = "https://github.com/stackabletech/product-config.git", branch = "main" }
-stackable-operator = { git = "https://github.com/stackabletech/operator-rs.git", branch = "built_info" }
+stackable-operator = { git = "https://github.com/stackabletech/operator-rs.git", branch = "main" }
 stackable-spark-common = { path = "../common" }
 stackable-spark-crd = { path = "../crd" }
 
