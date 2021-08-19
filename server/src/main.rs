@@ -1,4 +1,4 @@
-use clap::{crate_version, App, SubCommand};
+use clap::{crate_version, App, AppSettings, SubCommand};
 use stackable_operator::crd::CustomResourceExt;
 use stackable_operator::{cli, client};
 use stackable_spark_crd::SparkCluster;
@@ -19,6 +19,7 @@ async fn main() -> anyhow::Result<()> {
         .arg(cli::generate_productconfig_arg())
         .subcommand(
             SubCommand::with_name("crd")
+                .setting(AppSettings::ArgRequiredElseHelp)
                 .subcommand(cli::generate_crd_subcommand::<SparkCluster>())
                 .subcommand(cli::generate_crd_subcommand::<Restart>())
                 .subcommand(cli::generate_crd_subcommand::<Start>())
@@ -27,18 +28,13 @@ async fn main() -> anyhow::Result<()> {
         .get_matches();
 
     if let ("crd", Some(subcommand)) = matches.subcommand() {
-        if cli::handle_crd_subcommand::<SparkCluster>(subcommand)? {
+        if cli::handle_crd_subcommand::<SparkCluster>(subcommand)?
+            || cli::handle_crd_subcommand::<Restart>(subcommand)?
+            || cli::handle_crd_subcommand::<Start>(subcommand)?
+            || cli::handle_crd_subcommand::<Stop>(subcommand)?
+        {
             return Ok(());
-        };
-        if cli::handle_crd_subcommand::<Restart>(subcommand)? {
-            return Ok(());
-        };
-        if cli::handle_crd_subcommand::<Start>(subcommand)? {
-            return Ok(());
-        };
-        if cli::handle_crd_subcommand::<Stop>(subcommand)? {
-            return Ok(());
-        };
+        }
     }
 
     let paths = vec![
