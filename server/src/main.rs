@@ -24,9 +24,9 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // Handle CLI arguments
-    let matches = App::new("Spark Operator")
+    let matches = App::new(built_info::PKG_DESCRIPTION)
         .author("Stackable GmbH - info@stackable.de")
-        .about("Stackable Operator for Apache Spark")
+        .about(built_info::PKG_DESCRIPTION)
         .version(crate_version!())
         .arg(cli::generate_productconfig_arg())
         .subcommand(
