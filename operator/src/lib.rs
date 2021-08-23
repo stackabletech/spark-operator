@@ -19,6 +19,7 @@ use stackable_operator::client::Client;
 use stackable_operator::conditions::ConditionStatus;
 use stackable_operator::controller::{Controller, ControllerStrategy, ReconciliationState};
 use stackable_operator::error::OperatorResult;
+use stackable_operator::k8s_utils;
 use stackable_operator::labels::{
     build_common_labels_for_all_managed_resources, get_recommended_labels, APP_COMPONENT_LABEL,
     APP_INSTANCE_LABEL, APP_MANAGED_BY_LABEL, APP_NAME_LABEL, APP_ROLE_GROUP_LABEL,
@@ -34,7 +35,6 @@ use stackable_operator::role_utils::{
     find_nodes_that_fit_selectors, get_role_and_group_labels,
     list_eligible_nodes_for_role_and_group, EligibleNodesForRoleAndGroup,
 };
-use stackable_operator::{cli, k8s_utils};
 use strum::IntoEnumIterator;
 use tracing::{debug, info, trace, warn};
 
@@ -904,7 +904,7 @@ impl ControllerStrategy for SparkStrategy {
 /// This creates an instance of a [`Controller`] which waits for incoming events and reconciles them.
 ///
 /// This is an async method and the returned future needs to be consumed to make progress.
-pub async fn create_controller(client: Client) -> OperatorResult<()> {
+pub async fn create_controller(client: Client, product_config_path: &str) -> OperatorResult<()> {
     let spark_api: Api<SparkCluster> = client.get_all_api();
     let pods_api: Api<Pod> = client.get_all_api();
     let config_maps_api: Api<ConfigMap> = client.get_all_api();
@@ -919,16 +919,7 @@ pub async fn create_controller(client: Client) -> OperatorResult<()> {
         .owns(cmd_start_api, ListParams::default())
         .owns(cmd_stop_api, ListParams::default());
 
-    let product_config_path = cli::product_config_path(
-        "spark-operator",
-        vec![
-            "deploy/config-spec/properties.yaml",
-            "/etc/stackable/spark-operator/config-spec/properties.yaml",
-        ],
-    )?;
-
-    let product_config =
-        ProductConfigManager::from_yaml_file(product_config_path.as_str()).unwrap();
+    let product_config = ProductConfigManager::from_yaml_file(product_config_path).unwrap();
 
     let strategy = SparkStrategy::new(product_config);
 
