@@ -14,15 +14,6 @@ mod built_info {
 async fn main() -> anyhow::Result<()> {
     stackable_operator::logging::initialize_logging("SPARK_OPERATOR_LOG");
 
-    stackable_operator::utils::print_startup_string(
-        built_info::PKG_DESCRIPTION,
-        built_info::PKG_VERSION,
-        built_info::GIT_VERSION,
-        built_info::TARGET,
-        built_info::BUILT_TIME_UTC,
-        built_info::RUSTC_VERSION,
-    );
-
     // Handle CLI arguments
     let matches = App::new(built_info::PKG_DESCRIPTION)
         .author("Stackable GmbH - info@stackable.de")
@@ -54,6 +45,15 @@ async fn main() -> anyhow::Result<()> {
         "/etc/stackable/spark-operator/config-spec/properties.yaml",
     ];
     let product_config_path = cli::handle_productconfig_arg(&matches, paths)?;
+
+    stackable_operator::utils::print_startup_string(
+        built_info::PKG_DESCRIPTION,
+        built_info::PKG_VERSION,
+        built_info::GIT_VERSION,
+        built_info::TARGET,
+        built_info::BUILT_TIME_UTC,
+        built_info::RUSTC_VERSION,
+    );
 
     let client = client::create_client(Some("spark.stackable.tech".to_string())).await?;
 
