@@ -13,13 +13,12 @@ use product_config::types::PropertyNameKind;
 use product_config::ProductConfigManager;
 use serde_json::json;
 use stackable_operator::builder::{
-    ConfigMapBuilder, ContainerBuilder, ContainerPortBuilder, ObjectMetaBuilder, PodBuilder,
+    ContainerBuilder, ContainerPortBuilder, ObjectMetaBuilder, PodBuilder,
 };
 use stackable_operator::client::Client;
 use stackable_operator::conditions::ConditionStatus;
 use stackable_operator::controller::{Controller, ControllerStrategy, ReconciliationState};
 use stackable_operator::error::OperatorResult;
-use stackable_operator::k8s_utils;
 use stackable_operator::labels::{
     build_common_labels_for_all_managed_resources, get_recommended_labels, APP_COMPONENT_LABEL,
     APP_INSTANCE_LABEL, APP_MANAGED_BY_LABEL, APP_NAME_LABEL, APP_ROLE_GROUP_LABEL,
@@ -35,6 +34,7 @@ use stackable_operator::role_utils::{
     find_nodes_that_fit_selectors, get_role_and_group_labels,
     list_eligible_nodes_for_role_and_group, EligibleNodesForRoleAndGroup,
 };
+use stackable_operator::{configmap, k8s_utils, name_utils};
 use strum::IntoEnumIterator;
 use tracing::{debug, info, trace, warn};
 
@@ -48,11 +48,9 @@ use stackable_spark_crd::{
 };
 
 use crate::config::validated_product_config;
-use crate::error::SparkError;
 use crate::pod_utils::{
     filter_pods_for_type, get_hashed_master_urls, APP_NAME, MANAGED_BY, MASTER_URLS_HASH_LABEL,
 };
-use kube::error::ErrorResponse;
 
 mod command_utils;
 pub mod config;
@@ -62,7 +60,9 @@ pub mod pod_utils;
 const FINALIZER_NAME: &str = "spark.stackable.tech/cleanup";
 const SHOULD_BE_SCRAPED: &str = "monitoring.stackable.tech/should_be_scraped";
 
-type SparkReconcileResult = ReconcileResult<error::SparkError>;
+const CONFIG_MAP_TYPE_CONF: &str = "config";
+
+type SparkReconcileResult = ReconcileResult<error::Error>;
 
 struct SparkState {
     context: ReconciliationContext<SparkCluster>,
@@ -341,52 +341,6 @@ impl SparkState {
         Ok(ReconcileFunctionAction::Done)
     }
 
-    /// Create or update a config map.
-    /// - Create if no config map of that name exists
-    /// - Update if config map exists but the content differs
-    /// - Do nothing if the config map exists and the content is identical
-    /// - Forward any kube errors that may appear
-    // TODO: move to operator-rs
-    async fn create_config_map(&self, config_map: ConfigMap) -> Result<(), SparkError> {
-        let cm_name = match config_map.metadata.name.as_deref() {
-            None => return Err(SparkError::InvalidConfigMap),
-            Some(name) => name,
-        };
-
-        match self
-            .context
-            .client
-            .get::<ConfigMap>(cm_name, Some(&self.context.namespace()))
-            .await
-        {
-            Ok(ConfigMap {
-                data: existing_config_map_data,
-                ..
-            }) if existing_config_map_data == config_map.data => {
-                debug!(
-                    "ConfigMap [{}] already exists with identical data, skipping creation!",
-                    cm_name
-                );
-            }
-            Ok(_) => {
-                debug!(
-                    "ConfigMap [{}] already exists, but differs, updating it!",
-                    cm_name
-                );
-                self.context.client.update(&config_map).await?;
-            }
-            Err(stackable_operator::error::Error::KubeError {
-                source: kube::error::Error::Api(ErrorResponse { reason, .. }),
-            }) if reason == "NotFound" => {
-                debug!("Error getting ConfigMap [{}]: [{:?}]", cm_name, reason);
-                self.context.client.create(&config_map).await?;
-            }
-            Err(e) => return Err(SparkError::OperatorError { source: e }),
-        }
-
-        Ok(())
-    }
-
     async fn create_missing_pods(&mut self) -> SparkReconcileResult {
         trace!("Starting `create_missing_pods`");
 
@@ -449,24 +403,25 @@ impl SparkState {
                             role_group
                         );
 
-                        let (pod, config_maps) = self
-                            .create_pod_and_config_maps(
-                                &role,
-                                role_group,
-                                node_name,
-                                config_for_role_and_group(
-                                    role_str,
-                                    role_group,
-                                    &self.validated_role_config,
-                                )?,
-                            )
+                        // now we have a node that needs pods -> get validated config
+                        let validated_config = config_for_role_and_group(
+                            role_str,
+                            role_group,
+                            &self.validated_role_config,
+                        )?;
+
+                        let config_maps = self
+                            .create_config_maps(role_str, role_group, validated_config)
                             .await?;
 
-                        for config_map in config_maps {
-                            self.create_config_map(config_map).await?;
-                        }
-
-                        self.context.client.create(&pod).await?;
+                        self.create_pod(
+                            &role,
+                            role_group,
+                            node_name,
+                            &config_maps,
+                            validated_config,
+                        )
+                        .await?;
 
                         changes_applied = true;
                     }
@@ -485,24 +440,154 @@ impl SparkState {
         Ok(ReconcileFunctionAction::Continue)
     }
 
-    async fn create_pod_and_config_maps(
+    /// Creates the config maps required for a spark instance (or role, role_group combination):
+    /// * 'spark-defaults.conf'
+    /// * 'spark-env.sh'
+    /// * 'metrics.properties'
+    ///
+    /// Labels are automatically adapted from the `recommended_labels` with a type (config for
+    /// 'prometheus.yaml'). Names are generated via `name_utils::build_resource_name`.
+    ///
+    /// Returns a map with a 'type' identifier (e.g. config) as key and the corresponding
+    /// ConfigMap as value. This is required to set the volume mounts in the pod later on.
+    ///
+    /// # Arguments
+    ///
+    /// - `role` - The spark role.
+    /// - `group` - The role group.
+    /// - `validated_config` - The validated product config.
+    ///
+    async fn create_config_maps(
+        &self,
+        role: &str,
+        group: &str,
+        validated_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
+    ) -> Result<HashMap<&'static str, ConfigMap>, error::Error> {
+        let mut config_maps = HashMap::new();
+        let mut cm_conf_data = BTreeMap::new();
+
+        let mut cm_labels = get_recommended_labels(
+            &self.context.resource,
+            APP_NAME,
+            &self.context.resource.spec.version.to_string(),
+            role,
+            group,
+        );
+
+        cm_labels.insert(
+            configmap::CONFIGMAP_TYPE_LABEL.to_string(),
+            CONFIG_MAP_TYPE_CONF.to_string(),
+        );
+
+        if let Some(config) =
+            validated_config.get(&PropertyNameKind::File(SPARK_DEFAULTS_CONF.to_string()))
+        {
+            let config_as_string = config::convert_map_to_string(config, " ");
+            cm_conf_data.insert(SPARK_DEFAULTS_CONF.to_string(), config_as_string);
+        }
+
+        if let Some(config) =
+            validated_config.get(&PropertyNameKind::File(SPARK_ENV_SH.to_string()))
+        {
+            let config_as_string = config::convert_map_to_string(config, "=");
+            cm_conf_data.insert(SPARK_ENV_SH.to_string(), config_as_string);
+        }
+
+        if validated_config
+            .get(&PropertyNameKind::File(
+                SPARK_METRICS_PROPERTIES.to_string(),
+            ))
+            .is_some()
+        {
+            // We need to enable the PrometheusServlet, edit the metrics path to
+            // "/metrics" and add the JVM Source for JVM metrics
+            if self.context.resource.spec.monitoring_enabled() {
+                // TODO: we could specify the role here instead of using the wildcard '*'
+                let metrics_properties = "\
+                            *.sink.prometheusServlet.class=org.apache.spark.metrics.sink.PrometheusServlet\n\
+                            *.sink.prometheusServlet.path=/metrics\n\
+                            *.source.jvm.class=org.apache.spark.metrics.source.JvmSource";
+
+                cm_conf_data.insert(
+                    SPARK_METRICS_PROPERTIES.to_string(),
+                    metrics_properties.to_string(),
+                );
+            }
+        }
+
+        let cm_conf_name = name_utils::build_resource_name(
+            APP_NAME,
+            &self.context.name(),
+            role,
+            Some(group),
+            None,
+            Some(CONFIG_MAP_TYPE_CONF),
+        )?;
+
+        let cm_config = configmap::build_config_map(
+            &self.context.resource,
+            &cm_conf_name,
+            &self.context.namespace(),
+            cm_labels,
+            cm_conf_data,
+        )?;
+
+        config_maps.insert(
+            CONFIG_MAP_TYPE_CONF,
+            configmap::create_config_map(&self.context.client, cm_config).await?,
+        );
+
+        Ok(config_maps)
+    }
+
+    /// Creates the pod required for the spark instance.
+    ///
+    /// # Arguments
+    ///
+    /// - `role` - spark role.
+    /// - `group` - The role group.
+    /// - `node_name` - The node name for this pod.
+    /// - `config_maps` - The config maps and respective types required for this pod.
+    /// - `validated_config` - The validated product config.
+    ///
+    async fn create_pod(
         &self,
         role: &SparkRole,
-        role_group: &str,
+        group: &str,
         node_name: &str,
+        config_maps: &HashMap<&'static str, ConfigMap>,
         validated_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
-    ) -> Result<(Pod, Vec<ConfigMap>), SparkError> {
-        let mut config_maps = vec![];
-        let mut cli_arguments = vec![];
+    ) -> Result<Pod, error::Error> {
         let mut env_vars = vec![];
-        let mut cm_data = BTreeMap::new();
-
+        let mut cli_arguments = vec![];
         let mut container_ports = (None, None);
+        let role_str = &role.to_string();
 
-        let monitoring_enabled = self.context.resource.spec.monitoring_enabled();
-        let version: &SparkVersion = &self.context.resource.spec.version;
+        // extract container ports
+        if let Some(config) =
+            validated_config.get(&PropertyNameKind::File(SPARK_ENV_SH.to_string()))
+        {
+            container_ports = role.container_ports(config);
+        }
 
-        for (property_name_kind, config) in validated_config {
+        // extract env variables
+        if let Some(config) = validated_config.get(&PropertyNameKind::Env) {
+            for (property_name, property_value) in config {
+                if property_name.is_empty() {
+                    warn!("Received empty property_name for ENV... skipping");
+                    continue;
+                }
+
+                env_vars.push(EnvVar {
+                    name: property_name.clone(),
+                    value: Some(property_value.to_string()),
+                    value_from: None,
+                });
+            }
+        }
+
+        // extract cli
+        if let Some(config) = validated_config.get(&PropertyNameKind::Cli) {
             // we need to convert to <String, String> to <String, Option<String>> to deal with
             // CLI flags etc. We can not currently represent that via operator-rs / product-config.
             // This is a preparation for that.
@@ -511,99 +596,47 @@ impl SparkState {
                 .map(|(k, v)| (k.to_string(), Some(v.to_string())))
                 .collect();
 
-            match property_name_kind {
-                PropertyNameKind::File(file_name) => match file_name.as_str() {
-                    SPARK_DEFAULTS_CONF => {
-                        let config_as_string = config::convert_map_to_string(config, " ");
-                        cm_data.insert(SPARK_DEFAULTS_CONF.to_string(), config_as_string);
-                    }
-                    SPARK_ENV_SH => {
-                        let config_as_string = config::convert_map_to_string(config, "=");
-                        cm_data.insert(SPARK_ENV_SH.to_string(), config_as_string);
-
-                        // retrieve required container ports
-                        container_ports = role.container_ports(config);
-                    }
-                    SPARK_METRICS_PROPERTIES => {
-                        // We need to enable the PrometheusServlet, edit the metrics path to
-                        // "/metrics" and add the JVM Source for JVM metrics
-                        if monitoring_enabled {
-                            // TODO: we could specify the role here instead of using the wildcard '*'
-                            let metrics_properties = "\
-                            *.sink.prometheusServlet.class=org.apache.spark.metrics.sink.PrometheusServlet\n\
-                            *.sink.prometheusServlet.path=/metrics\n\
-                            *.source.jvm.class=org.apache.spark.metrics.source.JvmSource";
-
-                            cm_data.insert(
-                                SPARK_METRICS_PROPERTIES.to_string(),
-                                metrics_properties.to_string(),
-                            );
-                        }
-                    }
-                    _ => {}
-                },
-                PropertyNameKind::Env => {
-                    for (property_name, property_value) in transformed_config {
-                        if property_name.is_empty() {
-                            warn!("Received empty property_name for ENV... skipping");
-                            continue;
-                        }
-
-                        env_vars.push(EnvVar {
-                            name: property_name,
-                            value: property_value,
-                            value_from: None,
-                        });
-                    }
+            for (property_name, property_value) in transformed_config {
+                if property_name.is_empty() {
+                    warn!("Received empty property_name for CLI... skipping");
+                    continue;
                 }
-                PropertyNameKind::Cli => {
-                    for (property_name, property_value) in transformed_config {
-                        if property_name.is_empty() {
-                            warn!("Received empty property_name for CLI... skipping");
-                            continue;
-                        }
-                        // single argument / flag
-                        if property_value.is_none() {
-                            cli_arguments.push(property_name);
-                        } else {
-                            // key value pair
-                            cli_arguments.push(format!(
-                                "--{} {}",
-                                property_name,
-                                property_value.unwrap()
-                            ));
-                        }
-                    }
+                // single argument / flag
+                if property_value.is_none() {
+                    cli_arguments.push(property_name.clone());
+                } else {
+                    // key value pair (safe unwrap)
+                    cli_arguments.push(format!("--{} {}", property_name, property_value.unwrap()));
                 }
             }
         }
 
-        let pod_name = stackable_operator::pod_utils::get_pod_name(
+        let pod_name = name_utils::build_resource_name(
             APP_NAME,
             &self.context.name(),
-            role_group,
-            &role.to_string(),
-            node_name,
-        );
+            role_str,
+            Some(group),
+            Some(node_name),
+            None,
+        )?;
 
-        let cm_name = config::create_config_map_name(&pod_name);
-
-        let master_pods = filter_pods_for_type(&self.existing_pods, &SparkRole::Master);
-        let master_urls = &config::get_master_urls(&master_pods, &self.validated_role_config)?;
-
-        let mut labels = get_recommended_labels(
+        let version = &self.context.resource.spec.version;
+        let mut recommended_labels = get_recommended_labels(
             &self.context.resource,
             APP_NAME,
             &version.to_string(),
-            &role.to_string(),
-            role_group,
+            role_str,
+            group,
         );
+
+        let master_pods = filter_pods_for_type(&self.existing_pods, &SparkRole::Master);
+        let master_urls = &config::get_master_urls(&master_pods, &self.validated_role_config)?;
 
         let mut args = vec![];
         // add hashed master url label to workers and adapt start command and
         // adapt worker command with master url(s)
         if role == &SparkRole::Worker {
-            labels.insert(
+            recommended_labels.insert(
                 MASTER_URLS_HASH_LABEL.to_string(),
                 get_hashed_master_urls(master_urls),
             );
@@ -616,19 +649,35 @@ impl SparkState {
         // add cli arguments from product config / user config
         args.append(&mut cli_arguments);
 
-        let mut container_builder = ContainerBuilder::new("spark");
-        container_builder.image(format!("spark:{}", version.to_string()));
-        container_builder.command(vec![role.get_command(version)]);
-        container_builder.args(args);
-        container_builder.add_configmapvolume(cm_name.clone(), "conf".to_string());
-        container_builder.add_env_vars(env_vars);
+        let mut cb = ContainerBuilder::new("spark");
+        cb.image(format!("spark:{}", version.to_string()));
+        cb.command(vec![role.get_command(version)]);
+        cb.args(args);
+        cb.add_env_vars(env_vars);
+
+        if let Some(config_map_data) = config_maps.get(CONFIG_MAP_TYPE_CONF) {
+            if let Some(name) = config_map_data.metadata.name.as_ref() {
+                cb.add_configmapvolume(name, "conf".to_string());
+            } else {
+                return Err(error::Error::MissingConfigMapNameError {
+                    cm_type: CONFIG_MAP_TYPE_CONF,
+                });
+            }
+        } else {
+            return Err(error::Error::MissingConfigMapError {
+                cm_type: CONFIG_MAP_TYPE_CONF,
+                pod_name,
+            });
+        }
 
         let mut annotations = BTreeMap::new();
         let (protocol_port, http_port) = container_ports;
         // only add metrics container port and annotation if required
-        if let (Some(metrics_port), true) = (http_port, monitoring_enabled) {
+        if let (Some(metrics_port), true) =
+            (http_port, self.context.resource.spec.monitoring_enabled())
+        {
             annotations.insert(SHOULD_BE_SCRAPED.to_string(), "true".to_string());
-            container_builder.add_container_port(
+            cb.add_container_port(
                 ContainerPortBuilder::new(metrics_port.parse()?)
                     .name("metrics")
                     .build(),
@@ -636,7 +685,7 @@ impl SparkState {
         }
         // add protocol port if available
         if let Some(protocol_port) = protocol_port {
-            container_builder.add_container_port(
+            cb.add_container_port(
                 ContainerPortBuilder::new(protocol_port.parse()?)
                     .name("protocol")
                     .build(),
@@ -644,7 +693,7 @@ impl SparkState {
         }
         // add web ui port if available
         if let Some(web_ui_port) = http_port {
-            container_builder.add_container_port(
+            cb.add_container_port(
                 ContainerPortBuilder::new(web_ui_port.parse()?)
                     .name("http")
                     .build(),
@@ -654,36 +703,19 @@ impl SparkState {
         let pod = PodBuilder::new()
             .metadata(
                 ObjectMetaBuilder::new()
-                    .name(pod_name)
+                    .generate_name(pod_name)
                     .namespace(&self.context.client.default_namespace)
-                    .with_labels(labels)
+                    .with_labels(recommended_labels)
                     .with_annotations(annotations)
                     .ownerreference_from_resource(&self.context.resource, Some(true), Some(true))?
                     .build()?,
             )
             .add_stackable_agent_tolerations()
-            .add_container(container_builder.build())
+            .add_container(cb.build())
             .node_name(node_name)
             .build()?;
 
-        config_maps.push(
-            ConfigMapBuilder::new()
-                .metadata(
-                    ObjectMetaBuilder::new()
-                        .name(cm_name)
-                        .ownerreference_from_resource(
-                            &self.context.resource,
-                            Some(true),
-                            Some(true),
-                        )?
-                        .namespace(&self.context.client.default_namespace)
-                        .build()?,
-                )
-                .data(cm_data)
-                .build()?,
-        );
-
-        Ok((pod, config_maps))
+        Ok(self.context.client.create(&pod).await?)
     }
 
     /// In spark stand alone, workers are started via script and require the master urls to connect to.
@@ -783,7 +815,7 @@ impl SparkState {
 }
 
 impl ReconciliationState for SparkState {
-    type Error = error::SparkError;
+    type Error = error::Error;
 
     fn reconcile(
         &mut self,
@@ -853,7 +885,7 @@ impl SparkStrategy {
 impl ControllerStrategy for SparkStrategy {
     type Item = SparkCluster;
     type State = SparkState;
-    type Error = error::SparkError;
+    type Error = error::Error;
 
     async fn init_reconcile_state(
         &self,
