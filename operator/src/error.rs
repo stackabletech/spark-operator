@@ -1,12 +1,24 @@
 use std::num::ParseIntError;
 
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, thiserror::Error)]
-pub enum SparkError {
+pub enum Error {
     #[error("Kubernetes reported error: {source}")]
     KubeError {
         #[from]
         source: kube::Error,
     },
+
+    #[error(
+        "ConfigMap of type [{cm_type}] is for pod with generate_name [{pod_name}] is missing."
+    )]
+    MissingConfigMapError {
+        cm_type: &'static str,
+        pod_name: String,
+    },
+
+    #[error("ConfigMap of type [{cm_type}] is missing the metadata.name. Maybe the config map was not created yet?")]
+    MissingConfigMapNameError { cm_type: &'static str },
 
     #[error("Error from Operator framework: {source}")]
     OperatorError {
@@ -31,7 +43,4 @@ pub enum SparkError {
         #[from]
         source: ParseIntError,
     },
-
-    #[error("Invalid Configmap. No name found which is required to query the ConfigMap.")]
-    InvalidConfigMap,
 }
