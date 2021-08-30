@@ -1,11 +1,11 @@
 [package]
-name = "stackable-spark-operator-server"
-description = "Stackable Operator for Apache Spark"
-version = "0.1.0-nightly"
 authors = ["Malte Sander <malte.sander.it@gmail.com>"]
+build = "build.rs"
+description = "Stackable Operator for Apache Spark"
 edition = "2018"
 license = "OSL-3.0"
-build = "build.rs"
+name = "stackable-spark-operator-server"
+version = "0.1.0-nightly"
 
 [dependencies]
 stackable-operator = { git = "https://github.com/stackabletech/operator-rs.git", branch = "main" }
