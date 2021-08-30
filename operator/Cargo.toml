@@ -1,10 +1,11 @@
 [package]
-name = "stackable-spark-operator"
-description = "Kubernetes Operator library to handle Apache Spark custom resources"
-version = "0.1.0"
 authors = ["Malte Sander <malte.sander.it@gmail.com>"]
+description = "Kubernetes Operator library to handle Apache Spark custom resources"
 edition = "2018"
 license = "OSL-3.0"
+name = "stackable-spark-operator"
+repository = "https://github.com/stackabletech/spark-operator"
+version = "0.1.0"
 
 [dependencies]
 product-config = { git = "https://github.com/stackabletech/product-config.git", branch = "main" }
