@@ -16,7 +16,7 @@ anyhow = "1.0"
 clap = "2.33"
 k8s-openapi = { version = "0.12", default-features = false, features = ["v1_21"] }
 serde_yaml = "0.8"
-tokio = { version = "1.10", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.11", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1"
 
 [build-dependencies]
