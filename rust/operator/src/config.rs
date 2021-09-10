@@ -242,7 +242,8 @@ mod tests {
         let spark_cluster: SparkCluster = stackable_spark_test_utils::setup_test_cluster();
         let master_pods = stackable_spark_test_utils::create_master_pods();
         let product_config =
-            ProductConfigManager::from_yaml_file("../deploy/config-spec/properties.yaml").unwrap();
+            ProductConfigManager::from_yaml_file("../../deploy/config-spec/properties.yaml")
+                .unwrap();
 
         let validated_config = validated_product_config(&spark_cluster, &product_config).unwrap();
 
