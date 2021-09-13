@@ -1,5 +1,5 @@
 [Unit]
-Description=Stackable Spark Operator
+Description=Stackable Operator for Apache Spark
 Before=
 After=network.target
 [Service]
