@@ -4,7 +4,7 @@ description = "Contains utilities for the Stackable Operator for Apache Spark"
 edition = "2018"
 license = "OSL-3.0"
 name = "stackable-spark-common"
-version = "0.2.0"
+version = "0.3.0-nightly"
 
 [dependencies]
 
