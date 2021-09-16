@@ -5,11 +5,12 @@ pub use commands::{Restart, Start, Stop};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::CustomResource;
 use schemars::JsonSchema;
-use semver::{Error as SemVerError, Version};
+use semver::Version;
 use serde::{Deserialize, Serialize};
 use stackable_operator::product_config_utils::{ConfigError, Configuration};
 use stackable_operator::role_utils::{CommonConfiguration, Role};
-use stackable_operator::status::Conditions;
+use stackable_operator::status::{Conditions, Status, Versioned};
+use stackable_operator::versioning::{ProductVersion, Versioning, VersioningState};
 use stackable_spark_common::constants::{
     SPARK_DEFAULTS_AUTHENTICATE, SPARK_DEFAULTS_AUTHENTICATE_SECRET, SPARK_DEFAULTS_EVENT_LOG_DIR,
     SPARK_DEFAULTS_HISTORY_FS_LOG_DIRECTORY, SPARK_DEFAULTS_HISTORY_STORE_PATH,
@@ -17,6 +18,7 @@ use stackable_spark_common::constants::{
     SPARK_ENV_MASTER_WEBUI_PORT, SPARK_ENV_WORKER_CORES, SPARK_ENV_WORKER_MEMORY,
     SPARK_ENV_WORKER_PORT, SPARK_ENV_WORKER_WEBUI_PORT,
 };
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::hash::Hash;
 use strum_macros::EnumIter;
@@ -42,6 +44,15 @@ pub struct SparkClusterSpec {
     pub history_servers: Option<Role<HistoryServerConfig>>,
     #[serde(flatten)]
     pub config: Option<CommonConfiguration<CommonConfig>>,
+}
+
+impl Status<SparkClusterStatus> for SparkCluster {
+    fn status(&self) -> &Option<SparkClusterStatus> {
+        &self.status
+    }
+    fn status_mut(&mut self) -> &mut Option<SparkClusterStatus> {
+        &mut self.status
+    }
 }
 
 impl SparkClusterSpec {
@@ -371,9 +382,7 @@ pub struct ConfigOption {
 #[serde(rename_all = "camelCase")]
 pub struct SparkClusterStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub current_version: Option<SparkVersion>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_version: Option<SparkVersion>,
+    pub version: Option<ProductVersion<SparkVersion>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schemars(schema_with = "stackable_operator::conditions::schema")]
     pub conditions: Vec<Condition>,
@@ -381,6 +390,24 @@ pub struct SparkClusterStatus {
     pub current_command: Option<CurrentCommand>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cluster_execution_status: Option<ClusterExecutionStatus>,
+}
+
+impl Versioned<SparkVersion> for SparkClusterStatus {
+    fn version(&self) -> &Option<ProductVersion<SparkVersion>> {
+        &self.version
+    }
+    fn version_mut(&mut self) -> &mut Option<ProductVersion<SparkVersion>> {
+        &mut self.version
+    }
+}
+
+impl Conditions for SparkClusterStatus {
+    fn conditions(&self) -> &[Condition] {
+        self.conditions.as_slice()
+    }
+    fn conditions_mut(&mut self) -> &mut Vec<Condition> {
+        &mut self.conditions
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
@@ -395,23 +422,6 @@ pub struct CurrentCommand {
     pub command_ref: String,
     pub command_type: String,
     pub started_at: String,
-}
-
-impl Conditions for SparkCluster {
-    fn conditions(&self) -> Option<&[Condition]> {
-        if let Some(status) = &self.status {
-            return Some(status.conditions.as_slice());
-        }
-        None
-    }
-
-    fn conditions_mut(&mut self) -> &mut Vec<Condition> {
-        if self.status.is_none() {
-            self.status = Some(SparkClusterStatus::default());
-            return &mut self.status.as_mut().unwrap().conditions;
-        }
-        return &mut self.status.as_mut().unwrap().conditions;
-    }
 }
 
 #[allow(non_camel_case_types)]
@@ -445,20 +455,40 @@ pub enum SparkVersion {
 }
 
 impl SparkVersion {
-    pub fn is_upgrade(&self, to: &Self) -> Result<bool, SemVerError> {
-        let from_version = Version::parse(&self.to_string())?;
-        let to_version = Version::parse(&to.to_string())?;
-        Ok(to_version > from_version)
-    }
-
-    pub fn is_downgrade(&self, to: &Self) -> Result<bool, SemVerError> {
-        let from_version = Version::parse(&self.to_string())?;
-        let to_version = Version::parse(&to.to_string())?;
-        Ok(to_version < from_version)
-    }
-
     pub fn package_name(&self) -> String {
         format!("spark-{}-bin-hadoop2.7", self.to_string())
+    }
+}
+
+impl Versioning for SparkVersion {
+    fn versioning_state(&self, other: &Self) -> VersioningState {
+        let from_version = match Version::parse(&self.to_string()) {
+            Ok(v) => v,
+            Err(e) => {
+                return VersioningState::Invalid(format!(
+                    "Could not parse [{}] to SemVer: {}",
+                    self.to_string(),
+                    e.to_string()
+                ))
+            }
+        };
+
+        let to_version = match Version::parse(&other.to_string()) {
+            Ok(v) => v,
+            Err(e) => {
+                return VersioningState::Invalid(format!(
+                    "Could not parse [{}] to SemVer: {}",
+                    other.to_string(),
+                    e.to_string()
+                ))
+            }
+        };
+
+        match to_version.cmp(&from_version) {
+            Ordering::Greater => VersioningState::ValidUpgrade,
+            Ordering::Less => VersioningState::ValidDowngrade,
+            Ordering::Equal => VersioningState::NoOp,
+        }
     }
 }
 
@@ -483,22 +513,18 @@ mod tests {
     }
 
     #[test]
-    fn test_spark_version_is_upgrade() {
-        assert!(SparkVersion::v2_4_7
-            .is_upgrade(&SparkVersion::v3_0_1)
-            .unwrap());
-        assert!(!SparkVersion::v3_0_1
-            .is_upgrade(&SparkVersion::v3_0_1)
-            .unwrap());
-    }
-
-    #[test]
-    fn test_spark_version_is_downgrade() {
-        assert!(SparkVersion::v3_0_1
-            .is_downgrade(&SparkVersion::v2_4_7)
-            .unwrap());
-        assert!(!SparkVersion::v3_0_1
-            .is_downgrade(&SparkVersion::v3_0_1)
-            .unwrap());
+    fn test_spark_version_versioning() {
+        assert_eq!(
+            SparkVersion::v2_4_7.versioning_state(&SparkVersion::v3_1_1),
+            VersioningState::ValidUpgrade
+        );
+        assert_eq!(
+            SparkVersion::v3_1_1.versioning_state(&SparkVersion::v2_4_7),
+            VersioningState::ValidDowngrade
+        );
+        assert_eq!(
+            SparkVersion::v2_4_7.versioning_state(&SparkVersion::v2_4_7),
+            VersioningState::NoOp
+        );
     }
 }

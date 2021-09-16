@@ -470,22 +470,27 @@ spec:
                     - commandType
                     - startedAt
                   type: object
-                currentVersion:
-                  enum:
-                    - 2.4.7
-                    - 3.0.1
-                    - 3.0.2
-                    - 3.1.1
+                version:
+                  description: The version of the product provided by the operator. Split into current and target version in order track upgrading and downgrading progress.
                   nullable: true
-                  type: string
-                targetVersion:
-                  enum:
-                    - 2.4.7
-                    - 3.0.1
-                    - 3.0.2
-                    - 3.1.1
-                  nullable: true
-                  type: string
+                  properties:
+                    current:
+                      enum:
+                        - 2.4.7
+                        - 3.0.1
+                        - 3.0.2
+                        - 3.1.1
+                      nullable: true
+                      type: string
+                    target:
+                      enum:
+                        - 2.4.7
+                        - 3.0.1
+                        - 3.0.2
+                        - 3.1.1
+                      nullable: true
+                      type: string
+                  type: object
               type: object
           required:
             - spec

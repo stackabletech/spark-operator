@@ -6,17 +6,14 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use k8s_openapi::api::core::v1::{ConfigMap, EnvVar, Pod};
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::api::{ListParams, ResourceExt};
 use kube::Api;
 use product_config::types::PropertyNameKind;
 use product_config::ProductConfigManager;
-use serde_json::json;
 use stackable_operator::builder::{
     ContainerBuilder, ContainerPortBuilder, ObjectMetaBuilder, PodBuilder,
 };
 use stackable_operator::client::Client;
-use stackable_operator::conditions::ConditionStatus;
 use stackable_operator::controller::{Controller, ControllerStrategy, ReconciliationState};
 use stackable_operator::error::OperatorResult;
 use stackable_operator::labels::{
@@ -42,15 +39,14 @@ use stackable_spark_common::constants::{
     SPARK_DEFAULTS_CONF, SPARK_ENV_SH, SPARK_METRICS_PROPERTIES,
 };
 use stackable_spark_crd::commands::{Restart, Start, Stop};
-use stackable_spark_crd::{
-    ClusterExecutionStatus, CurrentCommand, SparkCluster, SparkClusterStatus, SparkRole,
-    SparkVersion,
-};
+use stackable_spark_crd::{ClusterExecutionStatus, CurrentCommand, SparkCluster, SparkRole};
 
 use crate::config::validated_product_config;
 use crate::pod_utils::{
     filter_pods_for_type, get_hashed_master_urls, APP_NAME, MANAGED_BY, MASTER_URLS_HASH_LABEL,
 };
+use stackable_operator::status::init_status;
+use stackable_operator::versioning::{finalize_versioning, init_versioning};
 
 mod command_utils;
 pub mod config;
@@ -72,184 +68,15 @@ struct SparkState {
 }
 
 impl SparkState {
-    async fn set_installing_condition(
-        &self,
-        conditions: &[Condition],
-        message: &str,
-        reason: &str,
-        status: ConditionStatus,
-    ) -> OperatorResult<SparkCluster> {
-        let resource = self
-            .context
-            .build_and_set_condition(
-                Some(conditions),
-                message.to_string(),
-                reason.to_string(),
-                status,
-                "Installing".to_string(),
-            )
-            .await?;
-
-        Ok(resource)
-    }
-
-    async fn set_current_version(
-        &self,
-        version: Option<&SparkVersion>,
-    ) -> OperatorResult<SparkCluster> {
-        let resource = self
-            .context
-            .client
-            .merge_patch_status(
-                &self.context.resource,
-                &json!({ "currentVersion": version }),
-            )
-            .await?;
-
-        Ok(resource)
-    }
-
-    async fn set_target_version(
-        &self,
-        version: Option<&SparkVersion>,
-    ) -> OperatorResult<SparkCluster> {
-        let resource = self
-            .context
-            .client
-            .merge_patch_status(&self.context.resource, &json!({ "targetVersion": version }))
-            .await?;
-
-        Ok(resource)
-    }
-
     /// Will initialize the status object if it's never been set.
     pub async fn init_status(&mut self) -> SparkReconcileResult {
-        // We'll begin by setting an empty status here because later in this method we might
-        // update its conditions. To avoid any issues we'll just create it once here.
-        if self.context.resource.status.is_none() {
-            let status = SparkClusterStatus::default();
-            self.context
-                .client
-                .merge_patch_status(&self.context.resource, &status)
-                .await?;
-            self.context.resource.status = Some(status);
-        }
+        // init status with default values if not available yet.
+        self.context.resource = init_status(&self.context.client, &self.context.resource).await?;
 
-        // This should always return either the existing one or the one we just created above.
-        let status = self.context.resource.status.take().unwrap_or_default();
         let spec_version = self.context.resource.spec.version.clone();
 
-        match (&status.current_version, &status.target_version) {
-            (None, None) => {
-                // No current_version and no target_version: Must be initial installation.
-                // We'll set the Upgrading condition and the target_version to the version from spec.
-                info!(
-                    "Initial installation, now moving towards version [{}]",
-                    spec_version
-                );
-                self.context.resource.status = self
-                    .set_installing_condition(
-                        &status.conditions,
-                        &format!("Initial installation to version [{:?}]", spec_version),
-                        "InitialInstallation",
-                        ConditionStatus::True,
-                    )
-                    .await?
-                    .status;
-                self.context.resource.status =
-                    self.set_target_version(Some(&spec_version)).await?.status;
-            }
-            (None, Some(target_version)) => {
-                // No current_version but a target_version means we're still doing the initial
-                // installation. Will continue working towards that goal even if another version
-                // was set in the meantime.
-                debug!(
-                    "Initial installation, still moving towards version [{}]",
-                    target_version
-                );
-                if &spec_version != target_version {
-                    info!("A new target version ([{}]) was requested while we still do the initial installation to [{}], finishing running upgrade first", spec_version, target_version)
-                }
-                // We do this here to update the observedGeneration if needed
-                self.context.resource.status = self
-                    .set_installing_condition(
-                        &status.conditions,
-                        &format!("Initial installation to version [{:?}]", spec_version),
-                        "InitialInstallation",
-                        ConditionStatus::True,
-                    )
-                    .await?
-                    .status;
-            }
-            (Some(current_version), None) => {
-                // We are at a stable version but have no target_version set. This will be the normal state.
-                // We'll check if there is a different version in spec and if it is will set it in target_version.
-                // TODO: check valid up/downgrades
-                let message;
-                let reason;
-                if current_version.is_upgrade(&spec_version)? {
-                    message = format!(
-                        "Upgrading from [{:?}] to [{:?}]",
-                        current_version, &spec_version
-                    );
-                    reason = "Upgrading";
-                    self.context.resource.status =
-                        self.set_target_version(Some(&spec_version)).await?.status;
-                } else if current_version.is_downgrade(&spec_version)? {
-                    message = format!(
-                        "Downgrading from [{:?}] to [{:?}]",
-                        current_version, &spec_version
-                    );
-                    reason = "Downgrading";
-                    self.context.resource.status =
-                        self.set_target_version(Some(&spec_version)).await?.status;
-                } else {
-                    message = format!(
-                        "No upgrade/downgrade required [{:?}] is still the current_version",
-                        current_version
-                    );
-                    reason = "";
-                }
-
-                trace!("{}", message);
-
-                self.context.resource.status = self
-                    .set_installing_condition(
-                        &status.conditions,
-                        &message,
-                        reason,
-                        ConditionStatus::False,
-                    )
-                    .await?
-                    .status;
-            }
-            (Some(current_version), Some(target_version)) => {
-                // current_version and target_version are set means we're still in the process
-                // of upgrading. We'll only do some logging and checks and will update
-                // the condition so observedGeneration can be updated.
-                debug!(
-                    "Still changing version from [{}] to [{}]",
-                    current_version, target_version
-                );
-                if &self.context.resource.spec.version != target_version {
-                    info!("A new target version was requested while we still upgrade from [{}] to [{}], finishing running upgrade/downgrade first", current_version, target_version)
-                }
-                let message = format!(
-                    "Changing version from [{:?}] to [{:?}]",
-                    current_version, target_version
-                );
-
-                self.context.resource.status = self
-                    .set_installing_condition(
-                        &status.conditions,
-                        &message,
-                        "",
-                        ConditionStatus::True,
-                    )
-                    .await?
-                    .status;
-            }
-        }
+        self.context.resource =
+            init_versioning(&self.context.client, &self.context.resource, spec_version).await?;
 
         Ok(ReconcileFunctionAction::Continue)
     }
@@ -436,6 +263,11 @@ impl SparkState {
                 }
             }
         }
+
+        // If we reach here it means all pods must be running on target_version.
+        // We can now set current_version to target_version (if target_version was set) and
+        // target_version to None
+        finalize_versioning(&self.context.client, &self.context.resource).await?;
 
         Ok(ReconcileFunctionAction::Continue)
     }
@@ -779,39 +611,6 @@ impl SparkState {
 
         Ok(ReconcileFunctionAction::Continue)
     }
-
-    /// Process the cluster status version for upgrades/downgrades.
-    /// If we reach here it means all pods must be running on target_version.
-    /// We can now set current_version to target_version (if target_version was set),
-    /// and target_version to None.
-    pub async fn process_version(&mut self) -> SparkReconcileResult {
-        if let Some(status) = &self.context.resource.status.clone() {
-            if let Some(target_version) = &status.target_version {
-                info!(
-                    "Finished upgrade/downgrade to [{}]. Cluster ready!",
-                    &target_version
-                );
-
-                self.context.resource.status = self.set_target_version(None).await?.status;
-                self.context.resource.status =
-                    self.set_current_version(Some(target_version)).await?.status;
-                self.context.resource.status = self
-                    .set_installing_condition(
-                        &status.conditions,
-                        &format!(
-                            "No change required [{:?}] is still the current_version",
-                            target_version
-                        ),
-                        "",
-                        ConditionStatus::False,
-                    )
-                    .await?
-                    .status;
-            }
-        }
-
-        Ok(ReconcileFunctionAction::Continue)
-    }
 }
 
 impl ReconciliationState for SparkState {
@@ -862,8 +661,6 @@ impl ReconciliationState for SparkState {
                 .then(self.check_worker_master_urls())
                 .await?
                 .then(self.finalize_commands())
-                .await?
-                .then(self.process_version())
                 .await
         })
     }
