@@ -9,6 +9,7 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use stackable_operator::product_config_utils::{ConfigError, Configuration};
 use stackable_operator::role_utils::{CommonConfiguration, Role};
+use stackable_operator::scheduler::PodToNodeMapping;
 use stackable_operator::status::{Conditions, Status, Versioned};
 use stackable_operator::versioning::{ProductVersion, Versioning, VersioningState};
 use stackable_spark_common::constants::{
@@ -390,6 +391,8 @@ pub struct SparkClusterStatus {
     pub current_command: Option<CurrentCommand>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cluster_execution_status: Option<ClusterExecutionStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub history: Option<PodToNodeMapping>,
 }
 
 impl Versioned<SparkVersion> for SparkClusterStatus {

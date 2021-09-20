@@ -470,6 +470,21 @@ spec:
                     - commandType
                     - startedAt
                   type: object
+                history:
+                  nullable: true
+                  properties:
+                    mapping:
+                      additionalProperties:
+                        properties:
+                          name:
+                            type: string
+                        required:
+                          - name
+                        type: object
+                      type: object
+                  required:
+                    - mapping
+                  type: object
                 version:
                   description: The version of the product provided by the operator. Split into current and target version in order track upgrading and downgrading progress.
                   nullable: true

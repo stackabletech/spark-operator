@@ -31,7 +31,7 @@ use stackable_operator::role_utils::{
     find_nodes_that_fit_selectors, get_role_and_group_labels,
     list_eligible_nodes_for_role_and_group, EligibleNodesForRoleAndGroup,
 };
-use stackable_operator::{configmap, k8s_utils, name_utils};
+use stackable_operator::{configmap, name_utils, scheduler};
 use strum::IntoEnumIterator;
 use tracing::{debug, info, trace, warn};
 
@@ -44,6 +44,10 @@ use stackable_spark_crd::{ClusterExecutionStatus, CurrentCommand, SparkCluster, 
 use crate::config::validated_product_config;
 use crate::pod_utils::{
     filter_pods_for_type, get_hashed_master_urls, APP_NAME, MANAGED_BY, MASTER_URLS_HASH_LABEL,
+};
+use stackable_operator::scheduler::{
+    K8SUnboundedHistory, PodIdentity, PodToNodeMapping, RoleGroupEligibleNodes, ScheduleStrategy,
+    Scheduler, StickyScheduler,
 };
 use stackable_operator::status::init_status;
 use stackable_operator::versioning::{finalize_versioning, init_versioning};
@@ -207,58 +211,66 @@ impl SparkState {
                         "labels: [{:?}]",
                         get_role_and_group_labels(role_str, role_group)
                     );
-                    let nodes_that_need_pods = k8s_utils::find_nodes_that_need_pods(
-                        &eligible_nodes.nodes,
-                        &self.existing_pods,
-                        &get_role_and_group_labels(role_str, role_group),
-                        eligible_nodes.replicas,
-                    );
+                    let mut history = match self
+                        .context
+                        .resource
+                        .status
+                        .as_ref()
+                        .and_then(|status| status.history.as_ref())
+                    {
+                        Some(simple_history) => {
+                            // we clone here because we cannot access mut self because we need it later
+                            // to create config maps and pods. The `status` history will be out of sync
+                            // with the cloned `simple_history` until the next reconcile.
+                            // The `status` history should not be used after this method to avoid side
+                            // effects.
+                            K8SUnboundedHistory::new(&self.context.client, simple_history.clone())
+                        }
+                        None => K8SUnboundedHistory::new(
+                            &self.context.client,
+                            PodToNodeMapping::default(),
+                        ),
+                    };
 
-                    for node in nodes_that_need_pods {
-                        let node_name = if let Some(node_name) = &node.metadata.name {
-                            node_name
-                        } else {
-                            warn!("No name found in metadata, this should not happen! Skipping node: [{:?}]", node);
-                            continue;
-                        };
-                        debug!(
-                            "Creating pod on node [{}] for [{}] role and group [{}]",
-                            node.metadata
-                                .name
-                                .as_deref()
-                                .unwrap_or("<no node name found>"),
-                            role_str,
-                            role_group
-                        );
+                    let mut sticky_scheduler =
+                        StickyScheduler::new(&mut history, ScheduleStrategy::GroupAntiAffinity);
 
-                        // now we have a node that needs pods -> get validated config
+                    let state = sticky_scheduler.schedule(
+                        scheduler::generate_ids(
+                            APP_NAME,
+                            &self.context.name(),
+                            &self.eligible_nodes,
+                        )
+                        .as_slice(),
+                        &RoleGroupEligibleNodes::from(&self.eligible_nodes),
+                        &PodToNodeMapping::from(&self.existing_pods, None),
+                    )?;
+
+                    let mapping = state.remaining_mapping().get_filtered(role_str, role_group);
+
+                    if let Some((pod_id, node_id)) = mapping.iter().next() {
+                        // now we have a node that needs a pod -> get validated config
                         let validated_config = config_for_role_and_group(
-                            role_str,
-                            role_group,
+                            pod_id.role(),
+                            pod_id.group(),
                             &self.validated_role_config,
                         )?;
 
                         let config_maps = self
-                            .create_config_maps(role_str, role_group, validated_config)
+                            .create_config_maps(pod_id, validated_config, &state.mapping())
                             .await?;
 
                         self.create_pod(
-                            &role,
-                            role_group,
-                            node_name,
+                            pod_id,
+                            role,
+                            &node_id.name,
                             &config_maps,
                             validated_config,
                         )
                         .await?;
 
-                        changes_applied = true;
-                    }
+                        history.save(&self.context.resource).await?;
 
-                    // we do this here to make sure pods of each role are started after each other
-                    // roles start in rolling fashion
-                    // pods of each role group start in parallel
-                    // master > worker > history server
-                    if changes_applied {
                         return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
                     }
                 }
@@ -292,19 +304,19 @@ impl SparkState {
     ///
     async fn create_config_maps(
         &self,
-        role: &str,
-        group: &str,
+        pod_id: &PodIdentity,
         validated_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
+        pod_mapping: &PodToNodeMapping,
     ) -> Result<HashMap<&'static str, ConfigMap>, error::Error> {
         let mut config_maps = HashMap::new();
         let mut cm_conf_data = BTreeMap::new();
 
         let mut cm_labels = get_recommended_labels(
             &self.context.resource,
-            APP_NAME,
+            pod_id.app(),
             &self.context.resource.spec.version.to_string(),
-            role,
-            group,
+            pod_id.role(),
+            pod_id.group(),
         );
 
         cm_labels.insert(
@@ -349,10 +361,10 @@ impl SparkState {
         }
 
         let cm_conf_name = name_utils::build_resource_name(
-            APP_NAME,
+            pod_id.app(),
             &self.context.name(),
-            role,
-            Some(group),
+            pod_id.role(),
+            Some(pod_id.group()),
             None,
             Some(CONFIG_MAP_TYPE_CONF),
         )?;
@@ -385,8 +397,8 @@ impl SparkState {
     ///
     async fn create_pod(
         &self,
+        pod_id: &PodIdentity,
         role: &SparkRole,
-        group: &str,
         node_name: &str,
         config_maps: &HashMap<&'static str, ConfigMap>,
         validated_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
@@ -394,7 +406,6 @@ impl SparkState {
         let mut env_vars = vec![];
         let mut cli_arguments = vec![];
         let mut container_ports = (None, None);
-        let role_str = &role.to_string();
 
         // extract container ports
         if let Some(config) =
@@ -445,10 +456,10 @@ impl SparkState {
         }
 
         let pod_name = name_utils::build_resource_name(
-            APP_NAME,
+            pod_id.app(),
             &self.context.name(),
-            role_str,
-            Some(group),
+            pod_id.role(),
+            Some(pod_id.group()),
             Some(node_name),
             None,
         )?;
@@ -456,10 +467,10 @@ impl SparkState {
         let version = &self.context.resource.spec.version;
         let mut recommended_labels = get_recommended_labels(
             &self.context.resource,
-            APP_NAME,
+            pod_id.group(),
             &version.to_string(),
-            role_str,
-            group,
+            pod_id.role(),
+            pod_id.group(),
         );
 
         let master_pods = filter_pods_for_type(&self.existing_pods, &SparkRole::Master);
