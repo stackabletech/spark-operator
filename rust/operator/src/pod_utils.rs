@@ -37,9 +37,11 @@ pub fn filter_pods_for_type(pods: &[Pod], node_type: &SparkRole) -> Vec<Pod> {
     let mut filtered_pods = Vec::new();
 
     for pod in pods {
-        if let Some(component) = pod.metadata.labels.get(labels::APP_COMPONENT_LABEL) {
-            if component == &node_type.to_string() {
-                filtered_pods.push(pod.clone());
+        if let Some(labels) = &pod.metadata.labels {
+            if let Some(component) = labels.get(labels::APP_COMPONENT_LABEL) {
+                if component == &node_type.to_string() {
+                    filtered_pods.push(pod.clone());
+                }
             }
         }
     }
@@ -65,9 +67,9 @@ mod tests {
         let master_pods = stackable_spark_test_utils::create_master_pods();
 
         for pod in master_pods {
-            assert!(!pod.metadata.labels.is_empty());
+            assert!(!pod.metadata.labels.is_none());
 
-            let labels = &pod.metadata.labels;
+            let labels = &pod.metadata.labels.unwrap();
 
             assert_eq!(
                 labels.get(labels::APP_VERSION_LABEL),
@@ -87,10 +89,10 @@ mod tests {
             let container = containers.get(0).unwrap();
             assert_eq!(
                 container.command,
-                vec![node_type.get_command(&spark_cluster.spec.version)]
+                Some(vec![node_type.get_command(&spark_cluster.spec.version)])
             );
             // only start command for masters
-            assert_eq!(container.command.len(), 1);
+            assert_eq!(container.command.as_ref().unwrap().len(), 1);
         }
     }
 
@@ -106,9 +108,9 @@ mod tests {
         let worker_pods = stackable_spark_test_utils::create_worker_pods();
 
         for pod in worker_pods {
-            assert!(!pod.metadata.labels.is_empty());
+            assert!(!pod.metadata.labels.is_none());
 
-            let labels = &pod.metadata.labels;
+            let labels = &pod.metadata.labels.unwrap();
 
             assert_eq!(
                 labels.get(labels::APP_VERSION_LABEL),
@@ -136,16 +138,20 @@ mod tests {
             // start command and master urls for workers
             let command = container.command.clone();
             let args = container.args.clone();
-            assert_eq!(command.len(), 1);
+            assert_eq!(command.as_ref().unwrap().len(), 1);
             assert_eq!(
                 command,
-                vec![node_type.get_command(&spark_cluster.spec.version),]
+                Some(vec![node_type.get_command(&spark_cluster.spec.version)])
             );
 
-            assert_eq!(args.len(), 1);
+            assert_eq!(args.as_ref().unwrap().len(), 1);
             assert_eq!(
                 args,
-                vec![adapt_worker_command(node_type, master_urls.as_slice()).unwrap()]
+                Some(vec![adapt_worker_command(
+                    node_type,
+                    master_urls.as_slice()
+                )
+                .unwrap()])
             );
         }
     }

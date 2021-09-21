@@ -6,12 +6,15 @@ metadata:
 spec:
   group: command.spark.stackable.tech
   names:
+    categories: []
     kind: Start
     plural: starts
+    shortNames: []
     singular: start
   scope: Namespaced
   versions:
-    - name: v1alpha1
+    - additionalPrinterColumns: []
+      name: v1alpha1
       schema:
         openAPIV3Schema:
           description: "Auto-generated derived type for StartCommandSpec via `CustomResource`"
