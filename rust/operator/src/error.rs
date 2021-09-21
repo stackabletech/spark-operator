@@ -1,8 +1,15 @@
+use stackable_operator::scheduler;
 use std::num::ParseIntError;
 
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("Scheduler reported error: {source}")]
+    SchedulerError {
+        #[from]
+        source: scheduler::Error,
+    },
+
     #[error("Kubernetes reported error: {source}")]
     KubeError {
         #[from]

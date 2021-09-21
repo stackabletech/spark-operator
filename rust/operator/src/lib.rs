@@ -1,8 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::time::Duration;
+mod error;
 
 use async_trait::async_trait;
 use k8s_openapi::api::core::v1::{ConfigMap, EnvVar, Pod};
@@ -32,6 +28,11 @@ use stackable_operator::role_utils::{
     list_eligible_nodes_for_role_and_group, EligibleNodesForRoleAndGroup,
 };
 use stackable_operator::{configmap, name_utils, scheduler};
+use std::collections::{BTreeMap, HashMap};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::time::Duration;
 use strum::IntoEnumIterator;
 use tracing::{debug, info, trace, warn};
 
@@ -54,7 +55,6 @@ use stackable_operator::versioning::{finalize_versioning, init_versioning};
 
 mod command_utils;
 pub mod config;
-mod error;
 pub mod pod_utils;
 
 const FINALIZER_NAME: &str = "spark.stackable.tech/cleanup";
@@ -175,7 +175,6 @@ impl SparkState {
     async fn create_missing_pods(&mut self) -> SparkReconcileResult {
         trace!("Starting `create_missing_pods`");
 
-        let mut changes_applied = false;
         // The iteration happens in two stages here, to accommodate the way our operators think
         // about roles and role groups.
         // The hierarchy is:
@@ -262,7 +261,7 @@ impl SparkState {
 
                         self.create_pod(
                             pod_id,
-                            role,
+                            &role,
                             &node_id.name,
                             &config_maps,
                             validated_config,
@@ -306,7 +305,7 @@ impl SparkState {
         &self,
         pod_id: &PodIdentity,
         validated_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
-        pod_mapping: &PodToNodeMapping,
+        _pod_mapping: &PodToNodeMapping,
     ) -> Result<HashMap<&'static str, ConfigMap>, error::Error> {
         let mut config_maps = HashMap::new();
         let mut cm_conf_data = BTreeMap::new();
