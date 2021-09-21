@@ -234,18 +234,23 @@ impl SparkState {
                     let mut sticky_scheduler =
                         StickyScheduler::new(&mut history, ScheduleStrategy::GroupAntiAffinity);
 
+                    let pod_ids = scheduler::generate_ids(
+                        APP_NAME,
+                        &self.context.name(),
+                        &self.eligible_nodes,
+                    );
+
+                    trace!("pod ids: {:?}", pod_ids);
+
                     let state = sticky_scheduler.schedule(
-                        scheduler::generate_ids(
-                            APP_NAME,
-                            &self.context.name(),
-                            &self.eligible_nodes,
-                        )
-                        .as_slice(),
+                        pod_ids.as_slice(),
                         &RoleGroupEligibleNodes::from(&self.eligible_nodes),
                         &PodToNodeMapping::from(&self.existing_pods, None),
                     )?;
 
                     let mapping = state.remaining_mapping().get_filtered(role_str, role_group);
+
+                    trace!("remaining_mapping: {:?}", &mapping);
 
                     if let Some((pod_id, node_id)) = mapping.iter().next() {
                         // now we have a node that needs a pod -> get validated config
@@ -558,6 +563,7 @@ impl SparkState {
             .node_name(node_name)
             .build()?;
 
+        trace!("create_pod: {:?}", pod_id);
         Ok(self.context.client.create(&pod).await?)
     }
 
