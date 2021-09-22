@@ -385,7 +385,6 @@ pub struct SparkClusterStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<ProductVersion<SparkVersion>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[schemars(schema_with = "stackable_operator::conditions::schema")]
     pub conditions: Vec<Condition>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_command: Option<CurrentCommand>,
