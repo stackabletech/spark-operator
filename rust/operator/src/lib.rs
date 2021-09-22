@@ -241,12 +241,12 @@ impl SparkState {
                         &self.eligible_nodes,
                     );
 
-                    trace!("pod ids: {:?}", pod_ids);
+                    trace!("generate_ids: {:?}", pod_ids);
 
                     let state = sticky_scheduler.schedule(
                         pod_ids.as_slice(),
                         &RoleGroupEligibleNodes::from(&self.eligible_nodes),
-                        &PodToNodeMapping::from(&self.existing_pods, None),
+                        &PodToNodeMapping::try_from_pods(&self.existing_pods)?,
                     )?;
 
                     let mapping = state.remaining_mapping().get_filtered(role_str, role_group);
@@ -472,7 +472,7 @@ impl SparkState {
         let version = &self.context.resource.spec.version;
         let mut recommended_labels = get_recommended_labels(
             &self.context.resource,
-            pod_id.group(),
+            pod_id.app(),
             &version.to_string(),
             pod_id.role(),
             pod_id.group(),
