@@ -82,49 +82,51 @@ pub fn get_master_urls(
     let mut master_urls = Vec::new();
 
     for pod in pods {
-        if let (Some(role), Some(group)) = (
-            pod.metadata.labels.get(APP_COMPONENT_LABEL),
-            pod.metadata.labels.get(APP_ROLE_GROUP_LABEL),
-        ) {
-            if role != &SparkRole::Master.to_string() {
-                continue;
-            }
-
-            let validated_config_for_role_and_group =
-                config_for_role_and_group(role, group, validated_config)?;
-
-            // TODO: fall back on container ports or default from product config
-            //    The "7077" is a placeholder. This value will always be overwritten
-            //    by the default or recommended value in the product config (if not set).
-            let mut port = "7077";
-            // The order for spark properties:
-            // SparkConf > spark-submit / spark-shell > spark-defaults.conf > spark-env.sh
-            // We only check spark-defaults.conf and spark-env.sh
-            // 1) check spark-defaults.sh
-            if let Some(spark_defaults_conf) = validated_config_for_role_and_group
-                .get(&PropertyNameKind::File(SPARK_DEFAULTS_CONF.to_string()))
-            {
-                if let Some(defaults_conf_port) =
-                    spark_defaults_conf.get(SPARK_DEFAULTS_MASTER_PORT)
-                {
-                    port = defaults_conf_port;
+        if let Some(labels) = &pod.metadata.labels {
+            if let (Some(role), Some(group)) = (
+                labels.get(APP_COMPONENT_LABEL),
+                labels.get(APP_ROLE_GROUP_LABEL),
+            ) {
+                if role != &SparkRole::Master.to_string() {
+                    continue;
                 }
-                // 2) check spark-env.sh
-                else if let Some(spark_env_sh) = validated_config_for_role_and_group
-                    .get(&PropertyNameKind::File(SPARK_ENV_SH.to_string()))
+
+                let validated_config_for_role_and_group =
+                    config_for_role_and_group(role, group, validated_config)?;
+
+                // TODO: fall back on container ports or default from product config
+                //    The "7077" is a placeholder. This value will always be overwritten
+                //    by the default or recommended value in the product config (if not set).
+                let mut port = "7077";
+                // The order for spark properties:
+                // SparkConf > spark-submit / spark-shell > spark-defaults.conf > spark-env.sh
+                // We only check spark-defaults.conf and spark-env.sh
+                // 1) check spark-defaults.sh
+                if let Some(spark_defaults_conf) = validated_config_for_role_and_group
+                    .get(&PropertyNameKind::File(SPARK_DEFAULTS_CONF.to_string()))
                 {
-                    if let Some(env_port) = spark_env_sh.get(SPARK_ENV_MASTER_PORT) {
-                        port = env_port;
+                    if let Some(defaults_conf_port) =
+                        spark_defaults_conf.get(SPARK_DEFAULTS_MASTER_PORT)
+                    {
+                        port = defaults_conf_port;
+                    }
+                    // 2) check spark-env.sh
+                    else if let Some(spark_env_sh) = validated_config_for_role_and_group
+                        .get(&PropertyNameKind::File(SPARK_ENV_SH.to_string()))
+                    {
+                        if let Some(env_port) = spark_env_sh.get(SPARK_ENV_MASTER_PORT) {
+                            port = env_port;
+                        }
                     }
                 }
-            }
 
-            if let Some(PodSpec {
-                node_name: Some(node),
-                ..
-            }) = &pod.spec
-            {
-                master_urls.push(create_master_url(node, port))
+                if let Some(PodSpec {
+                    node_name: Some(node),
+                    ..
+                }) = &pod.spec
+                {
+                    master_urls.push(create_master_url(node, port))
+                }
             }
         }
     }

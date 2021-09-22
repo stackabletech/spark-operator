@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use k8s_openapi::api::core::v1::{ConfigMap, EnvVar, Pod};
 use kube::api::{ListParams, ResourceExt};
 use kube::Api;
+use kube::CustomResourceExt;
 use product_config::types::PropertyNameKind;
 use product_config::ProductConfigManager;
 use stackable_operator::builder::{
@@ -33,7 +34,7 @@ use stackable_operator::role_utils::{
 };
 use stackable_operator::{configmap, k8s_utils, name_utils};
 use strum::IntoEnumIterator;
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use stackable_spark_common::constants::{
     SPARK_DEFAULTS_CONF, SPARK_ENV_SH, SPARK_METRICS_PROPERTIES,
@@ -566,13 +567,14 @@ impl SparkState {
         );
 
         for pod in &worker_pods {
-            if let (Some(label_hashed_master_urls), Some(role), Some(group)) = (
-                pod.metadata.labels.get(pod_utils::MASTER_URLS_HASH_LABEL),
-                pod.metadata.labels.get(APP_COMPONENT_LABEL),
-                pod.metadata.labels.get(APP_ROLE_GROUP_LABEL),
-            ) {
-                if label_hashed_master_urls != &current_hashed_master_urls {
-                    debug!(
+            if let Some(labels) = &pod.metadata.labels {
+                if let (Some(label_hashed_master_urls), Some(role), Some(group)) = (
+                    labels.get(pod_utils::MASTER_URLS_HASH_LABEL),
+                    labels.get(APP_COMPONENT_LABEL),
+                    labels.get(APP_ROLE_GROUP_LABEL),
+                ) {
+                    if label_hashed_master_urls != &current_hashed_master_urls {
+                        debug!(
                         "Pod [{}] with Role [{}] and Group [{}] has an outdated '{}' [{}] - required is [{}], deleting it",
                         &pod.name(),
                         role,
@@ -581,8 +583,9 @@ impl SparkState {
                         label_hashed_master_urls,
                         current_hashed_master_urls,
                     );
-                    self.context.client.delete(pod).await?;
-                    return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
+                        self.context.client.delete(pod).await?;
+                        return Ok(ReconcileFunctionAction::Requeue(Duration::from_secs(10)));
+                    }
                 }
             }
         }
@@ -735,6 +738,23 @@ impl ControllerStrategy for SparkStrategy {
 ///
 /// This is an async method and the returned future needs to be consumed to make progress.
 pub async fn create_controller(client: Client, product_config_path: &str) -> OperatorResult<()> {
+    // This will wait for (but not create) all CRDs we need.
+    if let Err(error) = stackable_operator::crd::wait_until_crds_present(
+        &client,
+        vec![
+            SparkCluster::crd_name(),
+            Restart::crd_name(),
+            Start::crd_name(),
+            Stop::crd_name(),
+        ],
+        None,
+    )
+    .await
+    {
+        error!("Required CRDs missing, aborting: {:?}", error);
+        return Err(error);
+    };
+
     let spark_api: Api<SparkCluster> = client.get_all_api();
     let pods_api: Api<Pod> = client.get_all_api();
     let config_maps_api: Api<ConfigMap> = client.get_all_api();
