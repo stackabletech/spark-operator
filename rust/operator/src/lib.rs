@@ -174,7 +174,7 @@ impl SparkState {
     }
 
     async fn create_missing_pods(&mut self) -> SparkReconcileResult {
-        trace!("Starting `create_missing_pods`");
+        trace!(target: "create_missing_pods","Starting `create_missing_pods`");
 
         // The iteration happens in two stages here, to accommodate the way our operators think
         // about roles and role groups.
@@ -185,11 +185,11 @@ impl SparkState {
             let role_str = &role.to_string();
             if let Some(nodes_for_role) = self.eligible_nodes.get(role_str) {
                 for (role_group, eligible_nodes) in nodes_for_role {
-                    debug!(
+                    debug!( target: "create_missing_pods",
                         "Identify missing pods for [{}] role and group [{}]",
                         role_str, role_group
                     );
-                    trace!(
+                    trace!( target: "create_missing_pods",
                         "candidate_nodes[{}]: [{:?}]",
                         eligible_nodes.nodes.len(),
                         eligible_nodes
@@ -198,7 +198,7 @@ impl SparkState {
                             .map(|node| node.metadata.name.as_ref().unwrap())
                             .collect::<Vec<_>>()
                     );
-                    trace!(
+                    trace!(target: "create_missing_pods",
                         "existing_pods[{}]: [{:?}]",
                         &self.existing_pods.len(),
                         &self
@@ -207,7 +207,7 @@ impl SparkState {
                             .map(|pod| pod.metadata.name.as_ref().unwrap())
                             .collect::<Vec<_>>()
                     );
-                    trace!(
+                    trace!(target: "create_missing_pods",
                         "labels: [{:?}]",
                         get_role_and_group_labels(role_str, role_group)
                     );
@@ -241,17 +241,14 @@ impl SparkState {
                         &self.eligible_nodes,
                     );
 
-                    trace!("generate_ids: {:?}", pod_ids);
-
+                    let mapped_pods = PodToNodeMapping::try_from_pods(&self.existing_pods)?;
                     let state = sticky_scheduler.schedule(
                         pod_ids.as_slice(),
                         &RoleGroupEligibleNodes::from(&self.eligible_nodes),
-                        &PodToNodeMapping::try_from_pods(&self.existing_pods)?,
+                        &mapped_pods,
                     )?;
 
                     let mapping = state.remaining_mapping().get_filtered(role_str, role_group);
-
-                    trace!("remaining_mapping: {:?}", &mapping);
 
                     if let Some((pod_id, node_id)) = mapping.iter().next() {
                         // now we have a node that needs a pod -> get validated config
