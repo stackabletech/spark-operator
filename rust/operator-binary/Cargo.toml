@@ -9,7 +9,9 @@ repository = "https://github.com/stackabletech/spark-operator"
 version = "0.3.0-nightly"
 
 [dependencies]
-stackable-operator = { git = "https://github.com/stackabletech/operator-rs.git", tag = "fix-pod-ids" }
+#stackable-operator = { git = "https://github.com/stackabletech/operator-rs.git", tag = "0.2.3" }
+# Remove the following line and uncomment the line above before merging:
+stackable-operator = { git = "https://github.com/stackabletech/operator-rs.git", branch = "feature/schedule-pods-without-ids" }
 stackable-spark-crd = { path = "../crd" }
 stackable-spark-operator = { path = "../operator" }
 
@@ -22,7 +24,9 @@ tracing = "0.1"
 
 [build-dependencies]
 built = { version =  "0.5", features = ["chrono", "git2"] }
-stackable-operator = { git = "https://github.com/stackabletech/operator-rs.git", tag = "fix-pod-ids" }
+#stackable-operator = { git = "https://github.com/stackabletech/operator-rs.git", tag = "0.2.3" }
+# Remove the following line and uncomment the line above before merging:
+stackable-operator = { git = "https://github.com/stackabletech/operator-rs.git", branch = "feature/schedule-pods-without-ids" }
 stackable-spark-crd = { path = "../crd" }
 
 [package.metadata.deb]
