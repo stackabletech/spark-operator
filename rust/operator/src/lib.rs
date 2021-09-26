@@ -28,7 +28,7 @@ use stackable_operator::role_utils::{
     find_nodes_that_fit_selectors, get_role_and_group_labels,
     list_eligible_nodes_for_role_and_group, EligibleNodesForRoleAndGroup,
 };
-use stackable_operator::{configmap, name_utils, scheduler};
+use stackable_operator::{configmap, name_utils};
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::pin::Pin;
@@ -47,9 +47,9 @@ use crate::config::validated_product_config;
 use crate::pod_utils::{
     filter_pods_for_type, get_hashed_master_urls, APP_NAME, MANAGED_BY, MASTER_URLS_HASH_LABEL,
 };
+use stackable_operator::identity::{LabeledPodIdentityFactory, PodIdentity, PodToNodeMapping};
 use stackable_operator::scheduler::{
-    K8SUnboundedHistory, PodIdentity, PodToNodeMapping, RoleGroupEligibleNodes, ScheduleStrategy,
-    Scheduler, StickyScheduler,
+    K8SUnboundedHistory, RoleGroupEligibleNodes, ScheduleStrategy, Scheduler, StickyScheduler,
 };
 use stackable_operator::status::init_status;
 use stackable_operator::versioning::{finalize_versioning, init_versioning};
@@ -60,6 +60,7 @@ pub mod pod_utils;
 
 const FINALIZER_NAME: &str = "spark.stackable.tech/cleanup";
 const SHOULD_BE_SCRAPED: &str = "monitoring.stackable.tech/should_be_scraped";
+const ID_LABEL: &str = "spark.stackable.tech/id";
 
 const CONFIG_MAP_TYPE_CONF: &str = "config";
 
@@ -235,17 +236,18 @@ impl SparkState {
                     let mut sticky_scheduler =
                         StickyScheduler::new(&mut history, ScheduleStrategy::GroupAntiAffinity);
 
-                    let pod_ids = scheduler::generate_ids(
+                    let pod_id_factory = LabeledPodIdentityFactory::new(
                         APP_NAME,
                         &self.context.name(),
                         &self.eligible_nodes,
+                        ID_LABEL,
+                        1,
                     );
 
-                    let mapped_pods = PodToNodeMapping::try_from_pods(&self.existing_pods)?;
                     let state = sticky_scheduler.schedule(
-                        pod_ids.as_slice(),
+                        &pod_id_factory,
                         &RoleGroupEligibleNodes::from(&self.eligible_nodes),
-                        &mapped_pods,
+                        &self.existing_pods,
                     )?;
 
                     let mapping = state.remaining_mapping().get_filtered(role_str, role_group);
@@ -474,6 +476,7 @@ impl SparkState {
             pod_id.role(),
             pod_id.group(),
         );
+        recommended_labels.insert(ID_LABEL.to_string(), pod_id.id().to_string());
 
         let master_pods = filter_pods_for_type(&self.existing_pods, &SparkRole::Master);
         let master_urls = &config::get_master_urls(&master_pods, &self.validated_role_config)?;
