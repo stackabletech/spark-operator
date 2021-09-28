@@ -34,11 +34,11 @@ allow = [
 ]
 
 exceptions = [
+    { name = "stackable-opa-crd", allow = ["OSL-3.0"] },
+    { name = "stackable-zookeeper-crd", allow = ["OSL-3.0"] },
     { name = "stackable-spark-crd", allow = ["OSL-3.0"] },
-    { name = "stackable-spark-common", allow = ["OSL-3.0"] },
-    { name = "stackable-spark-operator-binary", allow = ["OSL-3.0"] },
     { name = "stackable-spark-operator", allow = ["OSL-3.0"] },
-    { name = "stackable-spark-test-utils", allow = ["OSL-3.0"] },
+    { name = "stackable-spark-operator-binary", allow = ["OSL-3.0"] },
 ]
 
 [[licenses.clarify]]
@@ -54,6 +54,10 @@ expression = "LicenseRef-webpki"
 license-files = [
     { path = "LICENSE", hash = 0x001c7e6c },
 ]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
 
 [sources.allow-org]
 github = ["stackabletech"]
