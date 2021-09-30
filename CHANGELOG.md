@@ -7,7 +7,9 @@ All notable changes to this project will be documented in this file.
 ### Changed
 - `kube-rs`: `0.59` → `0.60` ([#157]).
 - `k8s-openapi`: `version: 0.12, feature: v1_21` → `version: 0.13, feature: v1_22` ([#157]).
+- Use sticky pod scheduling ([#156])
 
+[#156]: https://github.com/stackabletech/spark-operator/pull/156
 [#157]: https://github.com/stackabletech/spark-operator/pull/157
 
 ### Added
