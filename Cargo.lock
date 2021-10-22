@@ -1162,6 +1162,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "product-config"
+version = "0.2.0-nightly"
+source = "git+https://github.com/stackabletech/product-config.git?branch=main#53c4bac3aa52bf61f5cef4fc47447be67749c3ce"
+dependencies = [
+ "java-properties",
+ "regex",
+ "schemars",
+ "semver",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror",
+ "xml-rs",
+]
+
+[[package]]
 name = "quote"
 version = "1.0.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1532,7 +1548,7 @@ checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
 [[package]]
 name = "stackable-operator"
 version = "0.2.3-nightly"
-source = "git+https://github.com/stackabletech/operator-rs.git?branch=main#2e86c04a89a839446bee48e8df68006af04a14be"
+source = "git+https://github.com/stackabletech/operator-rs.git?branch=main#ce11f3fb4e2cbb1b0a18be5b2c9a3703bd2aaf51"
 dependencies = [
  "async-trait",
  "backoff",
@@ -1546,15 +1562,15 @@ dependencies = [
  "kube",
  "kube-runtime",
  "lazy_static",
- "product-config",
+ "product-config 0.2.0-nightly",
  "rand",
  "regex",
  "schemars",
  "serde",
  "serde_json",
  "serde_yaml",
- "strum",
- "strum_macros 0.21.1",
+ "strum 0.22.0",
+ "strum_macros 0.22.0",
  "thiserror",
  "tokio",
  "tracing",
@@ -1573,7 +1589,7 @@ version = "0.3.0-nightly"
 dependencies = [
  "k8s-openapi",
  "kube",
- "product-config",
+ "product-config 0.1.0",
  "schemars",
  "semver",
  "serde",
@@ -1582,7 +1598,7 @@ dependencies = [
  "stackable-operator",
  "stackable-spark-common",
  "stackable-spark-test-utils",
- "strum",
+ "strum 0.21.0",
  "strum_macros 0.22.0",
  "thiserror",
 ]
@@ -1597,7 +1613,7 @@ dependencies = [
  "json-patch",
  "k8s-openapi",
  "kube",
- "product-config",
+ "product-config 0.1.0",
  "semver",
  "serde",
  "serde_json",
@@ -1605,7 +1621,7 @@ dependencies = [
  "stackable-spark-common",
  "stackable-spark-crd",
  "stackable-spark-test-utils",
- "strum",
+ "strum 0.21.0",
  "strum_macros 0.22.0",
  "thiserror",
  "tracing",
@@ -1660,6 +1676,12 @@ checksum = "aaf86bbcfd1fa9670b7a129f64fc0c9fcbbfe4f1bc4210e9e98fe71ffc12cde2"
 dependencies = [
  "strum_macros 0.21.1",
 ]
+
+[[package]]
+name = "strum"
+version = "0.22.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f7ac893c7d471c8a21f31cfe213ec4f6d9afeed25537c772e08ef3f005f8729e"
 
 [[package]]
 name = "strum_macros"
@@ -2187,6 +2209,12 @@ name = "winapi-x86_64-pc-windows-gnu"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
+
+[[package]]
+name = "xml-rs"
+version = "0.8.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2d7d3948613f75c98fd9328cfdcc45acc4d360655289d0a7d4ec931392200a3"
 
 [[package]]
 name = "yaml-rust"
