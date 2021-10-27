@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
-- Switched to operator-rs tag 0.3.0 ([#179])
+- `operator-rs`: `0.3.0` ([#179])
 - `kube-rs`: `0.59` → `0.60` ([#157]).
 - `k8s-openapi`: `version: 0.12, feature: v1_21` → `version: 0.13, feature: v1_22` ([#157]).
 - Use sticky pod scheduling ([#156])
