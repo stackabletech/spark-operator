@@ -1578,11 +1578,11 @@ dependencies = [
 
 [[package]]
 name = "stackable-spark-common"
-version = "0.3.0-nightly"
+version = "0.3.0"
 
 [[package]]
 name = "stackable-spark-crd"
-version = "0.3.0-nightly"
+version = "0.3.0"
 dependencies = [
  "semver",
  "serde",
@@ -1598,7 +1598,7 @@ dependencies = [
 
 [[package]]
 name = "stackable-spark-operator"
-version = "0.3.0-nightly"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1619,7 +1619,7 @@ dependencies = [
 
 [[package]]
 name = "stackable-spark-operator-binary"
-version = "0.3.0-nightly"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "built",
@@ -1634,7 +1634,7 @@ dependencies = [
 
 [[package]]
 name = "stackable-spark-test-utils"
-version = "0.3.0-nightly"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_yaml",
