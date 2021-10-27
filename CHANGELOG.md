@@ -5,10 +5,15 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- Switched to operator-rs tag 0.3.0 ([#179])
 - `kube-rs`: `0.59` → `0.60` ([#157]).
 - `k8s-openapi`: `version: 0.12, feature: v1_21` → `version: 0.13, feature: v1_22` ([#157]).
 - Use sticky pod scheduling ([#156])
 
+### Fixed
+- Fixed a bug where `wait_until_crds_present` only reacted to the main CRD, not the commands ([#179]).
+
+[#179]: https://github.com/stackabletech/spark-operator/pull/179
 [#156]: https://github.com/stackabletech/spark-operator/pull/156
 [#157]: https://github.com/stackabletech/spark-operator/pull/157
 
