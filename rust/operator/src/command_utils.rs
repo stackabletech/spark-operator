@@ -1,19 +1,18 @@
-use k8s_openapi::api::core::v1::Pod;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
-use kube::Resource;
-use kube::{Api, ResourceExt};
 use serde::de::DeserializeOwned;
 use serde_json::json;
 use stackable_operator::client::Client;
 use stackable_operator::error::OperatorResult;
+use stackable_operator::k8s_openapi::api::core::v1::Pod;
+use stackable_operator::k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
+use stackable_operator::kube::api::PostParams;
+use stackable_operator::kube::{self, Resource};
+use stackable_operator::kube::{Api, ResourceExt};
+use stackable_operator::reconcile::ReconcileFunctionAction;
 use stackable_spark_crd::{
     ClusterExecutionStatus, CurrentCommand, Restart, SparkCluster, Start, Stop,
 };
 use std::collections::HashMap;
 use std::fmt::Debug;
-
-use kube::api::PostParams;
-use stackable_operator::reconcile::ReconcileFunctionAction;
 use std::time::Duration;
 use tracing::info;
 

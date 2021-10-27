@@ -1,7 +1,7 @@
 use crate::cluster::{Data, Load, TestSparkCluster};
-use k8s_openapi::api::core::v1::Pod;
 use serde::de::DeserializeOwned;
 use stackable_operator::builder::{ContainerBuilder, ObjectMetaBuilder, PodBuilder};
+use stackable_operator::k8s_openapi::api::core::v1::Pod;
 use stackable_spark_crd::{SparkCluster, SparkRole};
 use stackable_spark_operator::config::adapt_worker_command;
 use stackable_spark_operator::pod_utils::{
