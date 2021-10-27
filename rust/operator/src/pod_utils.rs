@@ -1,5 +1,5 @@
 //! This module contains all Pod related methods.
-use k8s_openapi::api::core::v1::Pod;
+use stackable_operator::k8s_openapi::api::core::v1::Pod;
 use stackable_operator::labels;
 use stackable_spark_crd::SparkRole;
 use std::collections::hash_map::DefaultHasher;
@@ -53,7 +53,7 @@ pub fn filter_pods_for_type(pods: &[Pod], node_type: &SparkRole) -> Vec<Pod> {
 mod tests {
     use super::*;
     use crate::config::adapt_worker_command;
-    use kube::ResourceExt;
+    use stackable_operator::kube::ResourceExt;
     use stackable_spark_crd::SparkCluster;
 
     #[test]

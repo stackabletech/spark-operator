@@ -2,14 +2,14 @@
 pub mod commands;
 
 pub use commands::{Restart, Start, Stop};
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
-use kube::CustomResource;
-use schemars::JsonSchema;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use stackable_operator::identity::PodToNodeMapping;
+use stackable_operator::k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
+use stackable_operator::kube::CustomResource;
 use stackable_operator::product_config_utils::{ConfigError, Configuration};
 use stackable_operator::role_utils::{CommonConfiguration, Role};
+use stackable_operator::schemars::{self, JsonSchema};
 use stackable_operator::status::{Conditions, Status, Versioned};
 use stackable_operator::versioning::{ProductVersion, Versioning, VersioningState};
 use stackable_spark_common::constants::{
@@ -34,9 +34,12 @@ const SPARK_ENV_SH: &str = "spark-env.sh";
     version = "v1alpha1",
     kind = "SparkCluster",
     shortname = "sc",
-    namespaced
+    status = "SparkClusterStatus",
+    namespaced,
+    kube_core = "stackable_operator::kube::core",
+    k8s_openapi = "stackable_operator::k8s_openapi",
+    schemars = "stackable_operator::schemars"
 )]
-#[kube(status = "SparkClusterStatus")]
 #[serde(rename_all = "camelCase")]
 pub struct SparkClusterSpec {
     pub version: SparkVersion,

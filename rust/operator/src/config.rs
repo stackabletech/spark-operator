@@ -3,16 +3,15 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use k8s_openapi::api::core::v1::{Pod, PodSpec};
-use product_config::types::PropertyNameKind;
 use stackable_operator::error::OperatorResult;
+use stackable_operator::k8s_openapi::api::core::v1::{Pod, PodSpec};
 use stackable_operator::labels::{APP_COMPONENT_LABEL, APP_ROLE_GROUP_LABEL};
+use stackable_operator::product_config::types::PropertyNameKind;
+use stackable_operator::product_config::ProductConfigManager;
 use stackable_operator::product_config_utils::{
     config_for_role_and_group, transform_all_roles_to_config, validate_all_roles_and_groups_config,
     ValidatedRoleConfigByPropertyKind,
 };
-
-use product_config::ProductConfigManager;
 use stackable_spark_common::constants::*;
 use stackable_spark_crd::{SparkCluster, SparkRole};
 
