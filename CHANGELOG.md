@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.3.0] - 2021-10-27
+
+
 ### Changed
 - `operator-rs`: `0.3.0` ([#179])
 - `kube-rs`: `0.59` → `0.60` ([#157]).
