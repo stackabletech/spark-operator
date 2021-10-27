@@ -1,7 +1,8 @@
 use clap::{crate_version, App, AppSettings, SubCommand};
-use stackable_operator::{cli, client};
-use stackable_spark_crd::SparkCluster;
-use stackable_spark_crd::{Restart, Start, Stop};
+use stackable_operator::kube::CustomResourceExt;
+use stackable_operator::{cli, client, error};
+use stackable_spark_crd::{Restart, SparkCluster, Start, Stop};
+use tracing::error;
 
 mod built_info {
     // The file has been placed there by the build script.
@@ -9,7 +10,7 @@ mod built_info {
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<(), error::Error> {
     stackable_operator::logging::initialize_logging("SPARK_OPERATOR_LOG");
 
     // Handle CLI arguments
@@ -54,6 +55,23 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let client = client::create_client(Some("spark.stackable.tech".to_string())).await?;
+
+    // This will wait for (but not create) all CRDs we need.
+    if let Err(error) = stackable_operator::crd::wait_until_crds_present(
+        &client,
+        vec![
+            SparkCluster::crd_name(),
+            Restart::crd_name(),
+            Start::crd_name(),
+            Stop::crd_name(),
+        ],
+        None,
+    )
+    .await
+    {
+        error!("Required CRDs missing, aborting: {:?}", error);
+        return Err(error);
+    };
 
     tokio::try_join!(
         stackable_spark_operator::create_controller(client.clone(), &product_config_path),

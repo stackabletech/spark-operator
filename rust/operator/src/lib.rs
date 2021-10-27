@@ -10,7 +10,6 @@ use stackable_operator::error::OperatorResult;
 use stackable_operator::k8s_openapi::api::core::v1::{ConfigMap, EnvVar, Pod};
 use stackable_operator::kube::api::{ListParams, ResourceExt};
 use stackable_operator::kube::Api;
-use stackable_operator::kube::CustomResourceExt;
 use stackable_operator::labels::{
     build_common_labels_for_all_managed_resources, get_recommended_labels, APP_COMPONENT_LABEL,
     APP_INSTANCE_LABEL, APP_MANAGED_BY_LABEL, APP_NAME_LABEL, APP_ROLE_GROUP_LABEL,
@@ -35,7 +34,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 use strum::IntoEnumIterator;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 use stackable_spark_common::constants::{
     SPARK_DEFAULTS_CONF, SPARK_ENV_SH, SPARK_METRICS_PROPERTIES,
@@ -759,23 +758,6 @@ impl ControllerStrategy for SparkStrategy {
 ///
 /// This is an async method and the returned future needs to be consumed to make progress.
 pub async fn create_controller(client: Client, product_config_path: &str) -> OperatorResult<()> {
-    // This will wait for (but not create) all CRDs we need.
-    if let Err(error) = stackable_operator::crd::wait_until_crds_present(
-        &client,
-        vec![
-            SparkCluster::crd_name(),
-            Restart::crd_name(),
-            Start::crd_name(),
-            Stop::crd_name(),
-        ],
-        None,
-    )
-    .await
-    {
-        error!("Required CRDs missing, aborting: {:?}", error);
-        return Err(error);
-    };
-
     let spark_api: Api<SparkCluster> = client.get_all_api();
     let pods_api: Api<Pod> = client.get_all_api();
     let config_maps_api: Api<ConfigMap> = client.get_all_api();
