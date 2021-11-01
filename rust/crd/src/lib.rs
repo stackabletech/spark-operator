@@ -130,7 +130,7 @@ impl Configuration for MasterConfig {
     fn compute_files(
         &self,
         resource: &Self::Configurable,
-        _role_name: &str,
+        role_name: &str,
         file: &str,
     ) -> Result<BTreeMap<String, Option<String>>, ConfigError> {
         let mut config = BTreeMap::new();
@@ -147,7 +147,9 @@ impl Configuration for MasterConfig {
                     );
                 }
             }
-            SPARK_DEFAULTS_CONF => add_common_spark_defaults(&mut config, &resource.spec),
+            SPARK_DEFAULTS_CONF => {
+                add_common_spark_defaults(role_name, &mut config, &resource.spec)
+            }
             _ => {}
         }
 
@@ -177,7 +179,7 @@ impl Configuration for WorkerConfig {
     fn compute_files(
         &self,
         resource: &Self::Configurable,
-        _role_name: &str,
+        role_name: &str,
         file: &str,
     ) -> Result<BTreeMap<String, Option<String>>, ConfigError> {
         let mut config = BTreeMap::new();
@@ -203,7 +205,9 @@ impl Configuration for WorkerConfig {
                     );
                 }
             }
-            SPARK_DEFAULTS_CONF => add_common_spark_defaults(&mut config, &resource.spec),
+            SPARK_DEFAULTS_CONF => {
+                add_common_spark_defaults(role_name, &mut config, &resource.spec)
+            }
             _ => {}
         }
 
@@ -233,7 +237,7 @@ impl Configuration for HistoryServerConfig {
     fn compute_files(
         &self,
         resource: &Self::Configurable,
-        _role_name: &str,
+        role_name: &str,
         file: &str,
     ) -> Result<BTreeMap<String, Option<String>>, ConfigError> {
         let mut config = BTreeMap::new();
@@ -265,8 +269,8 @@ impl Configuration for HistoryServerConfig {
                         Some(port.to_string()),
                     );
                 }
-                // TODO: do not need to add the other log dir ("spark.eventLog.dir") here
-                add_common_spark_defaults(&mut config, &resource.spec)
+
+                add_common_spark_defaults(role_name, &mut config, &resource.spec)
             }
             _ => {}
         }
@@ -276,6 +280,7 @@ impl Configuration for HistoryServerConfig {
 }
 
 fn add_common_spark_defaults(
+    role: &str,
     config: &mut BTreeMap<String, Option<String>>,
     spec: &SparkClusterSpec,
 ) {
@@ -303,10 +308,17 @@ fn add_common_spark_defaults(
         );
 
         let log_dir = common_config.log_dir.as_deref().unwrap_or(DEFAULT_LOG_DIR);
-        config.insert(
-            SPARK_DEFAULTS_EVENT_LOG_DIR.to_string(),
-            Some(log_dir.to_string()),
-        );
+        if role == SparkRole::HistoryServer.to_string() {
+            config.insert(
+                SPARK_DEFAULTS_HISTORY_FS_LOG_DIRECTORY.to_string(),
+                Some(log_dir.to_string()),
+            );
+        } else {
+            config.insert(
+                SPARK_DEFAULTS_EVENT_LOG_DIR.to_string(),
+                Some(log_dir.to_string()),
+            );
+        }
     }
 }
 
@@ -344,12 +356,8 @@ impl SparkRole {
     /// # Arguments
     ///
     /// * `version` - Current specified cluster version
-    pub fn get_command(&self, version: &SparkVersion) -> String {
-        format!(
-            "{}/sbin/start-{}.sh",
-            version.package_name(),
-            self.to_string()
-        )
+    pub fn get_command(&self) -> String {
+        format!("./sbin/start-{}.sh", self.to_string())
     }
 
     /// Returns a tuple of the required container ports for each role.
@@ -503,17 +511,9 @@ mod tests {
 
     #[test]
     fn test_spark_node_type_get_command() {
-        let mut spark_cluster: SparkCluster = stackable_spark_test_utils::setup_test_cluster();
-        spark_cluster.metadata.uid = Some("12345".to_string());
-        let version = &spark_cluster.spec.version;
-
         assert_eq!(
-            SparkRole::Master.get_command(version),
-            format!(
-                "spark-{}-bin-hadoop2.7/sbin/start-{}.sh",
-                version.to_string(),
-                SparkRole::Master.to_string()
-            )
+            SparkRole::Master.get_command(),
+            format!("./sbin/start-{}.sh", SparkRole::Master.to_string())
         );
     }
 

@@ -2,7 +2,8 @@ mod error;
 
 use async_trait::async_trait;
 use stackable_operator::builder::{
-    ContainerBuilder, ContainerPortBuilder, ObjectMetaBuilder, PodBuilder,
+    ContainerBuilder, ContainerPortBuilder, ObjectMetaBuilder, PodBuilder, VolumeBuilder,
+    VolumeMountBuilder,
 };
 use stackable_operator::client::Client;
 use stackable_operator::controller::{Controller, ControllerStrategy, ReconciliationState};
@@ -37,7 +38,8 @@ use strum::IntoEnumIterator;
 use tracing::{debug, info, trace, warn};
 
 use stackable_spark_common::constants::{
-    SPARK_DEFAULTS_CONF, SPARK_ENV_SH, SPARK_METRICS_PROPERTIES,
+    SPARK_DEFAULTS_CONF, SPARK_DEFAULTS_EVENT_LOG_DIR, SPARK_DEFAULTS_HISTORY_FS_LOG_DIRECTORY,
+    SPARK_ENV_SH, SPARK_METRICS_PROPERTIES,
 };
 use stackable_spark_crd::commands::{Restart, Start, Stop};
 use stackable_spark_crd::{ClusterExecutionStatus, CurrentCommand, SparkCluster, SparkRole};
@@ -414,54 +416,72 @@ impl SparkState {
         let mut env_vars = vec![];
         let mut cli_arguments = vec![];
         let mut container_ports = (None, None);
+        let mut log_dir: Option<&String> = None;
 
-        // extract container ports
-        if let Some(config) =
-            validated_config.get(&PropertyNameKind::File(SPARK_ENV_SH.to_string()))
-        {
-            container_ports = role.container_ports(config);
-        }
+        for (property_name_kind, config) in validated_config {
+            match property_name_kind {
+                PropertyNameKind::Env => {
+                    for (property_name, property_value) in config {
+                        if property_name.is_empty() {
+                            warn!("Received empty property_name for ENV... skipping");
+                            continue;
+                        }
 
-        // extract env variables
-        if let Some(config) = validated_config.get(&PropertyNameKind::Env) {
-            for (property_name, property_value) in config {
-                if property_name.is_empty() {
-                    warn!("Received empty property_name for ENV... skipping");
-                    continue;
+                        env_vars.push(EnvVar {
+                            name: property_name.clone(),
+                            value: Some(property_value.to_string()),
+                            value_from: None,
+                        });
+                    }
                 }
+                PropertyNameKind::File(file_name) if file_name == SPARK_ENV_SH => {
+                    // extract container ports
+                    container_ports = role.container_ports(config);
+                }
+                PropertyNameKind::File(file_name) if file_name == SPARK_DEFAULTS_CONF => {
+                    log_dir = match role {
+                        SparkRole::HistoryServer => {
+                            config.get(SPARK_DEFAULTS_HISTORY_FS_LOG_DIRECTORY)
+                        }
+                        SparkRole::Master | SparkRole::Worker => {
+                            config.get(SPARK_DEFAULTS_EVENT_LOG_DIR)
+                        }
+                    };
+                }
+                PropertyNameKind::Cli => {
+                    // we need to convert to <String, String> to <String, Option<String>> to deal with
+                    // CLI flags etc. We can not currently represent that via operator-rs / product-config.
+                    // This is a preparation for that.
+                    let transformed_config: BTreeMap<String, Option<String>> = config
+                        .iter()
+                        .map(|(k, v)| (k.to_string(), Some(v.to_string())))
+                        .collect();
 
-                env_vars.push(EnvVar {
-                    name: property_name.clone(),
-                    value: Some(property_value.to_string()),
-                    value_from: None,
-                });
+                    for (property_name, property_value) in transformed_config {
+                        if property_name.is_empty() {
+                            warn!("Received empty property_name for CLI... skipping");
+                            continue;
+                        }
+                        // single argument / flag
+                        if property_value.is_none() {
+                            cli_arguments.push(property_name.clone());
+                        } else {
+                            // key value pair (safe unwrap)
+                            cli_arguments.push(format!(
+                                "--{} {}",
+                                property_name,
+                                property_value.unwrap()
+                            ));
+                        }
+                    }
+                }
+                _ => {}
             }
         }
 
-        // extract cli
-        if let Some(config) = validated_config.get(&PropertyNameKind::Cli) {
-            // we need to convert to <String, String> to <String, Option<String>> to deal with
-            // CLI flags etc. We can not currently represent that via operator-rs / product-config.
-            // This is a preparation for that.
-            let transformed_config: BTreeMap<String, Option<String>> = config
-                .iter()
-                .map(|(k, v)| (k.to_string(), Some(v.to_string())))
-                .collect();
+        warn!("Logdir: {:?}", log_dir);
 
-            for (property_name, property_value) in transformed_config {
-                if property_name.is_empty() {
-                    warn!("Received empty property_name for CLI... skipping");
-                    continue;
-                }
-                // single argument / flag
-                if property_value.is_none() {
-                    cli_arguments.push(property_name.clone());
-                } else {
-                    // key value pair (safe unwrap)
-                    cli_arguments.push(format!("--{} {}", property_name, property_value.unwrap()));
-                }
-            }
-        }
+        let mut pod_builder = PodBuilder::new();
 
         let pod_name = name_utils::build_resource_name(
             pod_id.app(),
@@ -480,6 +500,7 @@ impl SparkState {
             pod_id.role(),
             pod_id.group(),
         );
+
         recommended_labels.insert(ID_LABEL.to_string(), pod_id.id().to_string());
 
         let master_pods = filter_pods_for_type(&self.existing_pods, &SparkRole::Master);
@@ -503,14 +524,15 @@ impl SparkState {
         args.append(&mut cli_arguments);
 
         let mut cb = ContainerBuilder::new("spark");
-        cb.image(format!("spark:{}", version.to_string()));
-        cb.command(vec![role.get_command(version)]);
+        cb.image("spark-test:latest".to_string());
+        cb.command(vec![role.get_command()]);
         cb.args(args);
         cb.add_env_vars(env_vars);
 
         if let Some(config_map_data) = config_maps.get(CONFIG_MAP_TYPE_CONF) {
             if let Some(name) = config_map_data.metadata.name.as_ref() {
-                cb.add_configmapvolume(name, "conf".to_string());
+                cb.add_volume_mount(VolumeMountBuilder::new("config", "/stackable/conf").build());
+                pod_builder.add_volume(VolumeBuilder::new("config").with_config_map(name).build());
             } else {
                 return Err(error::Error::MissingConfigMapNameError {
                     cm_type: CONFIG_MAP_TYPE_CONF,
@@ -521,6 +543,16 @@ impl SparkState {
                 cm_type: CONFIG_MAP_TYPE_CONF,
                 pod_name,
             });
+        }
+
+        // mount for log volume
+        if let Some(log_dir) = log_dir {
+            cb.add_volume_mount(VolumeMountBuilder::new("logs", log_dir).build());
+            pod_builder.add_volume(
+                VolumeBuilder::new("logs")
+                    .with_empty_dir(Some(""), None)
+                    .build(),
+            );
         }
 
         let mut annotations = BTreeMap::new();
@@ -553,7 +585,10 @@ impl SparkState {
             );
         }
 
-        let pod = PodBuilder::new()
+        let mut container = cb.build();
+        container.image_pull_policy = Some("IfNotPresent".to_string());
+
+        let pod = pod_builder
             .metadata(
                 ObjectMetaBuilder::new()
                     .generate_name(pod_name)
@@ -564,7 +599,7 @@ impl SparkState {
                     .build()?,
             )
             .add_stackable_agent_tolerations()
-            .add_container(cb.build())
+            .add_container(container)
             .node_name(node_name)
             .build()?;
 
