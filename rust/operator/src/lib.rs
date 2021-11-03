@@ -1,10 +1,7 @@
 mod error;
 
 use async_trait::async_trait;
-use stackable_operator::builder::{
-    ContainerBuilder, ContainerPortBuilder, ObjectMetaBuilder, PodBuilder, VolumeBuilder,
-    VolumeMountBuilder,
-};
+use stackable_operator::builder::{ContainerBuilder, ObjectMetaBuilder, PodBuilder, VolumeBuilder};
 use stackable_operator::client::Client;
 use stackable_operator::controller::{Controller, ControllerStrategy, ReconciliationState};
 use stackable_operator::error::OperatorResult;
@@ -479,8 +476,6 @@ impl SparkState {
             }
         }
 
-        warn!("Logdir: {:?}", log_dir);
-
         let mut pod_builder = PodBuilder::new();
 
         let pod_name = name_utils::build_resource_name(
@@ -524,14 +519,17 @@ impl SparkState {
         args.append(&mut cli_arguments);
 
         let mut cb = ContainerBuilder::new("spark");
-        cb.image("spark-test:latest".to_string());
+        cb.image(format!(
+            "spark:{}",
+            self.context.resource.spec.version.to_string()
+        ));
         cb.command(vec![role.get_command()]);
         cb.args(args);
         cb.add_env_vars(env_vars);
 
         if let Some(config_map_data) = config_maps.get(CONFIG_MAP_TYPE_CONF) {
             if let Some(name) = config_map_data.metadata.name.as_ref() {
-                cb.add_volume_mount(VolumeMountBuilder::new("config", "/stackable/conf").build());
+                cb.add_volume_mount("config", "/stackable/conf");
                 pod_builder.add_volume(VolumeBuilder::new("config").with_config_map(name).build());
             } else {
                 return Err(error::Error::MissingConfigMapNameError {
@@ -547,7 +545,7 @@ impl SparkState {
 
         // mount for log volume
         if let Some(log_dir) = log_dir {
-            cb.add_volume_mount(VolumeMountBuilder::new("logs", log_dir).build());
+            cb.add_volume_mount("logs", log_dir);
             pod_builder.add_volume(
                 VolumeBuilder::new("logs")
                     .with_empty_dir(Some(""), None)
@@ -562,31 +560,18 @@ impl SparkState {
             (http_port, self.context.resource.spec.monitoring_enabled())
         {
             annotations.insert(SHOULD_BE_SCRAPED.to_string(), "true".to_string());
-            cb.add_container_port(
-                ContainerPortBuilder::new(metrics_port.parse()?)
-                    .name("metrics")
-                    .build(),
-            );
+            cb.add_container_port("metrics", metrics_port.parse()?);
         }
         // add protocol port if available
         if let Some(protocol_port) = protocol_port {
-            cb.add_container_port(
-                ContainerPortBuilder::new(protocol_port.parse()?)
-                    .name("protocol")
-                    .build(),
-            );
+            cb.add_container_port("protocol", protocol_port.parse()?);
         }
         // add web ui port if available
         if let Some(web_ui_port) = http_port {
-            cb.add_container_port(
-                ContainerPortBuilder::new(web_ui_port.parse()?)
-                    .name("http")
-                    .build(),
-            );
+            cb.add_container_port("http", web_ui_port.parse()?);
         }
 
-        let mut container = cb.build();
-        container.image_pull_policy = Some("IfNotPresent".to_string());
+        cb.image_pull_policy("IfNotPresent");
 
         let pod = pod_builder
             .metadata(
@@ -599,8 +584,9 @@ impl SparkState {
                     .build()?,
             )
             .add_stackable_agent_tolerations()
-            .add_container(container)
+            .add_container(cb.build())
             .node_name(node_name)
+            .host_network(true)
             .build()?;
 
         trace!("create_pod: {:?}", pod_id);
