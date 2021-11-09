@@ -18,14 +18,14 @@ Because of `enableMonitoring: true`, all pods will be annotated for metric scrap
     spec:
       version: "3.0.1"
       config:
-        logDir: "file:///tmp"
+        logDir: /stackable/data/log
         enableMonitoring: true
       masters:
         roleGroups:
           default:
             selector:
               matchLabels:
-                kubernetes.io/arch: stackable-linux
+                kubernetes.io/os: linux
             replicas: 1
             config:
               masterPort: 7078
@@ -35,7 +35,7 @@ Because of `enableMonitoring: true`, all pods will be annotated for metric scrap
           2core2g:
             selector:
               matchLabels:
-                kubernetes.io/arch: stackable-linux
+                kubernetes.io/os: linux
             config:
               cores: 2
               memory: "2g"
@@ -46,7 +46,7 @@ Because of `enableMonitoring: true`, all pods will be annotated for metric scrap
           default:
             selector:
               matchLabels:
-                kubernetes.io/arch: stackable-linux
+                kubernetes.io/os: linux
             replicas: 1
             config:
               historyWebUiPort: 18081
@@ -83,7 +83,7 @@ There are three levels of configuration:
 
 |logDir
 |string
-|The log folder for spark applications (must created by user)
+|The log folder for spark applications
 |spark.history.fs.logDirectory=logDir, spark.eventLog.enabled=true, spark.eventLog.dir=logDir;
 
 |secret

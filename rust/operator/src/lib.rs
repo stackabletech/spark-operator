@@ -520,7 +520,8 @@ impl SparkState {
 
         let mut cb = ContainerBuilder::new("spark");
         cb.image(format!(
-            "spark:{}",
+            // TODO: What to do about hadoop and stackable version?
+            "docker.stackable.tech/stackable/spark:{}-2.7-0.1",
             self.context.resource.spec.version.to_string()
         ));
         cb.command(vec![role.get_command()]);
@@ -566,12 +567,14 @@ impl SparkState {
         if let Some(protocol_port) = protocol_port {
             cb.add_container_port("protocol", protocol_port.parse()?);
         }
+        // TODO: http port and metrics port are the same (as in opa)
+        //   we need to adapt the prometheus scraping rules to go via annotation port
+        //   and not container ports
+        //
         // add web ui port if available
-        if let Some(web_ui_port) = http_port {
-            cb.add_container_port("http", web_ui_port.parse()?);
-        }
-
-        cb.image_pull_policy("IfNotPresent");
+        //if let Some(web_ui_port) = http_port {
+        //    cb.add_container_port("http", web_ui_port.parse()?);
+        //}
 
         let pod = pod_builder
             .metadata(
@@ -583,7 +586,6 @@ impl SparkState {
                     .ownerreference_from_resource(&self.context.resource, Some(true), Some(true))?
                     .build()?,
             )
-            .add_stackable_agent_tolerations()
             .add_container(cb.build())
             .node_name(node_name)
             .host_network(true)

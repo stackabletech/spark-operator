@@ -5,7 +5,7 @@ metadata:
 spec:
   version: "3.0.1"
   config:
-    logDir: "/stackable/data/log"
+    logDir: /stackable/data/log
     enableMonitoring: true
   masters:
     roleGroups:
