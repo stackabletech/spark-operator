@@ -56,6 +56,10 @@ mod command_utils;
 pub mod config;
 pub mod pod_utils;
 
+/// The docker image we default to. This needs to be adapted if the operator does not work
+/// with images 0.0.1, 0.1.0 etc. anymore and requires e.g. a new major version like 1(.0.0).
+const DEFAULT_IMAGE_VERSION: &str = "0";
+
 const FINALIZER_NAME: &str = "spark.stackable.tech/cleanup";
 const SHOULD_BE_SCRAPED: &str = "monitoring.stackable.tech/should_be_scraped";
 const ID_LABEL: &str = "spark.stackable.tech/id";
@@ -520,9 +524,9 @@ impl SparkState {
 
         let mut cb = ContainerBuilder::new("spark");
         cb.image(format!(
-            // TODO: What to do about hadoop and stackable version?
-            "docker.stackable.tech/stackable/spark:{}-2.7-0.1",
-            self.context.resource.spec.version.to_string()
+            "docker.stackable.tech/stackable/spark:{}-hadoop2.7-stackable{}",
+            self.context.resource.spec.version.to_string(),
+            DEFAULT_IMAGE_VERSION
         ));
         cb.command(vec![role.get_command()]);
         cb.args(args);
