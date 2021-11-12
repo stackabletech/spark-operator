@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use stackable_operator::error::OperatorResult;
-use stackable_operator::k8s_openapi::api::core::v1::{Pod, PodSpec};
+use stackable_operator::k8s_openapi::api::core::v1::{Pod, PodStatus};
 use stackable_operator::labels::{APP_COMPONENT_LABEL, APP_ROLE_GROUP_LABEL};
 use stackable_operator::product_config::types::PropertyNameKind;
 use stackable_operator::product_config::ProductConfigManager;
@@ -119,12 +119,11 @@ pub fn get_master_urls(
                     }
                 }
 
-                if let Some(PodSpec {
-                    node_name: Some(node),
-                    ..
-                }) = &pod.spec
+                if let Some(PodStatus {
+                    pod_ip: Some(ip), ..
+                }) = &pod.status
                 {
-                    master_urls.push(create_master_url(node, port))
+                    master_urls.push(create_master_url(ip, port))
                 }
             }
         }
@@ -209,78 +208,4 @@ pub fn validated_product_config(
 ///
 fn create_master_url(node_name: &str, port: &str) -> String {
     format!("{}:{}", node_name, port)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use stackable_spark_crd::SparkCluster;
-    use stackable_spark_test_utils::cluster::{Data, TestSparkCluster};
-
-    #[test]
-    fn test_adapt_worker_command() {
-        let master_urls = stackable_spark_test_utils::create_master_urls();
-
-        let command = adapt_worker_command(&SparkRole::Worker, master_urls.as_slice()).unwrap();
-
-        for url in master_urls {
-            assert!(command.contains(&url));
-        }
-    }
-
-    #[test]
-    fn test_create_config_map_name() {
-        let pod_name = "my_pod";
-
-        assert_eq!(
-            create_config_map_name(pod_name),
-            format!("{}-config", pod_name)
-        );
-    }
-
-    #[test]
-    fn test_get_master_urls() {
-        let spark_cluster: SparkCluster = stackable_spark_test_utils::setup_test_cluster();
-        let master_pods = stackable_spark_test_utils::create_master_pods();
-        let product_config =
-            ProductConfigManager::from_yaml_file("../../deploy/config-spec/properties.yaml")
-                .unwrap();
-
-        let validated_config = validated_product_config(&spark_cluster, &product_config).unwrap();
-
-        let master_urls = get_master_urls(master_pods.as_slice(), &validated_config).unwrap();
-
-        assert!(!master_urls.is_empty());
-
-        // For master_1 we expect the config port
-        assert!(master_urls.contains(&create_master_url(
-            TestSparkCluster::MASTER_1_NODE_NAME,
-            &TestSparkCluster::MASTER_1_OVERRIDE_PORT.to_string(),
-        )));
-        // For master_2 we expect the env port
-        assert!(master_urls.contains(&create_master_url(
-            TestSparkCluster::MASTER_2_NODE_NAME,
-            &TestSparkCluster::MASTER_2_PORT.to_string()
-        )));
-        // For master_3 we expect the default port
-        assert!(master_urls.contains(&create_master_url(
-            TestSparkCluster::MASTER_3_NODE_NAME,
-            &stackable_spark_test_utils::MASTER_DEFAULT_PORT.to_string()
-        )));
-    }
-
-    #[test]
-    fn test_create_master_url() {
-        assert_eq!(
-            create_master_url(
-                TestSparkCluster::MASTER_1_NODE_NAME,
-                &TestSparkCluster::MASTER_1_PORT.to_string()
-            ),
-            format!(
-                "{}:{}",
-                TestSparkCluster::MASTER_1_NODE_NAME,
-                &TestSparkCluster::MASTER_1_PORT.to_string()
-            )
-        );
-    }
 }

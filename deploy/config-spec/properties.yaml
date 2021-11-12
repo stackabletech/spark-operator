@@ -231,7 +231,7 @@ properties:
         unit: *unitDirectory
       defaultValues:
         - fromVersion: "1.1.0"
-          value: "file:///tmp/spark-events"
+          value: "/tmp/spark-events"
       roles:
         - name: "history-server"
           required: true
@@ -358,7 +358,7 @@ properties:
         type: "string"
       recommendedValues:
         - fromVersion: "1.1.1"
-          value: "{{configroot}}/conf"
+          value: "/stackable/conf"
       roles:
         - name: "master"
           required: true
