@@ -588,7 +588,7 @@ impl SparkState {
                     .with_labels(recommended_labels)
                     .with_annotations(annotations)
                     .ownerreference_from_resource(&self.context.resource, Some(true), Some(true))?
-                    .build()?,
+                    .build(),
             )
             .add_container(cb.build())
             .node_name(node_name)

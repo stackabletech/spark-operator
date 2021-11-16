@@ -3,3 +3,6 @@
 members = [
     "rust/crd", "rust/operator-binary", "rust/operator", "rust/common"
 ]
+
+[patch."git+https://github.com/stackabletech/operator-rs.git"]
+stackable-operator = { git = "https://github.com/stackabletech//operator-rs.git", branch = "feature/unbox-role-config" }

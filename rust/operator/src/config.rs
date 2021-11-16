@@ -157,7 +157,7 @@ pub fn validated_product_config(
                 PropertyNameKind::File(SPARK_METRICS_PROPERTIES.to_string()),
                 PropertyNameKind::Env,
             ],
-            resource.spec.masters.clone().into(),
+            resource.spec.masters.clone().erase(),
         ),
     );
 
@@ -170,7 +170,7 @@ pub fn validated_product_config(
                 PropertyNameKind::File(SPARK_METRICS_PROPERTIES.to_string()),
                 PropertyNameKind::Env,
             ],
-            resource.spec.workers.clone().into(),
+            resource.spec.workers.clone().erase(),
         ),
     );
 
@@ -184,7 +184,7 @@ pub fn validated_product_config(
                     PropertyNameKind::File(SPARK_METRICS_PROPERTIES.to_string()),
                     PropertyNameKind::Env,
                 ],
-                history_servers.clone().into(),
+                history_servers.clone().erase(),
             ),
         );
     }
