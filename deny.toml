@@ -34,8 +34,6 @@ allow = [
 ]
 
 exceptions = [
-    { name = "stackable-opa-crd", allow = ["OSL-3.0"] },
-    { name = "stackable-zookeeper-crd", allow = ["OSL-3.0"] },
     { name = "stackable-spark-crd", allow = ["OSL-3.0"] },
     { name = "stackable-spark-operator", allow = ["OSL-3.0"] },
     { name = "stackable-spark-operator-binary", allow = ["OSL-3.0"] },
