@@ -10,7 +10,7 @@ TAG    := $(shell git rev-parse --short HEAD)
 VERSION := $(shell cargo metadata --format-version 1 | jq '.packages[] | select(.name=="stackable-spark-operator") | .version')
 
 docker:
-	docker build --force-rm -t "docker.stackable.tech/stackable/spark-operator:${VERSION}" -t "docker.stackable.tech/stackable/spark-operator:latest" -f docker/Dockerfile .
+	docker build --force-rm -t "docker.stackable.tech/stackable/spark-operator:${VERSION}" -f docker/Dockerfile .
 	echo "${NEXUS_PASSWORD}" | docker login --username github --password-stdin docker.stackable.tech
 	docker push --all-tags docker.stackable.tech/stackable/spark-operator
 
