@@ -382,4 +382,4 @@ metadata:
   labels:
     app.kubernetes.io/name: spark-operator
     app.kubernetes.io/instance: spark-operator
-    app.kubernetes.io/version: "0.4.0-nightly"
+    app.kubernetes.io/version: "0.5.0-nightly"
