@@ -1,17 +1,13 @@
 //! This module provides all required CRD definitions and additional helper methods.
 pub mod commands;
 
-pub use commands::{Restart, Start, Stop};
-use semver::Version;
 use serde::{Deserialize, Serialize};
-use stackable_operator::identity::PodToNodeMapping;
-use stackable_operator::k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
-use stackable_operator::kube::CustomResource;
-use stackable_operator::product_config_utils::{ConfigError, Configuration};
-use stackable_operator::role_utils::{CommonConfiguration, Role};
-use stackable_operator::schemars::{self, JsonSchema};
-use stackable_operator::status::{Conditions, Status, Versioned};
-use stackable_operator::versioning::{ProductVersion, Versioning, VersioningState};
+use stackable_operator::{
+    kube::{runtime::reflector::ObjectRef, CustomResource},
+    product_config_utils::{ConfigError, Configuration},
+    role_utils::{CommonConfiguration, Role},
+    schemars::{self, JsonSchema},
+};
 use stackable_spark_common::constants::{
     SPARK_DEFAULTS_AUTHENTICATE, SPARK_DEFAULTS_AUTHENTICATE_SECRET, SPARK_DEFAULTS_EVENT_LOG_DIR,
     SPARK_DEFAULTS_HISTORY_FS_LOG_DIRECTORY, SPARK_DEFAULTS_HISTORY_STORE_PATH,
@@ -19,7 +15,6 @@ use stackable_spark_common::constants::{
     SPARK_ENV_MASTER_WEBUI_PORT, SPARK_ENV_WORKER_CORES, SPARK_ENV_WORKER_MEMORY,
     SPARK_ENV_WORKER_PORT, SPARK_ENV_WORKER_WEBUI_PORT,
 };
-use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::hash::Hash;
 use strum_macros::EnumIter;
@@ -42,21 +37,12 @@ const SPARK_ENV_SH: &str = "spark-env.sh";
 )]
 #[serde(rename_all = "camelCase")]
 pub struct SparkClusterSpec {
-    pub version: SparkVersion,
+    pub version: Option<String>,
     pub masters: Role<MasterConfig>,
     pub workers: Role<WorkerConfig>,
     pub history_servers: Option<Role<HistoryServerConfig>>,
     #[serde(flatten)]
     pub config: Option<CommonConfiguration<CommonConfig>>,
-}
-
-impl Status<SparkClusterStatus> for SparkCluster {
-    fn status(&self) -> &Option<SparkClusterStatus> {
-        &self.status
-    }
-    fn status_mut(&mut self) -> &mut Option<SparkClusterStatus> {
-        &mut self.status
-    }
 }
 
 impl SparkClusterSpec {
@@ -74,6 +60,13 @@ impl SparkClusterSpec {
         }
         false
     }
+}
+#[derive(Clone, Default, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SparkClusterStatus {
+    /// An opaque value that changes every time a discovery detail does
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discovery_hash: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
@@ -388,148 +381,4 @@ impl SparkRole {
 pub struct ConfigOption {
     pub name: String,
     pub value: String,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, JsonSchema, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SparkClusterStatus {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub version: Option<ProductVersion<SparkVersion>>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub conditions: Vec<Condition>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub current_command: Option<CurrentCommand>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cluster_execution_status: Option<ClusterExecutionStatus>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub history: Option<PodToNodeMapping>,
-}
-
-impl Versioned<SparkVersion> for SparkClusterStatus {
-    fn version(&self) -> &Option<ProductVersion<SparkVersion>> {
-        &self.version
-    }
-    fn version_mut(&mut self) -> &mut Option<ProductVersion<SparkVersion>> {
-        &mut self.version
-    }
-}
-
-impl Conditions for SparkClusterStatus {
-    fn conditions(&self) -> &[Condition] {
-        self.conditions.as_slice()
-    }
-    fn conditions_mut(&mut self) -> &mut Vec<Condition> {
-        &mut self.conditions
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
-pub enum ClusterExecutionStatus {
-    Stopped,
-    Running,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, JsonSchema, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CurrentCommand {
-    pub command_ref: String,
-    pub command_type: String,
-    pub started_at: String,
-}
-
-#[allow(non_camel_case_types)]
-#[derive(
-    Clone,
-    Debug,
-    Deserialize,
-    Eq,
-    JsonSchema,
-    PartialEq,
-    Serialize,
-    strum_macros::Display,
-    strum_macros::EnumString,
-)]
-pub enum SparkVersion {
-    #[serde(rename = "2.4.7")]
-    #[strum(serialize = "2.4.7")]
-    v2_4_7,
-
-    #[serde(rename = "3.0.1")]
-    #[strum(serialize = "3.0.1")]
-    v3_0_1,
-
-    #[serde(rename = "3.0.2")]
-    #[strum(serialize = "3.0.2")]
-    v3_0_2,
-
-    #[serde(rename = "3.1.1")]
-    #[strum(serialize = "3.1.1")]
-    v3_1_1,
-}
-
-impl SparkVersion {
-    pub fn package_name(&self) -> String {
-        format!("spark-{}-bin-hadoop2.7", self.to_string())
-    }
-}
-
-impl Versioning for SparkVersion {
-    fn versioning_state(&self, other: &Self) -> VersioningState {
-        let from_version = match Version::parse(&self.to_string()) {
-            Ok(v) => v,
-            Err(e) => {
-                return VersioningState::Invalid(format!(
-                    "Could not parse [{}] to SemVer: {}",
-                    self.to_string(),
-                    e.to_string()
-                ))
-            }
-        };
-
-        let to_version = match Version::parse(&other.to_string()) {
-            Ok(v) => v,
-            Err(e) => {
-                return VersioningState::Invalid(format!(
-                    "Could not parse [{}] to SemVer: {}",
-                    other.to_string(),
-                    e.to_string()
-                ))
-            }
-        };
-
-        match to_version.cmp(&from_version) {
-            Ordering::Greater => VersioningState::ValidUpgrade,
-            Ordering::Less => VersioningState::ValidDowngrade,
-            Ordering::Equal => VersioningState::NoOp,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_spark_node_type_get_command() {
-        assert_eq!(
-            SparkRole::Master.get_command(),
-            format!("./sbin/start-{}.sh", SparkRole::Master.to_string())
-        );
-    }
-
-    #[test]
-    fn test_spark_version_versioning() {
-        assert_eq!(
-            SparkVersion::v2_4_7.versioning_state(&SparkVersion::v3_1_1),
-            VersioningState::ValidUpgrade
-        );
-        assert_eq!(
-            SparkVersion::v3_1_1.versioning_state(&SparkVersion::v2_4_7),
-            VersioningState::ValidDowngrade
-        );
-        assert_eq!(
-            SparkVersion::v2_4_7.versioning_state(&SparkVersion::v2_4_7),
-            VersioningState::NoOp
-        );
-    }
 }
