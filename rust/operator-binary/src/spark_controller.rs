@@ -1,17 +1,7 @@
 //! Ensures that `Pod`s are configured and running for each [`SparkCluster`]
 
 use crate::error::Error;
-use crate::error::Error::{
-    ApplyDiscoveryConfig, ApplyRoleGroupConfig, ApplyRoleGroupService, ApplyRoleGroupStatefulSet,
-    ApplyRoleService, ApplyStatus, BuildDiscoveryConfig, BuildRoleGroupConfig,
-    GlobalServiceNameNotFound, InvalidProductConfig, NoServerRole, ObjectHasNoVersion,
-    ObjectMissingMetadataForOwnerRef, SerializeZooCfg,
-};
-use crate::util::{apply_owned, apply_status};
-use crate::{
-    discovery::{self, build_discovery_configmaps},
-    util,
-};
+use crate::util::{apply_owned, apply_status, version};
 use fnv::FnvHasher;
 use snafu::{OptionExt, ResultExt, Snafu};
 use stackable_operator::{
@@ -68,7 +58,7 @@ pub async fn reconcile(sc: SparkCluster, ctx: Context<Ctx>) -> Result<Reconciler
         .spec
         .version
         .as_deref()
-        .with_context(|| ObjectHasNoVersion {
+        .ok_or(Error::ObjectHasNoVersion {
             obj_ref: sc_ref.clone(),
         })?;
     let validated_config = validate_all_roles_and_groups_config(
@@ -76,13 +66,13 @@ pub async fn reconcile(sc: SparkCluster, ctx: Context<Ctx>) -> Result<Reconciler
         &transform_all_roles_to_config(
             &sc,
             [(
-                SparkRole::Server.to_string(),
+                SparkRole::Master.to_string(),
                 (
                     vec![
                         PropertyNameKind::Env,
                         PropertyNameKind::File(PROPERTIES_FILE.to_string()),
                     ],
-                    sc.spec.servers.clone().with_context(|| NoServerRole {
+                    sc.spec.masters.clone().ok_or(Error::NoServerRole {
                         obj_ref: sc_ref.clone(),
                     })?,
                 ),
@@ -93,15 +83,21 @@ pub async fn reconcile(sc: SparkCluster, ctx: Context<Ctx>) -> Result<Reconciler
         false,
         false,
     )
-    .with_context(|| InvalidProductConfig { sc: sc_ref.clone() })?;
+    .map_err(|e| Error::InvalidProductConfig {
+        source: e,
+        sc: sc_ref.clone(),
+    })?;
     let role_server_config = validated_config
-        .get(&SparkRole::Server.to_string())
+        .get(&SparkRole::Master.to_string())
         .map(Cow::Borrowed)
         .unwrap_or_default();
 
     let server_role_service = apply_owned(&kube, FIELD_MANAGER, &build_server_role_service(&sc)?)
         .await
-        .with_context(|| ApplyRoleService { sc: sc_ref.clone() })?;
+        .map_err(|e| Error::ApplyRoleService {
+            source: e,
+            sc: sc_ref.clone(),
+        })?;
     for (rolegroup_name, rolegroup_config) in role_server_config.iter() {
         let rolegroup = sc.server_rolegroup_ref(rolegroup_name);
 
@@ -111,7 +107,8 @@ pub async fn reconcile(sc: SparkCluster, ctx: Context<Ctx>) -> Result<Reconciler
             &build_server_rolegroup_service(&rolegroup, &sc)?,
         )
         .await
-        .with_context(|| ApplyRoleGroupService {
+        .map_err(|e| Error::ApplyRoleGroupService {
+            source: e,
             rolegroup: rolegroup.clone(),
         })?;
         apply_owned(
@@ -120,7 +117,8 @@ pub async fn reconcile(sc: SparkCluster, ctx: Context<Ctx>) -> Result<Reconciler
             &build_server_rolegroup_config_map(&rolegroup, &sc, rolegroup_config)?,
         )
         .await
-        .with_context(|| ApplyRoleGroupConfig {
+        .map_err(|e| Error::ApplyRoleGroupConfig {
+            source: e,
             rolegroup: rolegroup.clone(),
         })?;
         apply_owned(
@@ -129,30 +127,34 @@ pub async fn reconcile(sc: SparkCluster, ctx: Context<Ctx>) -> Result<Reconciler
             &build_server_rolegroup_statefulset(&rolegroup, &sc, rolegroup_config)?,
         )
         .await
-        .with_context(|| ApplyRoleGroupStatefulSet {
+        .map_err(|e| Error::ApplyRoleGroupStatefulSet {
+            source: e,
             rolegroup: rolegroup.clone(),
         })?;
     }
 
+    // TODO: razvan
     // std's SipHasher is deprecated, and DefaultHasher is unstable across Rust releases.
     // We don't /need/ stability, but it's still nice to avoid spurious changes where possible.
-    let mut discovery_hash = FnvHasher::with_key(0);
-    for discovery_cm in build_discovery_configmaps(&kube, &sc, &sc, &server_role_service, None)
-        .await
-        .with_context(|| BuildDiscoveryConfig { sc: sc_ref.clone() })?
-    {
-        let discovery_cm = apply_owned(&kube, FIELD_MANAGER, &discovery_cm)
-            .await
-            .with_context(|| ApplyDiscoveryConfig { sc: sc_ref.clone() })?;
-        if let Some(generation) = discovery_cm.metadata.resource_version {
-            discovery_hash.write(generation.as_bytes())
-        }
-    }
+    // let mut discovery_hash = FnvHasher::with_key(0);
+    // for discovery_cm in build_discovery_configmaps(&kube, &sc, &sc, &server_role_service, None)
+    //     .await
+    //     .with_context(|| BuildDiscoveryConfig { sc: sc_ref.clone() })?
+    // {
+    //     let discovery_cm = apply_owned(&kube, FIELD_MANAGER, &discovery_cm)
+    //         .await
+    //         .with_context(|| ApplyDiscoveryConfig { sc: sc_ref.clone() })?;
+    //     if let Some(generation) = discovery_cm.metadata.resource_version {
+    //         discovery_hash.write(generation.as_bytes())
+    //     }
+    // }
 
     let status = SparkClusterStatus {
         // Serialize as a string to discourage users from trying to parse the value,
         // and to keep things flexible if we end up changing the hasher at some point.
-        discovery_hash: Some(discovery_hash.finish().to_string()),
+        // TODO: razvan
+        // discovery_hash: Some(discovery_hash.finish().to_string()),
+        discovery_hash: Some(String::from("TODO")),
     };
     apply_status(&kube, FIELD_MANAGER, &{
         let mut sc_with_status = SparkCluster::new(&sc_ref.name, SparkClusterSpec::default());
@@ -161,7 +163,10 @@ pub async fn reconcile(sc: SparkCluster, ctx: Context<Ctx>) -> Result<Reconciler
         sc_with_status
     })
     .await
-    .context(ApplyStatus { sc: sc_ref.clone() })?;
+    .map_err(|e| Error::ApplyStatus {
+        source: e,
+        sc: sc_ref.clone(),
+    })?;
 
     Ok(ReconcilerAction {
         requeue_after: None,
@@ -174,21 +179,21 @@ pub async fn reconcile(sc: SparkCluster, ctx: Context<Ctx>) -> Result<Reconciler
 /// Note that you should generally *not* hard-code clients to use these services; instead, create a [`ZookeeperZnode`](`stackable_zookeeper_crd::ZookeeperZnode`)
 /// and use the connection string that it gives you.
 pub fn build_server_role_service(sc: &SparkCluster) -> Result<Service, Error> {
-    let role_name = SparkRole::Server.to_string();
-    let role_svc_name =
-        sc.server_role_service_name()
-            .with_context(|| GlobalServiceNameNotFound {
-                obj_ref: ObjectRef::from_obj(sc),
-            })?;
+    let role_name = SparkRole::Master.to_string();
+    let role_svc_name = sc
+        .server_role_service_name()
+        .ok_or(Error::GlobalServiceNameNotFound {
+            obj_ref: ObjectRef::from_obj(sc),
+        })?;
     Ok(Service {
         metadata: ObjectMetaBuilder::new()
             .name_and_namespace(sc)
             .name(&role_svc_name)
             .ownerreference_from_resource(sc, None, Some(true))
-            .with_context(|| ObjectMissingMetadataForOwnerRef {
+            .map_err(|e| Error::ObjectMissingMetadataForOwnerRef {
                 sc: ObjectRef::from_obj(sc),
             })?
-            .with_recommended_labels(sc, APP_NAME, util::version(sc)?, &role_name, "global")
+            .with_recommended_labels(sc, APP_NAME, version(sc)?, &role_name, "global")
             .build(),
         spec: Some(ServiceSpec {
             ports: Some(vec![ServicePort {
@@ -211,50 +216,53 @@ fn build_server_rolegroup_config_map(
     sc: &SparkCluster,
     server_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
 ) -> Result<ConfigMap, Error> {
-    let mut zoo_cfg = server_config
-        .get(&PropertyNameKind::File(PROPERTIES_FILE.to_string()))
-        .cloned()
-        .unwrap_or_default();
-    zoo_cfg.extend(sc.pods().into_iter().flatten().map(|pod| {
-        (
-            format!("server.{}", pod.zookeeper_myid),
-            format!("{}:2888:3888;{}", pod.fqdn(), APP_PORT),
-        )
-    }));
-    let zoo_cfg = zoo_cfg
-        .into_iter()
-        .map(|(k, v)| (k, Some(v)))
-        .collect::<Vec<_>>();
-    ConfigMapBuilder::new()
-        .metadata(
-            ObjectMetaBuilder::new()
-                .name_and_namespace(sc)
-                .name(rolegroup.object_name())
-                .ownerreference_from_resource(sc, None, Some(true))
-                .with_context(|| ObjectMissingMetadataForOwnerRef {
-                    sc: ObjectRef::from_obj(sc),
-                })?
-                .with_recommended_labels(
-                    sc,
-                    APP_NAME,
-                    util::version(sc)?,
-                    &rolegroup.role,
-                    &rolegroup.role_group,
-                )
-                .build(),
-        )
-        .add_data(
-            "zoo.cfg",
-            to_java_properties_string(zoo_cfg.iter().map(|(k, v)| (k, v))).with_context(|| {
-                SerializeZooCfg {
-                    rolegroup: rolegroup.clone(),
-                }
-            })?,
-        )
-        .build()
-        .with_context(|| BuildRoleGroupConfig {
-            rolegroup: rolegroup.clone(),
-        })
+    unimplemented!();
+    // TODO:
+    // let mut zoo_cfg = server_config
+    //     .get(&PropertyNameKind::File(PROPERTIES_FILE.to_string()))
+    //     .cloned()
+    //     .unwrap_or_default();
+    // zoo_cfg.extend(sc.pods().into_iter().flatten().map(|pod| {
+    //     (
+    //         format!("server.{}", pod.zookeeper_myid),
+    //         format!("{}:2888:3888;{}", pod.fqdn(), APP_PORT),
+    //     )
+    // }));
+    // let zoo_cfg = zoo_cfg
+    //     .into_iter()
+    //     .map(|(k, v)| (k, Some(v)))
+    //     .collect::<Vec<_>>();
+    // ConfigMapBuilder::new()
+    //     .metadata(
+    //         ObjectMetaBuilder::new()
+    //             .name_and_namespace(sc)
+    //             .name(rolegroup.object_name())
+    //             .ownerreference_from_resource(sc, None, Some(true))
+    //             .map_err(|e| Error::ObjectMissingMetadataForOwnerRef {
+    //                 sc: ObjectRef::from_obj(sc),
+    //             })?
+    //             .with_recommended_labels(
+    //                 sc,
+    //                 APP_NAME,
+    //                 version(sc)?,
+    //                 &rolegroup.role,
+    //                 &rolegroup.role_group,
+    //             )
+    //             .build(),
+    //     )
+    // .add_data(
+    //     "zoo.cfg",
+    //     to_java_properties_string(zoo_cfg.iter().map(|(k, v)| (k, v))).with_context(|| {
+    //         SerializeZooCfg {
+    //             rolegroup: rolegroup.clone(),
+    //         }
+    //     })?,
+    // )
+    // .build()
+    // .map_err(|e| Error::BuildRoleGroupConfig {
+    //     source: e,
+    //     rolegroup: rolegroup.clone(),
+    // })
 }
 
 /// The rolegroup [`Service`] is a headless service that allows direct access to the instances of a certain rolegroup
@@ -269,13 +277,13 @@ fn build_server_rolegroup_service(
             .name_and_namespace(sc)
             .name(&rolegroup.object_name())
             .ownerreference_from_resource(sc, None, Some(true))
-            .with_context(|| ObjectMissingMetadataForOwnerRef {
+            .map_err(|e| Error::ObjectMissingMetadataForOwnerRef {
                 sc: ObjectRef::from_obj(sc),
             })?
             .with_recommended_labels(
                 sc,
                 APP_NAME,
-                util::version(sc)?,
+                version(sc)?,
                 &rolegroup.role,
                 &rolegroup.role_group,
             )
@@ -319,14 +327,14 @@ fn build_server_rolegroup_statefulset(
 ) -> Result<StatefulSet, Error> {
     let rolegroup = sc
         .spec
-        .servers
+        .masters
         .as_ref()
-        .with_context(|| NoServerRole {
+        .ok_or(Error::NoServerRole {
             obj_ref: ObjectRef::from_obj(sc),
         })?
         .role_groups
         .get(&rolegroup_ref.role_group);
-    let sc_version = util::version(sc)?;
+    let sc_version = version(sc)?;
     let image = format!(
         "docker.stackable.tech/stackable/spark:{}-stackable0",
         sc_version
@@ -401,7 +409,7 @@ fn build_server_rolegroup_statefulset(
             .name_and_namespace(sc)
             .name(&rolegroup_ref.object_name())
             .ownerreference_from_resource(sc, None, Some(true))
-            .with_context(|| ObjectMissingMetadataForOwnerRef {
+            .map_err(|e| Error::ObjectMissingMetadataForOwnerRef {
                 sc: ObjectRef::from_obj(sc),
             })?
             .with_recommended_labels(

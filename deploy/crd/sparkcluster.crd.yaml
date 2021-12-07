@@ -271,6 +271,9 @@ spec:
                   required:
                     - roleGroups
                   type: object
+                stopped:
+                  nullable: true
+                  type: boolean
                 version:
                   nullable: true
                   type: string

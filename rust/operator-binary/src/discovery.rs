@@ -1,11 +1,11 @@
 use std::convert::TryInto;
 use std::{collections::BTreeSet, num::TryFromIntError};
 
+use crate::error::Error;
 use crate::error::Error::{
-    self, ExpectedPods, FindEndpoints, InvalidNodePort, NoName, NoNamespace, NoNodePort,
-    NoServicePort, ObjectMissingMetadataForOwnerRef,
+    FindEndpoints, InvalidNodePort, NoName, NoNamespace, NoNodePort, NoServicePort,
+    ObjectMissingMetadataForOwnerRef,
 };
-
 use crate::util::version;
 use snafu::{OptionExt, ResultExt, Snafu};
 use stackable_operator::{

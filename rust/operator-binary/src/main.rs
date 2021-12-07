@@ -1,4 +1,3 @@
-mod discovery;
 mod error;
 mod spark_controller;
 mod util;
@@ -41,7 +40,7 @@ mod built_info {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), error::Error> {
+async fn main() -> anyhow::Result<()> {
     stackable_operator::logging::initialize_logging("SPARK_OPERATOR_LOG");
     let opts = Opts::from_args();
     match opts.cmd {

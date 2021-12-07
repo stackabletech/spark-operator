@@ -1,3 +1,4 @@
+use crate::error::Error;
 use crate::error::Error::ObjectHasNoVersion;
 use crate::{spark_controller, ObjectRef};
 use stackable_operator::k8s_openapi::serde::de::DeserializeOwned;
@@ -8,13 +9,10 @@ use stackable_operator::kube::Resource;
 use stackable_spark_crd::SparkCluster;
 use std::fmt::Debug;
 
-pub fn version(sc: &SparkCluster) -> kube::Result<&str> {
-    sc.spec
-        .version
-        .as_deref()
-        .with_context(|| ObjectHasNoVersion {
-            obj_ref: ObjectRef::from_obj(sc),
-        })
+pub fn version(sc: &SparkCluster) -> Result<&str, Error> {
+    sc.spec.version.as_deref().ok_or(ObjectHasNoVersion {
+        obj_ref: ObjectRef::from_obj(sc),
+    })
 }
 
 /// Gets a [`kube::Api`] in `obj`'s native scope

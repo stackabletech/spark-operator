@@ -16,7 +16,6 @@ use stackable_operator::{
     role_utils::{CommonConfiguration, Role},
     schemars::{self, JsonSchema},
 };
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::hash::Hash;
@@ -26,7 +25,7 @@ const DEFAULT_LOG_DIR: &str = "/tmp";
 const SPARK_DEFAULTS_CONF: &str = "spark-defaults.conf";
 const SPARK_ENV_SH: &str = "spark-env.sh";
 
-#[derive(Clone, CustomResource, Debug, Deserialize, JsonSchema, Serialize)]
+#[derive(Clone, CustomResource, Debug, Default, Deserialize, JsonSchema, PartialEq, Serialize)]
 #[kube(
     group = "spark.stackable.tech",
     version = "v1alpha1",
@@ -40,12 +39,18 @@ const SPARK_ENV_SH: &str = "spark-env.sh";
 )]
 #[serde(rename_all = "camelCase")]
 pub struct SparkClusterSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub masters: Option<Role<MasterConfig>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workers: Option<Role<WorkerConfig>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history_servers: Option<Role<HistoryServerConfig>>,
     #[serde(flatten)]
     pub config: Option<CommonConfiguration<CommonConfig>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stopped: Option<bool>,
 }
 
 impl SparkClusterSpec {
