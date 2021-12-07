@@ -11,13 +11,13 @@ version = "0.5.0-nightly"
 [dependencies]
 stackable-operator = { git = "https://github.com/stackabletech/operator-rs.git", branch = "main" }
 stackable-spark-crd = { path = "../crd" }
-stackable-spark-operator = { path = "../operator" }
-
 anyhow = "1.0"
-clap = "2.33"
 serde_yaml = "0.8"
 tokio = { version = "1.13", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1"
+snafu = "0.6.10"
+fnv = "1.0.7"
+structopt = "0.3.23"
 
 [build-dependencies]
 built = { version =  "0.5", features = ["chrono", "git2"] }
@@ -39,4 +39,4 @@ assets = [
 
 [[bin]]
 name = "stackable-spark-operator"
-path = "src/stackable-spark-operator.rs"
+path = "src/main.rs"

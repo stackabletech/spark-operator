@@ -1,5 +1,6 @@
 [workspace]
 
 members = [
-    "rust/crd", "rust/operator-binary", "rust/operator", "rust/common"
+    "rust/crd", "rust/operator-binary"
 ]
+exclude = [ "rust/operator" ]

@@ -163,6 +163,7 @@ spec:
                     - roleGroups
                   type: object
                 masters:
+                  nullable: true
                   properties:
                     cliOverrides:
                       additionalProperties:
@@ -274,6 +275,7 @@ spec:
                   nullable: true
                   type: string
                 workers:
+                  nullable: true
                   properties:
                     cliOverrides:
                       additionalProperties:
@@ -397,9 +399,6 @@ spec:
                   required:
                     - roleGroups
                   type: object
-              required:
-                - masters
-                - workers
               type: object
             status:
               nullable: true

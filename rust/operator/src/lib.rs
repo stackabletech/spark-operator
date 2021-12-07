@@ -34,12 +34,12 @@ use std::time::Duration;
 use strum::IntoEnumIterator;
 use tracing::{debug, info, trace, warn};
 
-use stackable_spark_common::constants::{
+use stackable_spark_crd::commands::{Restart, Start, Stop};
+use stackable_spark_crd::{ClusterExecutionStatus, CurrentCommand, SparkCluster, SparkRole};
+use stackable_spark_operator::constants::{
     SPARK_DEFAULTS_CONF, SPARK_DEFAULTS_EVENT_LOG_DIR, SPARK_DEFAULTS_HISTORY_FS_LOG_DIRECTORY,
     SPARK_ENV_SH, SPARK_METRICS_PROPERTIES,
 };
-use stackable_spark_crd::commands::{Restart, Start, Stop};
-use stackable_spark_crd::{ClusterExecutionStatus, CurrentCommand, SparkCluster, SparkRole};
 
 use crate::config::validated_product_config;
 use crate::pod_utils::{

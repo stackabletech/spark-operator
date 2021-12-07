@@ -12,8 +12,8 @@ use stackable_operator::product_config_utils::{
     config_for_role_and_group, transform_all_roles_to_config, validate_all_roles_and_groups_config,
     ValidatedRoleConfigByPropertyKind,
 };
-use stackable_spark_common::constants::*;
 use stackable_spark_crd::{SparkCluster, SparkRole};
+use stackable_spark_operator::constants::*;
 
 /// The worker start command needs to be extended with all known master nodes and ports.
 /// The required URLs for the starting command are in format: '<master-node-name>:<master-port'

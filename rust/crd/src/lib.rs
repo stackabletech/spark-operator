@@ -1,21 +1,24 @@
 //! This module provides all required CRD definitions and additional helper methods.
-pub mod commands;
+pub mod constants;
 
-use serde::{Deserialize, Serialize};
-use stackable_operator::{
-    kube::{runtime::reflector::ObjectRef, CustomResource},
-    product_config_utils::{ConfigError, Configuration},
-    role_utils::{CommonConfiguration, Role},
-    schemars::{self, JsonSchema},
-};
-use stackable_spark_common::constants::{
+use constants::{
     SPARK_DEFAULTS_AUTHENTICATE, SPARK_DEFAULTS_AUTHENTICATE_SECRET, SPARK_DEFAULTS_EVENT_LOG_DIR,
     SPARK_DEFAULTS_HISTORY_FS_LOG_DIRECTORY, SPARK_DEFAULTS_HISTORY_STORE_PATH,
     SPARK_DEFAULTS_HISTORY_WEBUI_PORT, SPARK_DEFAULTS_PORT_MAX_RETRIES, SPARK_ENV_MASTER_PORT,
     SPARK_ENV_MASTER_WEBUI_PORT, SPARK_ENV_WORKER_CORES, SPARK_ENV_WORKER_MEMORY,
     SPARK_ENV_WORKER_PORT, SPARK_ENV_WORKER_WEBUI_PORT,
 };
+use serde::{Deserialize, Serialize};
+use snafu::{OptionExt, Snafu};
+use stackable_operator::{
+    kube::{runtime::reflector::ObjectRef, CustomResource},
+    product_config_utils::{ConfigError, Configuration},
+    role_utils::{CommonConfiguration, Role},
+    schemars::{self, JsonSchema},
+};
+use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::fmt::Display;
 use std::hash::Hash;
 use strum_macros::EnumIter;
 
@@ -38,8 +41,8 @@ const SPARK_ENV_SH: &str = "spark-env.sh";
 #[serde(rename_all = "camelCase")]
 pub struct SparkClusterSpec {
     pub version: Option<String>,
-    pub masters: Role<MasterConfig>,
-    pub workers: Role<WorkerConfig>,
+    pub masters: Option<Role<MasterConfig>>,
+    pub workers: Option<Role<WorkerConfig>>,
     pub history_servers: Option<Role<HistoryServerConfig>>,
     #[serde(flatten)]
     pub config: Option<CommonConfiguration<CommonConfig>>,
@@ -99,6 +102,105 @@ pub struct WorkerConfig {
 pub struct HistoryServerConfig {
     pub store_path: Option<String>,
     pub history_web_ui_port: Option<u16>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RoleGroupRef {
+    pub cluster: ObjectRef<SparkCluster>,
+    pub role: String,
+    pub role_group: String,
+}
+
+impl RoleGroupRef {
+    pub fn object_name(&self) -> String {
+        format!("{}-{}-{}", self.cluster.name, self.role, self.role_group)
+    }
+}
+
+impl Display for RoleGroupRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!(
+            "rolegroup {}.{} of {}",
+            self.role, self.role_group, self.cluster
+        ))
+    }
+}
+
+/// Reference to a single `Pod` that is a component of a [`SparkCluster`]
+///
+/// Used for service discovery.
+pub struct SparkPodRef {
+    pub namespace: String,
+    pub role_group_service_name: String,
+    pub pod_name: String,
+}
+
+impl SparkPodRef {
+    pub fn fqdn(&self) -> String {
+        format!(
+            "{}.{}.{}.svc.cluster.local",
+            self.pod_name, self.role_group_service_name, self.namespace
+        )
+    }
+}
+
+#[derive(Debug, Snafu)]
+#[snafu(display("object has no namespace associated"))]
+pub struct NoNamespaceError;
+impl SparkCluster {
+    /// The name of the role-level load-balanced Kubernetes `Service`
+    pub fn server_role_service_name(&self) -> Option<String> {
+        self.metadata.name.clone()
+    }
+
+    /// The fully-qualified domain name of the role-level load-balanced Kubernetes `Service`
+    pub fn server_role_service_fqdn(&self) -> Option<String> {
+        Some(format!(
+            "{}.{}.svc.cluster.local",
+            self.server_role_service_name()?,
+            self.metadata.namespace.as_ref()?
+        ))
+    }
+
+    /// Metadata about a server rolegroup
+    pub fn server_rolegroup_ref(&self, group_name: impl Into<String>) -> RoleGroupRef {
+        RoleGroupRef {
+            cluster: ObjectRef::from_obj(self),
+            role: SparkRole::Master.to_string(),
+            role_group: group_name.into(),
+        }
+    }
+
+    /// List all pods expected to form the cluster
+    ///
+    /// We try to predict the pods here rather than looking at the current cluster state in order to
+    /// avoid instance churn. For example, regenerating zoo.cfg based on the cluster state would lead to
+    /// a lot of spurious restarts, as well as opening us up to dangerous split-brain conditions because
+    /// the pods have inconsistent snapshots of which servers they should expect to be in quorum.
+    pub fn pods(&self) -> Result<impl Iterator<Item = SparkPodRef> + '_, NoNamespaceError> {
+        let ns = self
+            .metadata
+            .namespace
+            .clone()
+            .context(NoNamespaceContext)?;
+        Ok(self
+            .spec
+            .masters
+            .iter()
+            .flat_map(|role| &role.role_groups)
+            // Order rolegroups consistently, to avoid spurious downstream rewrites
+            .collect::<BTreeMap<_, _>>()
+            .into_iter()
+            .flat_map(move |(rolegroup_name, rolegroup)| {
+                let rolegroup_ref = self.server_rolegroup_ref(rolegroup_name);
+                let ns = ns.clone();
+                (0..rolegroup.replicas.unwrap_or(0)).map(move |i| SparkPodRef {
+                    namespace: ns.clone(),
+                    role_group_service_name: rolegroup_ref.object_name(),
+                    pod_name: format!("{}-{}", rolegroup_ref.object_name(), i),
+                })
+            }))
+    }
 }
 
 impl Configuration for MasterConfig {
