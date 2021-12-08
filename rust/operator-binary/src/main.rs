@@ -10,11 +10,9 @@ use stackable_operator::kube::runtime::controller::{Context, Controller, Reconci
 use stackable_operator::kube::runtime::reflector::ObjectRef;
 use stackable_operator::kube::{CustomResourceExt, Resource};
 use stackable_operator::product_config::ProductConfigManager;
-use stackable_operator::{cli, client, kube};
 use stackable_spark_crd::SparkCluster;
 use std::str::FromStr;
 use structopt::StructOpt;
-use tracing::error;
 
 #[derive(StructOpt)]
 #[structopt(about = built_info::PKG_DESCRIPTION, author = "Stackable GmbH - info@stackable.de")]
@@ -73,17 +71,16 @@ async fn main() -> anyhow::Result<()> {
                     "../../../deploy/config-spec/properties.yaml"
                 ))?
             };
-            let kube = kube::Client::try_default().await?;
-            let scs = kube::Api::<SparkCluster>::all(kube.clone());
-            let controller_builder = Controller::new(scs.clone(), ListParams::default());
+            let client =
+                stackable_operator::client::create_client(Some("spark.stackable.tech".to_string()))
+                    .await?;
+            let controller_builder =
+                Controller::new(client.get_all_api::<SparkCluster>(), ListParams::default());
             let sc_store = controller_builder.store();
             let controller = controller_builder
-                .owns(
-                    kube::Api::<Service>::all(kube.clone()),
-                    ListParams::default(),
-                )
+                .owns(client.get_all_api::<Service>(), ListParams::default())
                 .watches(
-                    kube::Api::<Endpoints>::all(kube.clone()),
+                    client.get_all_api::<Endpoints>(),
                     ListParams::default(),
                     move |endpoints| {
                         sc_store
@@ -96,19 +93,13 @@ async fn main() -> anyhow::Result<()> {
                             .map(|zk| ObjectRef::from_obj(&zk))
                     },
                 )
-                .owns(
-                    kube::Api::<StatefulSet>::all(kube.clone()),
-                    ListParams::default(),
-                )
-                .owns(
-                    kube::Api::<ConfigMap>::all(kube.clone()),
-                    ListParams::default(),
-                )
+                .owns(client.get_all_api::<StatefulSet>(), ListParams::default())
+                .owns(client.get_all_api::<ConfigMap>(), ListParams::default())
                 .run(
                     spark_controller::reconcile,
                     spark_controller::error_policy,
                     Context::new(spark_controller::Ctx {
-                        kube: kube.clone(),
+                        client: client.clone(),
                         product_config,
                     }),
                 );

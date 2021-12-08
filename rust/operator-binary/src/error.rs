@@ -1,8 +1,8 @@
-use snafu::{OptionExt, ResultExt, Snafu};
+use snafu::Snafu;
 use stackable_operator::kube;
 use stackable_operator::kube::runtime::reflector::ObjectRef;
 use stackable_spark_crd::RoleGroupRef;
-use stackable_spark_crd::{SparkCluster, SparkRole};
+use stackable_spark_crd::SparkCluster;
 use std::num::TryFromIntError;
 
 #[derive(Snafu, Debug)]
@@ -59,12 +59,12 @@ pub enum Error {
     },
     #[snafu(display("failed to apply global Service for {}", sc))]
     ApplyRoleService {
-        source: kube::Error,
+        source: stackable_operator::error::Error,
         sc: ObjectRef<SparkCluster>,
     },
     #[snafu(display("failed to apply Service for {}", rolegroup))]
     ApplyRoleGroupService {
-        source: kube::Error,
+        source: stackable_operator::error::Error,
         rolegroup: RoleGroupRef,
     },
     #[snafu(display("failed to build ConfigMap for {}", rolegroup))]
@@ -74,12 +74,12 @@ pub enum Error {
     },
     #[snafu(display("failed to apply ConfigMap for {}", rolegroup))]
     ApplyRoleGroupConfig {
-        source: kube::Error,
+        source: stackable_operator::error::Error,
         rolegroup: RoleGroupRef,
     },
     #[snafu(display("failed to apply StatefulSet for {}", rolegroup))]
     ApplyRoleGroupStatefulSet {
-        source: kube::Error,
+        source: stackable_operator::error::Error,
         rolegroup: RoleGroupRef,
     },
     #[snafu(display("invalid product config for {}", sc))]
@@ -94,17 +94,17 @@ pub enum Error {
     },
     #[snafu(display("failed to build discovery ConfigMap for {}", sc))]
     BuildDiscoveryConfig {
-        source: kube::Error,
+        source: stackable_operator::error::Error,
         sc: ObjectRef<SparkCluster>,
     },
     #[snafu(display("failed to apply discovery ConfigMap for {}", sc))]
     ApplyDiscoveryConfig {
-        source: kube::Error,
+        source: stackable_operator::error::Error,
         sc: ObjectRef<SparkCluster>,
     },
     #[snafu(display("failed to update status of {}", sc))]
     ApplyStatus {
-        source: kube::Error,
+        source: stackable_operator::error::Error,
         sc: ObjectRef<SparkCluster>,
     },
 }

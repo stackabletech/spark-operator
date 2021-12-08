@@ -1,9 +1,13 @@
 //! Ensures that `Pod`s are configured and running for each [`SparkCluster`]
 
 use crate::error::Error;
-use crate::util::{apply_owned, apply_status, version};
+use crate::error::Error::{
+    ApplyRoleGroupConfig, ApplyRoleGroupService, ApplyRoleGroupStatefulSet, ApplyRoleService,
+    ApplyStatus, GlobalServiceNameNotFound, ObjectMissingMetadataForOwnerRef,
+};
+use crate::util::version;
 use fnv::FnvHasher;
-use snafu::{OptionExt, ResultExt, Snafu};
+use snafu::Snafu;
 use stackable_operator::product_config_utils::Configuration;
 use stackable_operator::role_utils::Role;
 use stackable_operator::{
@@ -34,10 +38,11 @@ use stackable_operator::{
     product_config_utils::{transform_all_roles_to_config, validate_all_roles_and_groups_config},
 };
 use stackable_spark_crd::constants::{
-    APP_NAME, APP_PORT, FIELD_MANAGER, SPARK_DEFAULTS_CONF, SPARK_ENV_SH, SPARK_METRICS_PROPERTIES,
+    APP_NAME, APP_PORT, FIELD_MANAGER_SCOPE, SPARK_DEFAULTS_CONF, SPARK_ENV_SH,
+    SPARK_METRICS_PROPERTIES,
 };
 use stackable_spark_crd::{
-    MasterConfig, RoleGroupRef, SparkCluster, SparkClusterSpec, SparkClusterStatus, SparkRole,
+    RoleGroupRef, SparkCluster, SparkClusterSpec, SparkClusterStatus, SparkRole,
 };
 use std::{
     borrow::Cow,
@@ -47,16 +52,14 @@ use std::{
 };
 
 pub struct Ctx {
-    pub kube: kube::Client,
+    pub client: stackable_operator::client::Client,
     pub product_config: ProductConfigManager,
 }
-
-const PROPERTIES_FILE: &str = "zoo.cfg";
 
 pub async fn reconcile(sc: SparkCluster, ctx: Context<Ctx>) -> Result<ReconcilerAction, Error> {
     tracing::info!("Starting reconcile");
     let sc_ref = ObjectRef::from_obj(&sc);
-    let kube = ctx.get_ref().kube.clone();
+    let client = &ctx.get_ref().client;
 
     let sc_version = sc
         .spec
@@ -81,45 +84,44 @@ pub async fn reconcile(sc: SparkCluster, ctx: Context<Ctx>) -> Result<Reconciler
         .map(Cow::Borrowed)
         .unwrap_or_default();
 
-    let server_role_service = apply_owned(&kube, FIELD_MANAGER, &build_server_role_service(&sc)?)
+    let server_role_service = build_server_role_service(&sc)?;
+    let server_role_service = client
+        .apply_patch(
+            FIELD_MANAGER_SCOPE,
+            &server_role_service,
+            &server_role_service,
+        )
         .await
-        .map_err(|e| Error::ApplyRoleService {
+        .map_err(|e| ApplyRoleService {
             source: e,
             sc: sc_ref.clone(),
         })?;
     for (rolegroup_name, rolegroup_config) in role_server_config.iter() {
         let rolegroup = sc.server_rolegroup_ref(rolegroup_name);
-
-        apply_owned(
-            &kube,
-            FIELD_MANAGER,
-            &build_server_rolegroup_service(&rolegroup, &sc)?,
-        )
-        .await
-        .map_err(|e| Error::ApplyRoleGroupService {
-            source: e,
-            rolegroup: rolegroup.clone(),
-        })?;
-        apply_owned(
-            &kube,
-            FIELD_MANAGER,
-            &build_server_rolegroup_config_map(&rolegroup, &sc, rolegroup_config)?,
-        )
-        .await
-        .map_err(|e| Error::ApplyRoleGroupConfig {
-            source: e,
-            rolegroup: rolegroup.clone(),
-        })?;
-        apply_owned(
-            &kube,
-            FIELD_MANAGER,
-            &build_server_rolegroup_statefulset(&rolegroup, &sc, rolegroup_config)?,
-        )
-        .await
-        .map_err(|e| Error::ApplyRoleGroupStatefulSet {
-            source: e,
-            rolegroup: rolegroup.clone(),
-        })?;
+        let rg_service = build_server_rolegroup_service(&rolegroup, &sc)?;
+        let rg_configmap = build_server_rolegroup_config_map(&rolegroup, &sc, rolegroup_config)?;
+        let rg_statefulset = build_server_rolegroup_statefulset(&rolegroup, &sc, rolegroup_config)?;
+        client
+            .apply_patch(FIELD_MANAGER_SCOPE, &rg_service, &rg_service)
+            .await
+            .map_err(|e| ApplyRoleGroupService {
+                source: e,
+                rolegroup: rolegroup.clone(),
+            })?;
+        client
+            .apply_patch(FIELD_MANAGER_SCOPE, &rg_configmap, &rg_configmap)
+            .await
+            .map_err(|e| ApplyRoleGroupConfig {
+                source: e,
+                rolegroup: rolegroup.clone(),
+            })?;
+        client
+            .apply_patch(FIELD_MANAGER_SCOPE, &rg_statefulset, &rg_statefulset)
+            .await
+            .map_err(|e| ApplyRoleGroupStatefulSet {
+                source: e,
+                rolegroup: rolegroup.clone(),
+            })?;
     }
 
     // TODO: razvan
@@ -141,21 +143,21 @@ pub async fn reconcile(sc: SparkCluster, ctx: Context<Ctx>) -> Result<Reconciler
     let status = SparkClusterStatus {
         // Serialize as a string to discourage users from trying to parse the value,
         // and to keep things flexible if we end up changing the hasher at some point.
-        // TODO: razvan
-        // discovery_hash: Some(discovery_hash.finish().to_string()),
-        discovery_hash: Some(String::from("TODO")),
+        discovery_hash: Some("TODO".to_string()),
     };
-    apply_status(&kube, FIELD_MANAGER, &{
+    let sc_with_status = {
         let mut sc_with_status = SparkCluster::new(&sc_ref.name, SparkClusterSpec::default());
         sc_with_status.metadata.namespace = sc.metadata.namespace.clone();
         sc_with_status.status = Some(status);
         sc_with_status
-    })
-    .await
-    .map_err(|e| Error::ApplyStatus {
-        source: e,
-        sc: sc_ref.clone(),
-    })?;
+    };
+    client
+        .apply_patch_status(FIELD_MANAGER_SCOPE, &sc_with_status, &sc_with_status)
+        .await
+        .map_err(|e| ApplyStatus {
+            source: e,
+            sc: sc_ref.clone(),
+        })?;
 
     Ok(ReconcilerAction {
         requeue_after: None,
@@ -171,7 +173,7 @@ pub fn build_server_role_service(sc: &SparkCluster) -> Result<Service, Error> {
     let role_name = SparkRole::Master.to_string();
     let role_svc_name = sc
         .server_role_service_name()
-        .ok_or(Error::GlobalServiceNameNotFound {
+        .ok_or(GlobalServiceNameNotFound {
             obj_ref: ObjectRef::from_obj(sc),
         })?;
     Ok(Service {
@@ -179,14 +181,14 @@ pub fn build_server_role_service(sc: &SparkCluster) -> Result<Service, Error> {
             .name_and_namespace(sc)
             .name(&role_svc_name)
             .ownerreference_from_resource(sc, None, Some(true))
-            .map_err(|e| Error::ObjectMissingMetadataForOwnerRef {
+            .map_err(|_| ObjectMissingMetadataForOwnerRef {
                 sc: ObjectRef::from_obj(sc),
             })?
             .with_recommended_labels(sc, APP_NAME, version(sc)?, &role_name, "global")
             .build(),
         spec: Some(ServiceSpec {
             ports: Some(vec![ServicePort {
-                name: Some("sc".to_string()),
+                name: Some("spark".to_string()),
                 port: APP_PORT.into(),
                 protocol: Some("TCP".to_string()),
                 ..ServicePort::default()
