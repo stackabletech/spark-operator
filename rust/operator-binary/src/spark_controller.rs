@@ -4,6 +4,8 @@ use crate::error::Error;
 use crate::util::{apply_owned, apply_status, version};
 use fnv::FnvHasher;
 use snafu::{OptionExt, ResultExt, Snafu};
+use stackable_operator::product_config_utils::Configuration;
+use stackable_operator::role_utils::Role;
 use stackable_operator::{
     builder::{ConfigMapBuilder, ContainerBuilder, ObjectMetaBuilder, PodBuilder},
     k8s_openapi::{
@@ -31,9 +33,11 @@ use stackable_operator::{
     },
     product_config_utils::{transform_all_roles_to_config, validate_all_roles_and_groups_config},
 };
-use stackable_spark_crd::constants::{APP_NAME, APP_PORT, FIELD_MANAGER};
+use stackable_spark_crd::constants::{
+    APP_NAME, APP_PORT, FIELD_MANAGER, SPARK_DEFAULTS_CONF, SPARK_ENV_SH, SPARK_METRICS_PROPERTIES,
+};
 use stackable_spark_crd::{
-    RoleGroupRef, SparkCluster, SparkClusterSpec, SparkClusterStatus, SparkRole,
+    MasterConfig, RoleGroupRef, SparkCluster, SparkClusterSpec, SparkClusterStatus, SparkRole,
 };
 use std::{
     borrow::Cow,
@@ -63,22 +67,7 @@ pub async fn reconcile(sc: SparkCluster, ctx: Context<Ctx>) -> Result<Reconciler
         })?;
     let validated_config = validate_all_roles_and_groups_config(
         sc_version,
-        &transform_all_roles_to_config(
-            &sc,
-            [(
-                SparkRole::Master.to_string(),
-                (
-                    vec![
-                        PropertyNameKind::Env,
-                        PropertyNameKind::File(PROPERTIES_FILE.to_string()),
-                    ],
-                    sc.spec.masters.clone().ok_or(Error::NoServerRole {
-                        obj_ref: sc_ref.clone(),
-                    })?,
-                ),
-            )]
-            .into(),
-        ),
+        &transform_all_roles_to_config(&sc, build_spark_role_properties(&sc)),
         &ctx.get_ref().product_config,
         false,
         false,
@@ -487,4 +476,58 @@ pub fn error_policy(_error: &Error, _ctx: Context<Ctx>) -> ReconcilerAction {
     ReconcilerAction {
         requeue_after: Some(Duration::from_secs(5)),
     }
+}
+pub fn build_spark_role_properties(
+    resource: &SparkCluster,
+) -> HashMap<
+    String,
+    (
+        Vec<PropertyNameKind>,
+        Role<impl Configuration<Configurable = SparkCluster>>,
+    ),
+> {
+    let mut result = HashMap::new();
+    if let Some(masters) = &resource.spec.masters {
+        result.insert(
+            SparkRole::Master.to_string(),
+            (
+                vec![
+                    PropertyNameKind::File(SPARK_ENV_SH.to_string()),
+                    PropertyNameKind::File(SPARK_DEFAULTS_CONF.to_string()),
+                    PropertyNameKind::File(SPARK_METRICS_PROPERTIES.to_string()),
+                    PropertyNameKind::Env,
+                ],
+                masters.clone().erase(),
+            ),
+        );
+    }
+    if let Some(workers) = &resource.spec.workers {
+        result.insert(
+            SparkRole::Worker.to_string(),
+            (
+                vec![
+                    PropertyNameKind::File(SPARK_ENV_SH.to_string()),
+                    PropertyNameKind::File(SPARK_DEFAULTS_CONF.to_string()),
+                    PropertyNameKind::File(SPARK_METRICS_PROPERTIES.to_string()),
+                    PropertyNameKind::Env,
+                ],
+                workers.clone().erase(),
+            ),
+        );
+    }
+    if let Some(history_servers) = &resource.spec.history_servers {
+        result.insert(
+            SparkRole::HistoryServer.to_string(),
+            (
+                vec![
+                    PropertyNameKind::File(SPARK_ENV_SH.to_string()),
+                    PropertyNameKind::File(SPARK_DEFAULTS_CONF.to_string()),
+                    PropertyNameKind::File(SPARK_METRICS_PROPERTIES.to_string()),
+                    PropertyNameKind::Env,
+                ],
+                history_servers.clone().erase(),
+            ),
+        );
+    }
+    result
 }

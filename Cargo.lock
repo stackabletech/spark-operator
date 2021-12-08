@@ -399,6 +399,12 @@ dependencies = [
 
 [[package]]
 name = "futures"
+version = "0.1.31"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a471a38ef8ed83cd6e40aa59c1ffe17db6855c18e3604d9c4ed8c08ebc28678"
+
+[[package]]
+name = "futures"
 version = "0.3.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8cd0210d8c325c245ff06fd95a3b13689a1a276ac8cfa8e8720cb840bfb84b9e"
@@ -474,6 +480,7 @@ version = "0.3.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "41d22213122356472061ac0f1ab2cee28d2bac8491410fd68c2af53d1cedb83e"
 dependencies = [
+ "futures 0.1.31",
  "futures-channel",
  "futures-core",
  "futures-io",
@@ -765,7 +772,7 @@ dependencies = [
  "chrono",
  "dirs-next",
  "either",
- "futures",
+ "futures 0.3.18",
  "http",
  "http-body",
  "hyper",
@@ -831,7 +838,7 @@ checksum = "6018cf8410f9d460be3a3ac35deef63b71c860c368016d7bf6871994343728b4"
 dependencies = [
  "dashmap",
  "derivative",
- "futures",
+ "futures 0.3.18",
  "json-patch",
  "k8s-openapi",
  "kube-client",
@@ -1552,7 +1559,7 @@ dependencies = [
  "clap",
  "const_format",
  "either",
- "futures",
+ "futures 0.3.18",
  "json-patch",
  "k8s-openapi",
  "kube",
@@ -1595,6 +1602,7 @@ dependencies = [
  "anyhow",
  "built",
  "fnv",
+ "futures 0.3.18",
  "serde_yaml",
  "snafu",
  "stackable-operator",
