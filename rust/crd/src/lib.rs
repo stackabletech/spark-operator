@@ -10,6 +10,7 @@ use constants::{
 };
 use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, Snafu};
+use stackable_operator::role_utils::RoleGroupRef;
 use stackable_operator::{
     kube::{runtime::reflector::ObjectRef, CustomResource},
     product_config_utils::{ConfigError, Configuration},
@@ -17,7 +18,6 @@ use stackable_operator::{
     schemars::{self, JsonSchema},
 };
 use std::collections::BTreeMap;
-use std::fmt::Display;
 use std::hash::Hash;
 use strum_macros::EnumIter;
 
@@ -109,28 +109,6 @@ pub struct HistoryServerConfig {
     pub history_web_ui_port: Option<u16>,
 }
 
-#[derive(Debug, Clone)]
-pub struct RoleGroupRef {
-    pub cluster: ObjectRef<SparkCluster>,
-    pub role: String,
-    pub role_group: String,
-}
-
-impl RoleGroupRef {
-    pub fn object_name(&self) -> String {
-        format!("{}-{}-{}", self.cluster.name, self.role, self.role_group)
-    }
-}
-
-impl Display for RoleGroupRef {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!(
-            "rolegroup {}.{} of {}",
-            self.role, self.role_group, self.cluster
-        ))
-    }
-}
-
 /// Reference to a single `Pod` that is a component of a [`SparkCluster`]
 ///
 /// Used for service discovery.
@@ -168,10 +146,14 @@ impl SparkCluster {
     }
 
     /// Metadata about a server rolegroup
-    pub fn server_rolegroup_ref(&self, group_name: impl Into<String>) -> RoleGroupRef {
+    pub fn server_rolegroup_ref(
+        &self,
+        role_name: impl Into<String>,
+        group_name: impl Into<String>,
+    ) -> RoleGroupRef<SparkCluster> {
         RoleGroupRef {
             cluster: ObjectRef::from_obj(self),
-            role: SparkRole::Master.to_string(),
+            role: role_name.into(),
             role_group: group_name.into(),
         }
     }
@@ -193,13 +175,43 @@ impl SparkCluster {
             .masters
             .iter()
             .flat_map(|role| &role.role_groups)
-            // Order rolegroups consistently, to avoid spurious downstream rewrites
-            .collect::<BTreeMap<_, _>>()
-            .into_iter()
-            .flat_map(move |(rolegroup_name, rolegroup)| {
-                let rolegroup_ref = self.server_rolegroup_ref(rolegroup_name);
+            .map(|(rolegroup_name, rg)| {
+                (
+                    SparkRole::Master.to_string(),
+                    rolegroup_name,
+                    rg.replicas.unwrap_or(0),
+                )
+            })
+            .chain(
+                self.spec
+                    .workers
+                    .iter()
+                    .flat_map(|role| &role.role_groups)
+                    .map(|(rolegroup_name, rg)| {
+                        (
+                            SparkRole::Worker.to_string(),
+                            rolegroup_name,
+                            rg.replicas.unwrap_or(0),
+                        )
+                    }),
+            )
+            .chain(
+                self.spec
+                    .history_servers
+                    .iter()
+                    .flat_map(|role| &role.role_groups)
+                    .map(|(rolegroup_name, rg)| {
+                        (
+                            SparkRole::HistoryServer.to_string(),
+                            rolegroup_name,
+                            rg.replicas.unwrap_or(0),
+                        )
+                    }),
+            )
+            .flat_map(move |(role_name, rolegroup_name, replicas)| {
+                let rolegroup_ref = self.server_rolegroup_ref(role_name, rolegroup_name);
                 let ns = ns.clone();
-                (0..rolegroup.replicas.unwrap_or(0)).map(move |i| SparkPodRef {
+                (0..replicas).map(move |i| SparkPodRef {
                     namespace: ns.clone(),
                     role_group_service_name: rolegroup_ref.object_name(),
                     pod_name: format!("{}-{}", rolegroup_ref.object_name(), i),
@@ -488,4 +500,31 @@ impl SparkRole {
 pub struct ConfigOption {
     pub name: String,
     pub value: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::iter::FromIterator;
+
+    #[test]
+    fn map_flatten() {
+        let mut roles = HashMap::new();
+
+        let mut groups = HashMap::new();
+        groups.insert("master1", 1);
+        roles.insert("master", groups);
+
+        let mut groups = HashMap::new();
+        groups.insert("worker1", 1);
+        groups.insert("worker2", 2);
+        roles.insert("worker", groups);
+
+        let mut groups = HashMap::new();
+        groups.insert("hist1", 1);
+        groups.insert("hist2", 2);
+        roles.insert("hist", groups);
+
+        println!("{:?}", Vec::from_iter(roles.iter()));
+    }
 }

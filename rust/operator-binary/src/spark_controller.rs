@@ -9,7 +9,7 @@ use crate::util::version;
 use fnv::FnvHasher;
 use snafu::Snafu;
 use stackable_operator::product_config_utils::Configuration;
-use stackable_operator::role_utils::Role;
+use stackable_operator::role_utils::{Role, RoleGroupRef};
 use stackable_operator::{
     builder::{ConfigMapBuilder, ContainerBuilder, ObjectMetaBuilder, PodBuilder},
     k8s_openapi::{
@@ -41,9 +41,7 @@ use stackable_spark_crd::constants::{
     APP_NAME, APP_PORT, FIELD_MANAGER_SCOPE, SPARK_DEFAULTS_CONF, SPARK_ENV_SH,
     SPARK_METRICS_PROPERTIES,
 };
-use stackable_spark_crd::{
-    RoleGroupRef, SparkCluster, SparkClusterSpec, SparkClusterStatus, SparkRole,
-};
+use stackable_spark_crd::{SparkCluster, SparkClusterSpec, SparkClusterStatus, SparkRole};
 use std::{
     borrow::Cow,
     collections::{BTreeMap, HashMap},
@@ -79,10 +77,6 @@ pub async fn reconcile(sc: SparkCluster, ctx: Context<Ctx>) -> Result<Reconciler
         source: e,
         sc: sc_ref.clone(),
     })?;
-    let role_server_config = validated_config
-        .get(&SparkRole::Master.to_string())
-        .map(Cow::Borrowed)
-        .unwrap_or_default();
 
     let server_role_service = build_server_role_service(&sc)?;
     let server_role_service = client
@@ -96,32 +90,37 @@ pub async fn reconcile(sc: SparkCluster, ctx: Context<Ctx>) -> Result<Reconciler
             source: e,
             sc: sc_ref.clone(),
         })?;
-    for (rolegroup_name, rolegroup_config) in role_server_config.iter() {
-        let rolegroup = sc.server_rolegroup_ref(rolegroup_name);
-        let rg_service = build_server_rolegroup_service(&rolegroup, &sc)?;
-        let rg_configmap = build_server_rolegroup_config_map(&rolegroup, &sc, rolegroup_config)?;
-        let rg_statefulset = build_server_rolegroup_statefulset(&rolegroup, &sc, rolegroup_config)?;
-        client
-            .apply_patch(FIELD_MANAGER_SCOPE, &rg_service, &rg_service)
-            .await
-            .map_err(|e| ApplyRoleGroupService {
-                source: e,
-                rolegroup: rolegroup.clone(),
-            })?;
-        client
-            .apply_patch(FIELD_MANAGER_SCOPE, &rg_configmap, &rg_configmap)
-            .await
-            .map_err(|e| ApplyRoleGroupConfig {
-                source: e,
-                rolegroup: rolegroup.clone(),
-            })?;
-        client
-            .apply_patch(FIELD_MANAGER_SCOPE, &rg_statefulset, &rg_statefulset)
-            .await
-            .map_err(|e| ApplyRoleGroupStatefulSet {
-                source: e,
-                rolegroup: rolegroup.clone(),
-            })?;
+
+    for (role_name, group_config) in validated_config.iter() {
+        for (rolegroup_name, rolegroup_config) in group_config.iter() {
+            let rolegroup = sc.server_rolegroup_ref(role_name, rolegroup_name);
+            let rg_service = build_server_rolegroup_service(&rolegroup, &sc)?;
+            let rg_configmap =
+                build_server_rolegroup_config_map(&rolegroup, &sc, rolegroup_config)?;
+            let rg_statefulset =
+                build_server_rolegroup_statefulset(&rolegroup, &sc, rolegroup_config)?;
+            client
+                .apply_patch(FIELD_MANAGER_SCOPE, &rg_service, &rg_service)
+                .await
+                .map_err(|e| ApplyRoleGroupService {
+                    source: e,
+                    rolegroup: rolegroup.clone(),
+                })?;
+            client
+                .apply_patch(FIELD_MANAGER_SCOPE, &rg_configmap, &rg_configmap)
+                .await
+                .map_err(|e| ApplyRoleGroupConfig {
+                    source: e,
+                    rolegroup: rolegroup.clone(),
+                })?;
+            client
+                .apply_patch(FIELD_MANAGER_SCOPE, &rg_statefulset, &rg_statefulset)
+                .await
+                .map_err(|e| ApplyRoleGroupStatefulSet {
+                    source: e,
+                    rolegroup: rolegroup.clone(),
+                })?;
+        }
     }
 
     // TODO: razvan
@@ -203,7 +202,7 @@ pub fn build_server_role_service(sc: &SparkCluster) -> Result<Service, Error> {
 
 /// The rolegroup [`ConfigMap`] configures the rolegroup based on the configuration given by the administrator
 fn build_server_rolegroup_config_map(
-    rolegroup: &RoleGroupRef,
+    rolegroup: &RoleGroupRef<SparkCluster>,
     sc: &SparkCluster,
     server_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
 ) -> Result<ConfigMap, Error> {
@@ -260,7 +259,7 @@ fn build_server_rolegroup_config_map(
 ///
 /// This is mostly useful for internal communication between peers, or for clients that perform client-side load balancing.
 fn build_server_rolegroup_service(
-    rolegroup: &RoleGroupRef,
+    rolegroup: &RoleGroupRef<SparkCluster>,
     sc: &SparkCluster,
 ) -> Result<Service, Error> {
     Ok(Service {
@@ -312,7 +311,7 @@ fn build_server_rolegroup_service(
 ///
 /// The [`Pod`](`stackable_operator::k8s_openapi::api::core::v1::Pod`)s are accessible through the corresponding [`Service`] (from [`build_rolegroup_service`]).
 fn build_server_rolegroup_statefulset(
-    rolegroup_ref: &RoleGroupRef,
+    rolegroup_ref: &RoleGroupRef<SparkCluster>,
     sc: &SparkCluster,
     server_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
 ) -> Result<StatefulSet, Error> {

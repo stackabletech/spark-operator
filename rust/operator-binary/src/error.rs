@@ -1,7 +1,7 @@
 use snafu::Snafu;
 use stackable_operator::kube;
 use stackable_operator::kube::runtime::reflector::ObjectRef;
-use stackable_spark_crd::RoleGroupRef;
+use stackable_operator::role_utils::RoleGroupRef;
 use stackable_spark_crd::SparkCluster;
 use std::num::TryFromIntError;
 
@@ -55,7 +55,7 @@ pub enum Error {
     },
     #[snafu(display("failed to calculate service name for role {}", rolegroup))]
     RoleGroupServiceNameNotFound {
-        rolegroup: RoleGroupRef,
+        rolegroup: RoleGroupRef<SparkCluster>,
     },
     #[snafu(display("failed to apply global Service for {}", sc))]
     ApplyRoleService {
@@ -65,22 +65,22 @@ pub enum Error {
     #[snafu(display("failed to apply Service for {}", rolegroup))]
     ApplyRoleGroupService {
         source: stackable_operator::error::Error,
-        rolegroup: RoleGroupRef,
+        rolegroup: RoleGroupRef<SparkCluster>,
     },
     #[snafu(display("failed to build ConfigMap for {}", rolegroup))]
     BuildRoleGroupConfig {
         source: stackable_operator::error::Error,
-        rolegroup: RoleGroupRef,
+        rolegroup: RoleGroupRef<SparkCluster>,
     },
     #[snafu(display("failed to apply ConfigMap for {}", rolegroup))]
     ApplyRoleGroupConfig {
         source: stackable_operator::error::Error,
-        rolegroup: RoleGroupRef,
+        rolegroup: RoleGroupRef<SparkCluster>,
     },
     #[snafu(display("failed to apply StatefulSet for {}", rolegroup))]
     ApplyRoleGroupStatefulSet {
         source: stackable_operator::error::Error,
-        rolegroup: RoleGroupRef,
+        rolegroup: RoleGroupRef<SparkCluster>,
     },
     #[snafu(display("invalid product config for {}", sc))]
     InvalidProductConfig {
@@ -90,7 +90,7 @@ pub enum Error {
     #[snafu(display("failed to serialize zoo.cfg for {}", rolegroup))]
     SerializeZooCfg {
         source: stackable_operator::product_config::writer::PropertiesWriterError,
-        rolegroup: RoleGroupRef,
+        rolegroup: RoleGroupRef<SparkCluster>,
     },
     #[snafu(display("failed to build discovery ConfigMap for {}", sc))]
     BuildDiscoveryConfig {
