@@ -1,19 +1,17 @@
 //! This module contains all methods that are responsible for setting / adapting configuration
 //! parameters in the Pods and respective ConfigMaps.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use stackable_operator::error::OperatorResult;
 use stackable_operator::k8s_openapi::api::core::v1::{Pod, PodStatus};
 use stackable_operator::labels::{APP_COMPONENT_LABEL, APP_ROLE_GROUP_LABEL};
 use stackable_operator::product_config::types::PropertyNameKind;
-use stackable_operator::product_config::ProductConfigManager;
 use stackable_operator::product_config_utils::{
-    config_for_role_and_group, transform_all_roles_to_config, validate_all_roles_and_groups_config,
-    ValidatedRoleConfigByPropertyKind,
+    config_for_role_and_group, ValidatedRoleConfigByPropertyKind,
 };
-use stackable_spark_crd::{SparkCluster, SparkRole};
-use stackable_spark_operator::constants::*;
+use stackable_spark_crd::constants::*;
+use stackable_spark_crd::SparkRole;
 
 /// The worker start command needs to be extended with all known master nodes and ports.
 /// The required URLs for the starting command are in format: '<master-node-name>:<master-port'
@@ -130,74 +128,6 @@ pub fn get_master_urls(
     }
 
     Ok(master_urls)
-}
-
-/// Defines all required spark roles (Master, Worker, History-Server) and their required
-/// configuration. In this case we need two files: `spark-defaults.conf` and `spark-env.sh`.
-/// Additionally require some env variables like `SPARK_NO_DAEMONIZE` and `SPARK_CONFIG_DIR`,
-/// (which will be added automatically by the product config).
-///
-/// The roles and their configs are then validated and complemented by the product config.
-///
-/// # Arguments
-/// * `resource`        - The SparkCluster containing the role definitions.
-/// * `product_config`  - The product config to validate and complement the user config.
-///
-pub fn validated_product_config(
-    resource: &SparkCluster,
-    product_config: &ProductConfigManager,
-) -> OperatorResult<ValidatedRoleConfigByPropertyKind> {
-    let mut roles = HashMap::new();
-    roles.insert(
-        SparkRole::Master.to_string(),
-        (
-            vec![
-                PropertyNameKind::File(SPARK_ENV_SH.to_string()),
-                PropertyNameKind::File(SPARK_DEFAULTS_CONF.to_string()),
-                PropertyNameKind::File(SPARK_METRICS_PROPERTIES.to_string()),
-                PropertyNameKind::Env,
-            ],
-            resource.spec.masters.clone().into(),
-        ),
-    );
-
-    roles.insert(
-        SparkRole::Worker.to_string(),
-        (
-            vec![
-                PropertyNameKind::File(SPARK_ENV_SH.to_string()),
-                PropertyNameKind::File(SPARK_DEFAULTS_CONF.to_string()),
-                PropertyNameKind::File(SPARK_METRICS_PROPERTIES.to_string()),
-                PropertyNameKind::Env,
-            ],
-            resource.spec.workers.clone().into(),
-        ),
-    );
-
-    if let Some(history_servers) = &resource.spec.history_servers {
-        roles.insert(
-            SparkRole::HistoryServer.to_string(),
-            (
-                vec![
-                    PropertyNameKind::File(SPARK_ENV_SH.to_string()),
-                    PropertyNameKind::File(SPARK_DEFAULTS_CONF.to_string()),
-                    PropertyNameKind::File(SPARK_METRICS_PROPERTIES.to_string()),
-                    PropertyNameKind::Env,
-                ],
-                history_servers.clone().into(),
-            ),
-        );
-    }
-
-    let role_config = transform_all_roles_to_config(resource, roles);
-
-    validate_all_roles_and_groups_config(
-        &resource.spec.version.to_string(),
-        &role_config,
-        product_config,
-        false,
-        false,
-    )
 }
 
 /// Create master url in format: <node_name>:<port>

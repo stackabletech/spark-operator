@@ -1,13 +1,13 @@
 //! Ensures that `Pod`s are configured and running for each [`SparkCluster`]
 
+use crate::config::convert_map_to_string;
 use crate::error::Error;
 use crate::error::Error::{
     ApplyRoleGroupConfig, ApplyRoleGroupService, ApplyRoleGroupStatefulSet, ApplyRoleService,
     ApplyStatus, GlobalServiceNameNotFound, ObjectMissingMetadataForOwnerRef,
+    SerializeSparkDefaults, SerializeSparkEnv, SerializeSparkMetrics,
 };
 use crate::util::version;
-use fnv::FnvHasher;
-use snafu::Snafu;
 use stackable_operator::product_config_utils::Configuration;
 use stackable_operator::role_utils::{Role, RoleGroupRef};
 use stackable_operator::{
@@ -24,7 +24,6 @@ use stackable_operator::{
         apimachinery::pkg::{api::resource::Quantity, apis::meta::v1::LabelSelector},
     },
     kube::{
-        self,
         api::ObjectMeta,
         runtime::{
             controller::{Context, ReconcilerAction},
@@ -32,20 +31,17 @@ use stackable_operator::{
         },
     },
     labels::{role_group_selector_labels, role_selector_labels},
-    product_config::{
-        types::PropertyNameKind, writer::to_java_properties_string, ProductConfigManager,
-    },
+    product_config::{types::PropertyNameKind, ProductConfigManager},
     product_config_utils::{transform_all_roles_to_config, validate_all_roles_and_groups_config},
 };
 use stackable_spark_crd::constants::{
-    APP_NAME, APP_PORT, FIELD_MANAGER_SCOPE, SPARK_DEFAULTS_CONF, SPARK_ENV_SH,
-    SPARK_METRICS_PROPERTIES,
+    APP_NAME, APP_PORT, FIELD_MANAGER_SCOPE, SPARK_DEFAULTS_CONF,
+    SPARK_DEFAULTS_HISTORY_WEBUI_PORT, SPARK_ENV_MASTER_PORT, SPARK_ENV_MASTER_WEBUI_PORT,
+    SPARK_ENV_SH, SPARK_ENV_WORKER_PORT, SPARK_ENV_WORKER_WEBUI_PORT, SPARK_METRICS_PROPERTIES,
 };
 use stackable_spark_crd::{SparkCluster, SparkClusterSpec, SparkClusterStatus, SparkRole};
 use std::{
-    borrow::Cow,
     collections::{BTreeMap, HashMap},
-    hash::Hasher,
     time::Duration,
 };
 
@@ -94,9 +90,9 @@ pub async fn reconcile(sc: SparkCluster, ctx: Context<Ctx>) -> Result<Reconciler
     for (role_name, group_config) in validated_config.iter() {
         for (rolegroup_name, rolegroup_config) in group_config.iter() {
             let rolegroup = sc.server_rolegroup_ref(role_name, rolegroup_name);
-            let rg_service = build_server_rolegroup_service(&rolegroup, &sc)?;
+            let rg_service = build_server_rolegroup_service(&sc, &rolegroup, rolegroup_config)?;
             let rg_configmap =
-                build_server_rolegroup_config_map(&rolegroup, &sc, rolegroup_config)?;
+                build_server_rolegroup_config_map(&sc, &rolegroup, rolegroup_config)?;
             let rg_statefulset =
                 build_server_rolegroup_statefulset(&rolegroup, &sc, rolegroup_config)?;
             client
@@ -202,72 +198,83 @@ pub fn build_server_role_service(sc: &SparkCluster) -> Result<Service, Error> {
 
 /// The rolegroup [`ConfigMap`] configures the rolegroup based on the configuration given by the administrator
 fn build_server_rolegroup_config_map(
-    rolegroup: &RoleGroupRef<SparkCluster>,
     sc: &SparkCluster,
-    server_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
+    rolegroup: &RoleGroupRef<SparkCluster>,
+    rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
 ) -> Result<ConfigMap, Error> {
-    unimplemented!();
-    // TODO:
-    // let mut zoo_cfg = server_config
-    //     .get(&PropertyNameKind::File(PROPERTIES_FILE.to_string()))
-    //     .cloned()
-    //     .unwrap_or_default();
-    // zoo_cfg.extend(sc.pods().into_iter().flatten().map(|pod| {
-    //     (
-    //         format!("server.{}", pod.zookeeper_myid),
-    //         format!("{}:2888:3888;{}", pod.fqdn(), APP_PORT),
-    //     )
-    // }));
-    // let zoo_cfg = zoo_cfg
-    //     .into_iter()
-    //     .map(|(k, v)| (k, Some(v)))
-    //     .collect::<Vec<_>>();
-    // ConfigMapBuilder::new()
-    //     .metadata(
-    //         ObjectMetaBuilder::new()
-    //             .name_and_namespace(sc)
-    //             .name(rolegroup.object_name())
-    //             .ownerreference_from_resource(sc, None, Some(true))
-    //             .map_err(|e| Error::ObjectMissingMetadataForOwnerRef {
-    //                 sc: ObjectRef::from_obj(sc),
-    //             })?
-    //             .with_recommended_labels(
-    //                 sc,
-    //                 APP_NAME,
-    //                 version(sc)?,
-    //                 &rolegroup.role,
-    //                 &rolegroup.role_group,
-    //             )
-    //             .build(),
-    //     )
-    // .add_data(
-    //     "zoo.cfg",
-    //     to_java_properties_string(zoo_cfg.iter().map(|(k, v)| (k, v))).with_context(|| {
-    //         SerializeZooCfg {
-    //             rolegroup: rolegroup.clone(),
-    //         }
-    //     })?,
-    // )
-    // .build()
-    // .map_err(|e| Error::BuildRoleGroupConfig {
-    //     source: e,
-    //     rolegroup: rolegroup.clone(),
-    // })
+    ConfigMapBuilder::new()
+        .metadata(
+            ObjectMetaBuilder::new()
+                .name_and_namespace(sc)
+                .name(rolegroup.object_name())
+                .ownerreference_from_resource(sc, None, Some(true))
+                .map_err(|_| Error::ObjectMissingMetadataForOwnerRef {
+                    sc: ObjectRef::from_obj(sc),
+                })?
+                .with_recommended_labels(
+                    sc,
+                    APP_NAME,
+                    version(sc)?,
+                    &rolegroup.role,
+                    &rolegroup.role_group,
+                )
+                .build(),
+        )
+        .add_data(
+            SPARK_DEFAULTS_CONF,
+            rolegroup_config
+                .get(&PropertyNameKind::File(SPARK_DEFAULTS_CONF.to_string()))
+                .map(|c| convert_map_to_string(c, " "))
+                .ok_or_else(|| SerializeSparkDefaults {
+                    rolegroup: rolegroup.clone(),
+                })?,
+        )
+        .add_data(
+            SPARK_ENV_SH,
+            rolegroup_config
+                .get(&PropertyNameKind::File(SPARK_ENV_SH.to_string()))
+                .map(|c| convert_map_to_string(c, "="))
+                .ok_or_else(|| SerializeSparkEnv {
+                    rolegroup: rolegroup.clone(),
+                })?,
+        )
+        .add_data(
+            SPARK_METRICS_PROPERTIES,
+            rolegroup_config
+                .get(&PropertyNameKind::File(
+                    SPARK_METRICS_PROPERTIES.to_string(),
+                ))
+                .and(sc.enable_monitoring())
+                .filter(|&monitoring_enabled_flag| monitoring_enabled_flag)
+                .map(|_| "\
+                            *.sink.prometheusServlet.class=org.apache.spark.metrics.sink.PrometheusServlet\n\
+                            *.sink.prometheusServlet.path=/metrics\n\
+                            *.source.jvm.class=org.apache.spark.metrics.source.JvmSource")
+                .ok_or_else(|| SerializeSparkMetrics {
+                    rolegroup: rolegroup.clone(),
+                })?
+        )
+        .build()
+        .map_err(|e| Error::BuildRoleGroupConfig {
+            source: e,
+            rolegroup: rolegroup.clone(),
+        })
 }
 
 /// The rolegroup [`Service`] is a headless service that allows direct access to the instances of a certain rolegroup
 ///
 /// This is mostly useful for internal communication between peers, or for clients that perform client-side load balancing.
 fn build_server_rolegroup_service(
-    rolegroup: &RoleGroupRef<SparkCluster>,
     sc: &SparkCluster,
+    rolegroup: &RoleGroupRef<SparkCluster>,
+    rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
 ) -> Result<Service, Error> {
     Ok(Service {
         metadata: ObjectMetaBuilder::new()
             .name_and_namespace(sc)
             .name(&rolegroup.object_name())
             .ownerreference_from_resource(sc, None, Some(true))
-            .map_err(|e| Error::ObjectMissingMetadataForOwnerRef {
+            .map_err(|_| Error::ObjectMissingMetadataForOwnerRef {
                 sc: ObjectRef::from_obj(sc),
             })?
             .with_recommended_labels(
@@ -280,20 +287,7 @@ fn build_server_rolegroup_service(
             .build(),
         spec: Some(ServiceSpec {
             cluster_ip: Some("None".to_string()),
-            ports: Some(vec![
-                ServicePort {
-                    name: Some("sc".to_string()),
-                    port: APP_PORT.into(),
-                    protocol: Some("TCP".to_string()),
-                    ..ServicePort::default()
-                },
-                ServicePort {
-                    name: Some("metrics".to_string()),
-                    port: 9505,
-                    protocol: Some("TCP".to_string()),
-                    ..ServicePort::default()
-                },
-            ]),
+            ports: build_service_ports(sc, rolegroup, rolegroup_config),
             selector: Some(role_group_selector_labels(
                 sc,
                 APP_NAME,
@@ -399,7 +393,7 @@ fn build_server_rolegroup_statefulset(
             .name_and_namespace(sc)
             .name(&rolegroup_ref.object_name())
             .ownerreference_from_resource(sc, None, Some(true))
-            .map_err(|e| Error::ObjectMissingMetadataForOwnerRef {
+            .map_err(|_| Error::ObjectMissingMetadataForOwnerRef {
                 sc: ObjectRef::from_obj(sc),
             })?
             .with_recommended_labels(
@@ -531,4 +525,72 @@ pub fn build_spark_role_properties(
         );
     }
     result
+}
+
+pub fn build_service_ports<'a>(
+    _sc: &SparkCluster,
+    rolegroup: &RoleGroupRef<SparkCluster>,
+    rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
+) -> Option<Vec<ServicePort>> {
+    Some(match serde_yaml::from_str(&rolegroup.role).unwrap() {
+        SparkRole::Master => vec![
+            ServicePort {
+                name: Some(String::from("app")),
+                port: rolegroup_config
+                    .get(&PropertyNameKind::File(String::from(SPARK_ENV_SH)))
+                    .and_then(|c| c.get(SPARK_ENV_MASTER_PORT))
+                    .unwrap_or(&String::from("7077"))
+                    .parse()
+                    .unwrap(),
+                protocol: Some("TCP".to_string()),
+                ..ServicePort::default()
+            },
+            ServicePort {
+                name: Some("web".to_string()),
+                port: rolegroup_config
+                    .get(&PropertyNameKind::File(String::from(SPARK_ENV_SH)))
+                    .and_then(|c| c.get(SPARK_ENV_MASTER_WEBUI_PORT))
+                    .unwrap_or(&String::from("8080"))
+                    .parse()
+                    .unwrap(),
+                protocol: Some("TCP".to_string()),
+                ..ServicePort::default()
+            },
+        ],
+        SparkRole::Worker => vec![
+            ServicePort {
+                name: Some(String::from("app")),
+                port: rolegroup_config
+                    .get(&PropertyNameKind::File(String::from(SPARK_ENV_SH)))
+                    .and_then(|c| c.get(SPARK_ENV_WORKER_PORT))
+                    .unwrap_or(&String::from("7077"))
+                    .parse()
+                    .unwrap(),
+                protocol: Some("TCP".to_string()),
+                ..ServicePort::default()
+            },
+            ServicePort {
+                name: Some("web".to_string()),
+                port: rolegroup_config
+                    .get(&PropertyNameKind::File(String::from(SPARK_ENV_SH)))
+                    .and_then(|c| c.get(SPARK_ENV_WORKER_WEBUI_PORT))
+                    .unwrap_or(&String::from("8080"))
+                    .parse()
+                    .unwrap(),
+                protocol: Some("TCP".to_string()),
+                ..ServicePort::default()
+            },
+        ],
+        SparkRole::HistoryServer => vec![ServicePort {
+            name: Some("web".to_string()),
+            port: rolegroup_config
+                .get(&PropertyNameKind::File(String::from(SPARK_ENV_SH)))
+                .and_then(|c| c.get(SPARK_DEFAULTS_HISTORY_WEBUI_PORT))
+                .unwrap_or(&String::from("8080"))
+                .parse()
+                .unwrap(),
+            protocol: Some("TCP".to_string()),
+            ..ServicePort::default()
+        }],
+    })
 }

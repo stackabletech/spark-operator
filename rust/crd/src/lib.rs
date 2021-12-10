@@ -53,22 +53,6 @@ pub struct SparkClusterSpec {
     pub stopped: Option<bool>,
 }
 
-impl SparkClusterSpec {
-    pub fn monitoring_enabled(&self) -> bool {
-        if let Some(CommonConfiguration {
-            config:
-                Some(CommonConfig {
-                    enable_monitoring: Some(enabled),
-                    ..
-                }),
-            ..
-        }) = &self.config
-        {
-            return *enabled;
-        }
-        false
-    }
-}
 #[derive(Clone, Default, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SparkClusterStatus {
@@ -217,6 +201,14 @@ impl SparkCluster {
                     pod_name: format!("{}-{}", rolegroup_ref.object_name(), i),
                 })
             }))
+    }
+
+    pub fn enable_monitoring(&self) -> Option<bool> {
+        self.spec
+            .config
+            .as_ref()
+            .and_then(|common_configuration| common_configuration.config.as_ref())
+            .and_then(|common_config| common_config.enable_monitoring)
     }
 }
 

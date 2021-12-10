@@ -87,9 +87,16 @@ pub enum Error {
         source: stackable_operator::error::Error,
         sc: ObjectRef<SparkCluster>,
     },
-    #[snafu(display("failed to serialize zoo.cfg for {}", rolegroup))]
-    SerializeZooCfg {
-        source: stackable_operator::product_config::writer::PropertiesWriterError,
+    #[snafu(display("failed to serialize spark-defaults.conf for {}", rolegroup))]
+    SerializeSparkDefaults {
+        rolegroup: RoleGroupRef<SparkCluster>,
+    },
+    #[snafu(display("failed to serialize spark-env.sh for {}", rolegroup))]
+    SerializeSparkEnv {
+        rolegroup: RoleGroupRef<SparkCluster>,
+    },
+    #[snafu(display("failed to serialize metrics.properties for {}", rolegroup))]
+    SerializeSparkMetrics {
         rolegroup: RoleGroupRef<SparkCluster>,
     },
     #[snafu(display("failed to build discovery ConfigMap for {}", sc))]
