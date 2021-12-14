@@ -9,7 +9,7 @@ use constants::{
     SPARK_ENV_WORKER_PORT, SPARK_ENV_WORKER_WEBUI_PORT,
 };
 use serde::{Deserialize, Serialize};
-use snafu::{OptionExt, Snafu};
+use snafu::Snafu;
 use stackable_operator::role_utils::RoleGroupRef;
 use stackable_operator::{
     kube::{runtime::reflector::ObjectRef, CustomResource},
@@ -33,9 +33,11 @@ const SPARK_ENV_SH: &str = "spark-env.sh";
     shortname = "sc",
     status = "SparkClusterStatus",
     namespaced,
-    kube_core = "stackable_operator::kube::core",
-    k8s_openapi = "stackable_operator::k8s_openapi",
-    schemars = "stackable_operator::schemars"
+    crates(
+        kube_core = "stackable_operator::kube::core",
+        k8s_openapi = "stackable_operator::k8s_openapi",
+        schemars = "stackable_operator::schemars"
+    )
 )]
 #[serde(rename_all = "camelCase")]
 pub struct SparkClusterSpec {
@@ -153,7 +155,7 @@ impl SparkCluster {
             .metadata
             .namespace
             .clone()
-            .context(NoNamespaceContext)?;
+            .ok_or_else(|| NoNamespaceError)?;
         Ok(self
             .spec
             .masters
