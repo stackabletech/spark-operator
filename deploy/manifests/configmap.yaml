@@ -366,7 +366,7 @@ data:
             type: "string"
           recommendedValues:
             - fromVersion: "1.1.1"
-              value: "/stackable/conf"
+              value: "/sc_stackable/config"
           roles:
             - name: "master"
               required: true

@@ -95,7 +95,7 @@ pub async fn reconcile(sc: SparkCluster, ctx: Context<Ctx>) -> Result<Reconciler
             let rg_configmap =
                 build_server_rolegroup_config_map(&sc, &rolegroup, rolegroup_config)?;
             let rg_statefulset =
-                build_server_rolegroup_statefulset(&sc, &rolegroup, rolegroup_config)?;
+                build_rolegroup_statefulset(&sc, &rolegroup, rolegroup_config)?;
             client
                 .apply_patch(FIELD_MANAGER_SCOPE, &rg_service, &rg_service)
                 .await
@@ -305,7 +305,249 @@ fn build_server_rolegroup_service(
 /// The rolegroup [`StatefulSet`] runs the rolegroup, as configured by the administrator.
 ///
 /// The [`Pod`](`stackable_operator::k8s_openapi::api::core::v1::Pod`)s are accessible through the corresponding [`Service`] (from [`build_rolegroup_service`]).
-fn build_server_rolegroup_statefulset(
+fn build_rolegroup_statefulset(
+    sc: &SparkCluster,
+    rolegroup_ref: &RoleGroupRef<SparkCluster>,
+    rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
+) -> Result<StatefulSet, Error> {
+    match serde_yaml::from_str(&rolegroup.role).unwrap() {
+        SparkRole::Master => build_master_stateful_set(sc, rolegroup_ref, rolegroup_config)
+        SparkRole::Worker => build_worker_stateful_set(sc, rolegroup_ref, rolegroup_config)
+        SparkRole::HistoryServer => build_history_stateful_set(sc, rolegroup_ref, rolegroup_config)
+    }
+}
+
+fn build_worker_stateful_set(
+    sc: &SparkCluster,
+    rolegroup_ref: &RoleGroupRef<SparkCluster>,
+    rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
+) -> Result<StatefulSet, Error> {
+    let rolegroup = sc
+        .spec
+        .worker
+        .as_ref()
+        .ok_or(Error::NoServerRole {
+            obj_ref: ObjectRef::from_obj(sc),
+        })?
+        .role_groups
+        .get(&rolegroup_ref.role_group);
+    let sc_version = version(sc)?;
+    let image = format!(
+        "docker.stackable.tech/stackable/spark:{}-stackable0",
+        sc_version
+    );
+    let env = rolegroup_config
+        .get(&PropertyNameKind::Env)
+        .iter()
+        .flat_map(|env_vars| env_vars.iter())
+        .map(|(k, v)| EnvVar {
+            name: k.clone(),
+            value: Some(v.clone()),
+            ..EnvVar::default()
+        })
+        .collect::<Vec<_>>();
+
+    let container_sc = ContainerBuilder::new("history")
+        .image(image)
+        .args(vec!["sbin/start-slave.sh".to_string(), build_master_service_url(sc)])
+        .add_env_vars(env)
+        .add_container_ports(build_container_ports(sc, rolegroup_ref, rolegroup_config))
+        .add_volume_mount("data", "/stackable/data")
+        .add_volume_mount("config", "/stackable/config")
+        .build();
+    Ok(StatefulSet {
+        metadata: ObjectMetaBuilder::new()
+            .name_and_namespace(sc)
+            .name(&rolegroup_ref.object_name())
+            .ownerreference_from_resource(sc, None, Some(true))
+            .map_err(|_| Error::ObjectMissingMetadataForOwnerRef {
+                sc: ObjectRef::from_obj(sc),
+            })?
+            .with_recommended_labels(
+                sc,
+                APP_NAME,
+                sc_version,
+                &rolegroup_ref.role,
+                &rolegroup_ref.role_group,
+            )
+            .build(),
+        spec: Some(StatefulSetSpec {
+            pod_management_policy: Some("Parallel".to_string()),
+            replicas: if sc.spec.stopped.unwrap_or(false) {
+                Some(0)
+            } else {
+                rolegroup.and_then(|rg| rg.replicas).map(i32::from)
+            },
+            selector: LabelSelector {
+                match_labels: Some(role_group_selector_labels(
+                    sc,
+                    APP_NAME,
+                    &rolegroup_ref.role,
+                    &rolegroup_ref.role_group,
+                )),
+                ..LabelSelector::default()
+            },
+            service_name: rolegroup_ref.object_name(),
+            template: PodBuilder::new()
+                .metadata_builder(|m| {
+                    m.with_recommended_labels(
+                        sc,
+                        APP_NAME,
+                        sc_version,
+                        &rolegroup_ref.role,
+                        &rolegroup_ref.role_group,
+                    )
+                })
+                .add_container(container_sc)
+                .add_volume(Volume {
+                    name: "config".to_string(),
+                    config_map: Some(ConfigMapVolumeSource {
+                        name: Some(rolegroup_ref.object_name()),
+                        ..ConfigMapVolumeSource::default()
+                    }),
+                    ..Volume::default()
+                })
+                .build_template(),
+            volume_claim_templates: Some(vec![PersistentVolumeClaim {
+                metadata: ObjectMeta {
+                    name: Some("data".to_string()),
+                    ..ObjectMeta::default()
+                },
+                spec: Some(PersistentVolumeClaimSpec {
+                    access_modes: Some(vec!["ReadWriteOnce".to_string()]),
+                    resources: Some(ResourceRequirements {
+                        requests: Some({
+                            let mut map = BTreeMap::new();
+                            map.insert("storage".to_string(), Quantity("1Gi".to_string()));
+                            map
+                        }),
+                        ..ResourceRequirements::default()
+                    }),
+                    ..PersistentVolumeClaimSpec::default()
+                }),
+                ..PersistentVolumeClaim::default()
+            }]),
+            ..StatefulSetSpec::default()
+        }),
+        status: None,
+    })
+}
+fn build_history_rolegroup_stateful_set(
+    sc: &SparkCluster,
+    rolegroup_ref: &RoleGroupRef<SparkCluster>,
+    rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
+) -> Result<StatefulSet, Error> {
+    let rolegroup = sc
+        .spec
+        .history_servers
+        .as_ref()
+        .ok_or(Error::NoServerRole {
+            obj_ref: ObjectRef::from_obj(sc),
+        })?
+        .role_groups
+        .get(&rolegroup_ref.role_group);
+    let sc_version = version(sc)?;
+    let image = format!(
+        "docker.stackable.tech/stackable/spark:{}-stackable0",
+        sc_version
+    );
+    let env = rolegroup_config
+        .get(&PropertyNameKind::Env)
+        .iter()
+        .flat_map(|env_vars| env_vars.iter())
+        .map(|(k, v)| EnvVar {
+            name: k.clone(),
+            value: Some(v.clone()),
+            ..EnvVar::default()
+        })
+        .collect::<Vec<_>>();
+
+    let container_sc = ContainerBuilder::new("history")
+        .image(image)
+        .args(vec!["sbin/start-history-server.sh".to_string()])
+        .add_env_vars(env)
+        .add_container_ports(build_container_ports(sc, rolegroup_ref, rolegroup_config))
+        .add_volume_mount("data", "/stackable/data")
+        .add_volume_mount("config", "/stackable/config")
+        .build();
+    Ok(StatefulSet {
+        metadata: ObjectMetaBuilder::new()
+            .name_and_namespace(sc)
+            .name(&rolegroup_ref.object_name())
+            .ownerreference_from_resource(sc, None, Some(true))
+            .map_err(|_| Error::ObjectMissingMetadataForOwnerRef {
+                sc: ObjectRef::from_obj(sc),
+            })?
+            .with_recommended_labels(
+                sc,
+                APP_NAME,
+                sc_version,
+                &rolegroup_ref.role,
+                &rolegroup_ref.role_group,
+            )
+            .build(),
+        spec: Some(StatefulSetSpec {
+            pod_management_policy: Some("Parallel".to_string()),
+            replicas: if sc.spec.stopped.unwrap_or(false) {
+                Some(0)
+            } else {
+                rolegroup.and_then(|rg| rg.replicas).map(i32::from)
+            },
+            selector: LabelSelector {
+                match_labels: Some(role_group_selector_labels(
+                    sc,
+                    APP_NAME,
+                    &rolegroup_ref.role,
+                    &rolegroup_ref.role_group,
+                )),
+                ..LabelSelector::default()
+            },
+            service_name: rolegroup_ref.object_name(),
+            template: PodBuilder::new()
+                .metadata_builder(|m| {
+                    m.with_recommended_labels(
+                        sc,
+                        APP_NAME,
+                        sc_version,
+                        &rolegroup_ref.role,
+                        &rolegroup_ref.role_group,
+                    )
+                })
+                .add_container(container_sc)
+                .add_volume(Volume {
+                    name: "config".to_string(),
+                    config_map: Some(ConfigMapVolumeSource {
+                        name: Some(rolegroup_ref.object_name()),
+                        ..ConfigMapVolumeSource::default()
+                    }),
+                    ..Volume::default()
+                })
+                .build_template(),
+            volume_claim_templates: Some(vec![PersistentVolumeClaim {
+                metadata: ObjectMeta {
+                    name: Some("data".to_string()),
+                    ..ObjectMeta::default()
+                },
+                spec: Some(PersistentVolumeClaimSpec {
+                    access_modes: Some(vec!["ReadWriteOnce".to_string()]),
+                    resources: Some(ResourceRequirements {
+                        requests: Some({
+                            let mut map = BTreeMap::new();
+                            map.insert("storage".to_string(), Quantity("1Gi".to_string()));
+                            map
+                        }),
+                        ..ResourceRequirements::default()
+                    }),
+                    ..PersistentVolumeClaimSpec::default()
+                }),
+                ..PersistentVolumeClaim::default()
+            }]),
+            ..StatefulSetSpec::default()
+        }),
+        status: None,
+    })
+}
+fn build_master_stateful_set(
     sc: &SparkCluster,
     rolegroup_ref: &RoleGroupRef<SparkCluster>,
     rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
@@ -335,7 +577,7 @@ fn build_server_rolegroup_statefulset(
         })
         .collect::<Vec<_>>();
 
-    let container_sc = ContainerBuilder::new("spark")
+    let container_sc = ContainerBuilder::new("master")
         .image(image)
         .args(vec!["sbin/start-master.sh".to_string()])
         .add_env_vars(env)
@@ -471,7 +713,7 @@ pub fn build_spark_role_properties(
                 vec![
                     PropertyNameKind::File(SPARK_ENV_SH.to_string()),
                     PropertyNameKind::File(SPARK_DEFAULTS_CONF.to_string()),
-                    PropertyNameKind::File(SPARK_METRICS_PROPERTIES.to_string()),
+                    PropertyNameKind::File(SPAARK_METRICS_PROPERTIES.to_string()),
                     PropertyNameKind::Env,
                 ],
                 history_servers.clone().erase(),
@@ -570,22 +812,27 @@ fn build_ports<'a>(
         )],
     }
 }
-/*
-       // Only allow the global load balancing service to send traffic to pods that are members of the quorum
-       // This also acts as a hint to the StatefulSet controller to wait for each pod to enter quorum before taking down the next
-       .readiness_probe(Probe {
-           exec: Some(ExecAction {
-               command: Some(vec![
-                   "bash".to_string(),
-                   "-c".to_string(),
-                   // We don't have telnet or netcat in the container images, but
-                   // we can use Bash's virtual /dev/tcp filesystem to accomplish the same thing
-                   format!(
-                       "exec 3<>/dev/tcp/localhost/$SPARK_ENV_MASTER_PORT && echo srvr >&3 && grep '^Mode: ' <&3",
-                   ),
-               ]),
-           }),
-           period_seconds: Some(1),
-           ..Probe::default()
-       })
-*/
+fn build_master_service_url(
+    _sc: &SparkCluster,
+) -> Result<String, Error> {
+    Ok("spark://spark:7077".to_string())
+}
+    /*
+          // Only allow the global load balancing service to send traffic to pods that are members of the quorum
+          // This also acts as a hint to the StatefulSet controller to wait for each pod to enter quorum before taking down the next
+          .readiness_probe(Probe {
+              exec: Some(ExecAction {
+                  command: Some(vec![
+                      "bash".to_string(),
+                      "-c".to_string(),
+                      // We don't have telnet or netcat in the container images, but
+                      // we can use Bash's virtual /dev/tcp filesystem to accomplish the same thing
+                      format!(
+                          "exec 3<>/dev/tcp/localhost/$SPARK_ENV_MASTER_PORT && echo srvr >&3 && grep '^Mode: ' <&3",
+                      ),
+                  ]),
+              }),
+              period_seconds: Some(1),
+              ..Probe::default()
+          })
+   */

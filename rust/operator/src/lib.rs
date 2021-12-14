@@ -534,7 +534,7 @@ impl SparkState {
 
         if let Some(config_map_data) = config_maps.get(CONFIG_MAP_TYPE_CONF) {
             if let Some(name) = config_map_data.metadata.name.as_ref() {
-                cb.add_volume_mount("config", "/stackable/conf");
+                cb.add_volume_mount("config", "/sc_stackable/config");
                 pod_builder.add_volume(VolumeBuilder::new("config").with_config_map(name).build());
             } else {
                 return Err(error::Error::MissingConfigMapNameError {
