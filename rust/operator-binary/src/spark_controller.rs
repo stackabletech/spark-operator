@@ -310,10 +310,10 @@ fn build_rolegroup_statefulset(
     rolegroup_ref: &RoleGroupRef<SparkCluster>,
     rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
 ) -> Result<StatefulSet, Error> {
-    match serde_yaml::from_str(&rolegroup.role).unwrap() {
-        SparkRole::Master => build_master_stateful_set(sc, rolegroup_ref, rolegroup_config)
-        SparkRole::Worker => build_worker_stateful_set(sc, rolegroup_ref, rolegroup_config)
-        SparkRole::HistoryServer => build_history_stateful_set(sc, rolegroup_ref, rolegroup_config)
+    match serde_yaml::from_str(&rolegroup_ref.role).unwrap() {
+        SparkRole::Master => build_master_stateful_set(sc, rolegroup_ref, rolegroup_config),
+        SparkRole::Worker => build_worker_stateful_set(sc, rolegroup_ref, rolegroup_config),
+        SparkRole::HistoryServer => build_history_stateful_set(sc, rolegroup_ref, rolegroup_config),
     }
 }
 
@@ -324,7 +324,7 @@ fn build_worker_stateful_set(
 ) -> Result<StatefulSet, Error> {
     let rolegroup = sc
         .spec
-        .worker
+        .workers
         .as_ref()
         .ok_or(Error::NoServerRole {
             obj_ref: ObjectRef::from_obj(sc),
@@ -349,7 +349,7 @@ fn build_worker_stateful_set(
 
     let container_sc = ContainerBuilder::new("history")
         .image(image)
-        .args(vec!["sbin/start-slave.sh".to_string(), build_master_service_url(sc)])
+        .args(vec!["sbin/start-slave.sh".to_string(), build_master_service_url(sc)?])
         .add_env_vars(env)
         .add_container_ports(build_container_ports(sc, rolegroup_ref, rolegroup_config))
         .add_volume_mount("data", "/stackable/data")
@@ -432,7 +432,7 @@ fn build_worker_stateful_set(
         status: None,
     })
 }
-fn build_history_rolegroup_stateful_set(
+fn build_history_stateful_set(
     sc: &SparkCluster,
     rolegroup_ref: &RoleGroupRef<SparkCluster>,
     rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
@@ -467,7 +467,7 @@ fn build_history_rolegroup_stateful_set(
         .args(vec!["sbin/start-history-server.sh".to_string()])
         .add_env_vars(env)
         .add_container_ports(build_container_ports(sc, rolegroup_ref, rolegroup_config))
-        .add_volume_mount("data", "/stackable/data")
+        .add_volume_mount("log", "/stackable/data/log")
         .add_volume_mount("config", "/stackable/config")
         .build();
     Ok(StatefulSet {
@@ -525,7 +525,7 @@ fn build_history_rolegroup_stateful_set(
                 .build_template(),
             volume_claim_templates: Some(vec![PersistentVolumeClaim {
                 metadata: ObjectMeta {
-                    name: Some("data".to_string()),
+                    name: Some("log".to_string()),
                     ..ObjectMeta::default()
                 },
                 spec: Some(PersistentVolumeClaimSpec {
@@ -713,7 +713,7 @@ pub fn build_spark_role_properties(
                 vec![
                     PropertyNameKind::File(SPARK_ENV_SH.to_string()),
                     PropertyNameKind::File(SPARK_DEFAULTS_CONF.to_string()),
-                    PropertyNameKind::File(SPAARK_METRICS_PROPERTIES.to_string()),
+                    PropertyNameKind::File(SPARK_METRICS_PROPERTIES.to_string()),
                     PropertyNameKind::Env,
                 ],
                 history_servers.clone().erase(),
@@ -815,7 +815,7 @@ fn build_ports<'a>(
 fn build_master_service_url(
     _sc: &SparkCluster,
 ) -> Result<String, Error> {
-    Ok("spark://spark:7077".to_string())
+    Ok("spark://simple-master-default:7078".to_string())
 }
     /*
           // Only allow the global load balancing service to send traffic to pods that are members of the quorum
