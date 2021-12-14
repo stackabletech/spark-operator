@@ -8,6 +8,7 @@ use crate::error::Error::{
     SerializeSparkDefaults, SerializeSparkEnv, SerializeSparkMetrics,
 };
 use crate::util::version;
+use stackable_operator::k8s_openapi::api::core::v1::ContainerPort;
 use stackable_operator::product_config_utils::Configuration;
 use stackable_operator::role_utils::{Role, RoleGroupRef};
 use stackable_operator::{
@@ -94,7 +95,7 @@ pub async fn reconcile(sc: SparkCluster, ctx: Context<Ctx>) -> Result<Reconciler
             let rg_configmap =
                 build_server_rolegroup_config_map(&sc, &rolegroup, rolegroup_config)?;
             let rg_statefulset =
-                build_server_rolegroup_statefulset(&rolegroup, &sc, rolegroup_config)?;
+                build_server_rolegroup_statefulset(&sc, &rolegroup, rolegroup_config)?;
             client
                 .apply_patch(FIELD_MANAGER_SCOPE, &rg_service, &rg_service)
                 .await
@@ -287,7 +288,7 @@ fn build_server_rolegroup_service(
             .build(),
         spec: Some(ServiceSpec {
             cluster_ip: Some("None".to_string()),
-            ports: build_service_ports(sc, rolegroup, rolegroup_config),
+            ports: Some(build_service_ports(sc, rolegroup, rolegroup_config)),
             selector: Some(role_group_selector_labels(
                 sc,
                 APP_NAME,
@@ -305,9 +306,9 @@ fn build_server_rolegroup_service(
 ///
 /// The [`Pod`](`stackable_operator::k8s_openapi::api::core::v1::Pod`)s are accessible through the corresponding [`Service`] (from [`build_rolegroup_service`]).
 fn build_server_rolegroup_statefulset(
-    rolegroup_ref: &RoleGroupRef<SparkCluster>,
     sc: &SparkCluster,
-    server_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
+    rolegroup_ref: &RoleGroupRef<SparkCluster>,
+    rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
 ) -> Result<StatefulSet, Error> {
     let rolegroup = sc
         .spec
@@ -323,7 +324,7 @@ fn build_server_rolegroup_statefulset(
         "docker.stackable.tech/stackable/spark:{}-stackable0",
         sc_version
     );
-    let env = server_config
+    let env = rolegroup_config
         .get(&PropertyNameKind::Env)
         .iter()
         .flat_map(|env_vars| env_vars.iter())
@@ -333,58 +334,12 @@ fn build_server_rolegroup_statefulset(
             ..EnvVar::default()
         })
         .collect::<Vec<_>>();
-    let container_decide_myid = ContainerBuilder::new("decide-myid")
-        .image(&image)
-        .args(vec![
-            "sh".to_string(),
-            "-c".to_string(),
-            "expr $MYID_OFFSET + $(echo $POD_NAME | sed 's/.*-//') > /stackable/data/myid"
-                .to_string(),
-        ])
-        .add_env_vars(env.clone())
-        .add_env_vars(vec![EnvVar {
-            name: "POD_NAME".to_string(),
-            value_from: Some(EnvVarSource {
-                field_ref: Some(ObjectFieldSelector {
-                    api_version: Some("v1".to_string()),
-                    field_path: "metadata.name".to_string(),
-                }),
-                ..EnvVarSource::default()
-            }),
-            ..EnvVar::default()
-        }])
-        .add_volume_mount("data", "/stackable/data")
-        .build();
+
     let container_sc = ContainerBuilder::new("spark")
         .image(image)
-        .args(vec![
-            "bin/scServer.sh".to_string(),
-            "start-foreground".to_string(),
-            "/stackable/config/zoo.cfg".to_string(),
-        ])
+        .args(vec!["sbin/start-master.sh".to_string()])
         .add_env_vars(env)
-        // Only allow the global load balancing service to send traffic to pods that are members of the quorum
-        // This also acts as a hint to the StatefulSet controller to wait for each pod to enter quorum before taking down the next
-        .readiness_probe(Probe {
-            exec: Some(ExecAction {
-                command: Some(vec![
-                    "bash".to_string(),
-                    "-c".to_string(),
-                    // We don't have telnet or netcat in the container images, but
-                    // we can use Bash's virtual /dev/tcp filesystem to accomplish the same thing
-                    format!(
-                        "exec 3<>/dev/tcp/localhost/{} && echo srvr >&3 && grep '^Mode: ' <&3",
-                        APP_PORT
-                    ),
-                ]),
-            }),
-            period_seconds: Some(1),
-            ..Probe::default()
-        })
-        .add_container_port("sc", APP_PORT.into())
-        .add_container_port("sc-leader", 2888)
-        .add_container_port("sc-election", 3888)
-        .add_container_port("metrics", 9505)
+        .add_container_ports(build_container_ports(sc, rolegroup_ref, rolegroup_config))
         .add_volume_mount("data", "/stackable/data")
         .add_volume_mount("config", "/stackable/config")
         .build();
@@ -431,7 +386,6 @@ fn build_server_rolegroup_statefulset(
                         &rolegroup_ref.role_group,
                     )
                 })
-                .add_init_container(container_decide_myid)
                 .add_container(container_sc)
                 .add_volume(Volume {
                     name: "config".to_string(),
@@ -527,70 +481,111 @@ pub fn build_spark_role_properties(
     result
 }
 
-pub fn build_service_ports<'a>(
+fn build_service_ports<'a>(
     _sc: &SparkCluster,
     rolegroup: &RoleGroupRef<SparkCluster>,
     rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
-) -> Option<Vec<ServicePort>> {
-    Some(match serde_yaml::from_str(&rolegroup.role).unwrap() {
+) -> Vec<ServicePort> {
+    build_ports(_sc, rolegroup, rolegroup_config)
+        .iter()
+        .map(|(name, value)| ServicePort {
+            name: Some(name.clone()),
+            port: *value,
+            protocol: Some("TCP".to_string()),
+            ..ServicePort::default()
+        })
+        .collect()
+}
+
+fn build_container_ports<'a>(
+    _sc: &SparkCluster,
+    rolegroup: &RoleGroupRef<SparkCluster>,
+    rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
+) -> Vec<ContainerPort> {
+    build_ports(_sc, rolegroup, rolegroup_config)
+        .iter()
+        .map(|(name, value)| ContainerPort {
+            name: Some(name.clone()),
+            container_port: *value,
+            protocol: Some("TCP".to_string()),
+            ..ContainerPort::default()
+        })
+        .collect()
+}
+
+fn build_ports<'a>(
+    _sc: &SparkCluster,
+    rolegroup: &RoleGroupRef<SparkCluster>,
+    rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
+) -> Vec<(String, i32)> {
+    match serde_yaml::from_str(&rolegroup.role).unwrap() {
         SparkRole::Master => vec![
-            ServicePort {
-                name: Some(String::from("app")),
-                port: rolegroup_config
+            (
+                "master".to_string(),
+                rolegroup_config
                     .get(&PropertyNameKind::File(String::from(SPARK_ENV_SH)))
                     .and_then(|c| c.get(SPARK_ENV_MASTER_PORT))
                     .unwrap_or(&String::from("7077"))
                     .parse()
                     .unwrap(),
-                protocol: Some("TCP".to_string()),
-                ..ServicePort::default()
-            },
-            ServicePort {
-                name: Some("web".to_string()),
-                port: rolegroup_config
+            ),
+            (
+                "web".to_string(),
+                rolegroup_config
                     .get(&PropertyNameKind::File(String::from(SPARK_ENV_SH)))
                     .and_then(|c| c.get(SPARK_ENV_MASTER_WEBUI_PORT))
                     .unwrap_or(&String::from("8080"))
                     .parse()
                     .unwrap(),
-                protocol: Some("TCP".to_string()),
-                ..ServicePort::default()
-            },
+            ),
         ],
         SparkRole::Worker => vec![
-            ServicePort {
-                name: Some(String::from("app")),
-                port: rolegroup_config
+            (
+                "worker".to_string(),
+                rolegroup_config
                     .get(&PropertyNameKind::File(String::from(SPARK_ENV_SH)))
                     .and_then(|c| c.get(SPARK_ENV_WORKER_PORT))
                     .unwrap_or(&String::from("7077"))
                     .parse()
                     .unwrap(),
-                protocol: Some("TCP".to_string()),
-                ..ServicePort::default()
-            },
-            ServicePort {
-                name: Some("web".to_string()),
-                port: rolegroup_config
+            ),
+            (
+                "web".to_string(),
+                rolegroup_config
                     .get(&PropertyNameKind::File(String::from(SPARK_ENV_SH)))
                     .and_then(|c| c.get(SPARK_ENV_WORKER_WEBUI_PORT))
                     .unwrap_or(&String::from("8080"))
                     .parse()
                     .unwrap(),
-                protocol: Some("TCP".to_string()),
-                ..ServicePort::default()
-            },
+            ),
         ],
-        SparkRole::HistoryServer => vec![ServicePort {
-            name: Some("web".to_string()),
-            port: rolegroup_config
+        SparkRole::HistoryServer => vec![(
+            "web".to_string(),
+            rolegroup_config
                 .get(&PropertyNameKind::File(String::from(SPARK_ENV_SH)))
                 .and_then(|c| c.get(SPARK_DEFAULTS_HISTORY_WEBUI_PORT))
                 .unwrap_or(&String::from("8080"))
                 .parse()
                 .unwrap(),
-            protocol: Some("TCP".to_string()),
-            ..ServicePort::default()
-        }],
-    })
+        )],
+    }
 }
+/*
+       // Only allow the global load balancing service to send traffic to pods that are members of the quorum
+       // This also acts as a hint to the StatefulSet controller to wait for each pod to enter quorum before taking down the next
+       .readiness_probe(Probe {
+           exec: Some(ExecAction {
+               command: Some(vec![
+                   "bash".to_string(),
+                   "-c".to_string(),
+                   // We don't have telnet or netcat in the container images, but
+                   // we can use Bash's virtual /dev/tcp filesystem to accomplish the same thing
+                   format!(
+                       "exec 3<>/dev/tcp/localhost/$SPARK_ENV_MASTER_PORT && echo srvr >&3 && grep '^Mode: ' <&3",
+                   ),
+               ]),
+           }),
+           period_seconds: Some(1),
+           ..Probe::default()
+       })
+*/
