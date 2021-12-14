@@ -1,10 +1,8 @@
 //! Ensures that `Pod`s are configured and running for each [`SparkCluster`]
 
-use crate::config::convert_map_to_string;
 use crate::error::Error;
 use crate::error::Error::{
-    ApplyRoleGroupConfig, ApplyRoleGroupService, ApplyRoleGroupStatefulSet, ApplyRoleService,
-    ApplyStatus, GlobalServiceNameNotFound, ObjectMissingMetadataForOwnerRef,
+    ApplyRoleGroupConfig, ApplyRoleGroupService, ApplyRoleGroupStatefulSet, ApplyStatus,
     SerializeSparkDefaults, SerializeSparkEnv, SerializeSparkMetrics,
 };
 use crate::util::version;
@@ -17,9 +15,9 @@ use stackable_operator::{
         api::{
             apps::v1::{StatefulSet, StatefulSetSpec},
             core::v1::{
-                ConfigMap, ConfigMapVolumeSource, EnvVar, EnvVarSource, ExecAction,
-                ObjectFieldSelector, PersistentVolumeClaim, PersistentVolumeClaimSpec, Probe,
-                ResourceRequirements, Service, ServicePort, ServiceSpec, Volume,
+                ConfigMap, ConfigMapVolumeSource, EnvVar, PersistentVolumeClaim,
+                PersistentVolumeClaimSpec, ResourceRequirements, Service, ServicePort, ServiceSpec,
+                Volume,
             },
         },
         apimachinery::pkg::{api::resource::Quantity, apis::meta::v1::LabelSelector},
@@ -31,14 +29,14 @@ use stackable_operator::{
             reflector::ObjectRef,
         },
     },
-    labels::{role_group_selector_labels, role_selector_labels},
+    labels::role_group_selector_labels,
     product_config::{types::PropertyNameKind, ProductConfigManager},
     product_config_utils::{transform_all_roles_to_config, validate_all_roles_and_groups_config},
 };
 use stackable_spark_crd::constants::{
-    APP_NAME, APP_PORT, FIELD_MANAGER_SCOPE, SPARK_DEFAULTS_CONF,
-    SPARK_DEFAULTS_HISTORY_WEBUI_PORT, SPARK_ENV_MASTER_PORT, SPARK_ENV_MASTER_WEBUI_PORT,
-    SPARK_ENV_SH, SPARK_ENV_WORKER_PORT, SPARK_ENV_WORKER_WEBUI_PORT, SPARK_METRICS_PROPERTIES,
+    APP_NAME, FIELD_MANAGER_SCOPE, SPARK_DEFAULTS_CONF, SPARK_DEFAULTS_HISTORY_WEBUI_PORT,
+    SPARK_ENV_MASTER_PORT, SPARK_ENV_MASTER_WEBUI_PORT, SPARK_ENV_SH, SPARK_ENV_WORKER_PORT,
+    SPARK_ENV_WORKER_WEBUI_PORT, SPARK_METRICS_PROPERTIES,
 };
 use stackable_spark_crd::{SparkCluster, SparkClusterSpec, SparkClusterStatus, SparkRole};
 use std::{
@@ -75,27 +73,13 @@ pub async fn reconcile(sc: SparkCluster, ctx: Context<Ctx>) -> Result<Reconciler
         sc: sc_ref.clone(),
     })?;
 
-    let server_role_service = build_server_role_service(&sc)?;
-    let server_role_service = client
-        .apply_patch(
-            FIELD_MANAGER_SCOPE,
-            &server_role_service,
-            &server_role_service,
-        )
-        .await
-        .map_err(|e| ApplyRoleService {
-            source: e,
-            sc: sc_ref.clone(),
-        })?;
-
     for (role_name, group_config) in validated_config.iter() {
         for (rolegroup_name, rolegroup_config) in group_config.iter() {
             let rolegroup = sc.server_rolegroup_ref(role_name, rolegroup_name);
             let rg_service = build_server_rolegroup_service(&sc, &rolegroup, rolegroup_config)?;
             let rg_configmap =
                 build_server_rolegroup_config_map(&sc, &rolegroup, rolegroup_config)?;
-            let rg_statefulset =
-                build_rolegroup_statefulset(&sc, &rolegroup, rolegroup_config)?;
+            let rg_statefulset = build_rolegroup_statefulset(&sc, &rolegroup, rolegroup_config)?;
             client
                 .apply_patch(FIELD_MANAGER_SCOPE, &rg_service, &rg_service)
                 .await
@@ -157,43 +141,6 @@ pub async fn reconcile(sc: SparkCluster, ctx: Context<Ctx>) -> Result<Reconciler
 
     Ok(ReconcilerAction {
         requeue_after: None,
-    })
-}
-
-/// The server-role service is the primary endpoint that should be used by clients that do not perform internal load balancing,
-/// including targets outside of the cluster.
-///
-/// Note that you should generally *not* hard-code clients to use these services; instead, create a [`ZookeeperZnode`](`stackable_zookeeper_crd::ZookeeperZnode`)
-/// and use the connection string that it gives you.
-pub fn build_server_role_service(sc: &SparkCluster) -> Result<Service, Error> {
-    let role_name = SparkRole::Master.to_string();
-    let role_svc_name = sc
-        .server_role_service_name()
-        .ok_or(GlobalServiceNameNotFound {
-            obj_ref: ObjectRef::from_obj(sc),
-        })?;
-    Ok(Service {
-        metadata: ObjectMetaBuilder::new()
-            .name_and_namespace(sc)
-            .name(&role_svc_name)
-            .ownerreference_from_resource(sc, None, Some(true))
-            .map_err(|_| ObjectMissingMetadataForOwnerRef {
-                sc: ObjectRef::from_obj(sc),
-            })?
-            .with_recommended_labels(sc, APP_NAME, version(sc)?, &role_name, "global")
-            .build(),
-        spec: Some(ServiceSpec {
-            ports: Some(vec![ServicePort {
-                name: Some("spark".to_string()),
-                port: APP_PORT.into(),
-                protocol: Some("TCP".to_string()),
-                ..ServicePort::default()
-            }]),
-            selector: Some(role_selector_labels(sc, APP_NAME, &role_name)),
-            type_: Some("NodePort".to_string()),
-            ..ServiceSpec::default()
-        }),
-        status: None,
     })
 }
 
@@ -349,7 +296,10 @@ fn build_worker_stateful_set(
 
     let container_sc = ContainerBuilder::new("history")
         .image(image)
-        .args(vec!["sbin/start-slave.sh".to_string(), build_master_service_url(sc)?])
+        .args(vec![
+            "sbin/start-slave.sh".to_string(),
+            build_master_service_url(sc)?,
+        ])
         .add_env_vars(env)
         .add_container_ports(build_container_ports(sc, rolegroup_ref, rolegroup_config))
         .add_volume_mount("data", "/stackable/data")
@@ -723,7 +673,7 @@ pub fn build_spark_role_properties(
     result
 }
 
-fn build_service_ports<'a>(
+fn build_service_ports(
     _sc: &SparkCluster,
     rolegroup: &RoleGroupRef<SparkCluster>,
     rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
@@ -739,7 +689,7 @@ fn build_service_ports<'a>(
         .collect()
 }
 
-fn build_container_ports<'a>(
+fn build_container_ports(
     _sc: &SparkCluster,
     rolegroup: &RoleGroupRef<SparkCluster>,
     rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
@@ -755,7 +705,7 @@ fn build_container_ports<'a>(
         .collect()
 }
 
-fn build_ports<'a>(
+fn build_ports(
     _sc: &SparkCluster,
     rolegroup: &RoleGroupRef<SparkCluster>,
     rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
@@ -812,27 +762,20 @@ fn build_ports<'a>(
         )],
     }
 }
-fn build_master_service_url(
-    _sc: &SparkCluster,
-) -> Result<String, Error> {
+fn build_master_service_url(_sc: &SparkCluster) -> Result<String, Error> {
     Ok("spark://simple-master-default:7078".to_string())
 }
-    /*
-          // Only allow the global load balancing service to send traffic to pods that are members of the quorum
-          // This also acts as a hint to the StatefulSet controller to wait for each pod to enter quorum before taking down the next
-          .readiness_probe(Probe {
-              exec: Some(ExecAction {
-                  command: Some(vec![
-                      "bash".to_string(),
-                      "-c".to_string(),
-                      // We don't have telnet or netcat in the container images, but
-                      // we can use Bash's virtual /dev/tcp filesystem to accomplish the same thing
-                      format!(
-                          "exec 3<>/dev/tcp/localhost/$SPARK_ENV_MASTER_PORT && echo srvr >&3 && grep '^Mode: ' <&3",
-                      ),
-                  ]),
-              }),
-              period_seconds: Some(1),
-              ..Probe::default()
-          })
-   */
+
+/// Unroll a map into a String using a given assignment character (for writing config maps)
+///
+/// # Arguments
+/// * `map`        - Map containing option_name:option_value pairs
+/// * `assignment` - Used character to assign option_value to option_name (e.g. "=", " ", ":" ...)
+///
+fn convert_map_to_string(map: &BTreeMap<String, String>, assignment: &str) -> String {
+    let mut data = String::new();
+    for (key, value) in map {
+        data.push_str(format!("{}{}{}\n", key, assignment, value).as_str());
+    }
+    data
+}
