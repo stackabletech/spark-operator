@@ -8,9 +8,10 @@ use std::num::TryFromIntError;
 #[derive(Snafu, Debug)]
 #[allow(clippy::enum_variant_names)]
 pub enum Error {
-    #[snafu(display("object {} is missing metadata to build owner reference", sc))]
+    #[snafu(display("object {} is missing metadata to build owner reference", obj_ref))]
     ObjectMissingMetadataForOwnerRef {
-        sc: ObjectRef<SparkCluster>,
+        source: stackable_operator::error::Error,
+        obj_ref: ObjectRef<SparkCluster>,
     },
     #[snafu(display("chroot path {} was relative (must be absolute)", chroot))]
     RelativeChroot {
@@ -114,4 +115,6 @@ pub enum Error {
         source: stackable_operator::error::Error,
         sc: ObjectRef<SparkCluster>,
     },
+    #[snafu(display("a master role group named 'default' is expected in the cluster defintion"))]
+    MasterRoleGroupDefaultExpected,
 }

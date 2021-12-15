@@ -4,7 +4,7 @@ build = "build.rs"
 description = "Stackable Operator for Apache Spark"
 edition = "2018"
 license = "OSL-3.0"
-name = "stackable-spark-operator-binary"
+name = "stackable-spark-operator"
 repository = "https://github.com/stackabletech/spark-operator"
 version = "0.5.0-nightly"
 

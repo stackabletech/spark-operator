@@ -1575,7 +1575,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "stackable-spark-operator-binary"
+name = "stackable-spark-operator"
 version = "0.5.0-nightly"
 dependencies = [
  "anyhow",

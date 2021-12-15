@@ -2,7 +2,8 @@
 
 use crate::error::Error;
 use crate::error::Error::{
-    ApplyRoleGroupConfig, ApplyRoleGroupService, ApplyRoleGroupStatefulSet, ApplyStatus,
+    ApplyRoleGroupConfig, ApplyRoleGroupService, ApplyRoleGroupStatefulSet, ApplyRoleService,
+    GlobalServiceNameNotFound, MasterRoleGroupDefaultExpected, ObjectMissingMetadataForOwnerRef,
     SerializeSparkDefaults, SerializeSparkEnv, SerializeSparkMetrics,
 };
 use crate::util::version;
@@ -29,7 +30,7 @@ use stackable_operator::{
             reflector::ObjectRef,
         },
     },
-    labels::role_group_selector_labels,
+    labels::{role_group_selector_labels, role_selector_labels},
     product_config::{types::PropertyNameKind, ProductConfigManager},
     product_config_utils::{transform_all_roles_to_config, validate_all_roles_and_groups_config},
 };
@@ -73,6 +74,35 @@ pub async fn reconcile(sc: SparkCluster, ctx: Context<Ctx>) -> Result<Reconciler
         sc: sc_ref.clone(),
     })?;
 
+    let default_master_role_service_ports = validated_config
+        .iter()
+        .filter(|(role_name, _groups)| "master".eq(*role_name))
+        .flat_map(|(_role_name, groups)| groups)
+        .filter(|(group_name, _group_config)| "default".eq(*group_name))
+        .take(1)
+        .next()
+        .map(|(rolegroup, rolegroup_config)| {
+            build_service_ports(
+                &sc,
+                &sc.server_rolegroup_ref("master", rolegroup),
+                rolegroup_config,
+            )
+        })
+        .ok_or(MasterRoleGroupDefaultExpected)?;
+
+    let master_role_service = build_master_role_service(&sc, default_master_role_service_ports)?;
+    client
+        .apply_patch(
+            FIELD_MANAGER_SCOPE,
+            &master_role_service,
+            &master_role_service,
+        )
+        .await
+        .map_err(|e| ApplyRoleService {
+            source: e,
+            sc: sc_ref.clone(),
+        })?;
+
     for (role_name, group_config) in validated_config.iter() {
         for (rolegroup_name, rolegroup_config) in group_config.iter() {
             let rolegroup = sc.server_rolegroup_ref(role_name, rolegroup_name);
@@ -104,42 +134,39 @@ pub async fn reconcile(sc: SparkCluster, ctx: Context<Ctx>) -> Result<Reconciler
         }
     }
 
-    // TODO: razvan
-    // std's SipHasher is deprecated, and DefaultHasher is unstable across Rust releases.
-    // We don't /need/ stability, but it's still nice to avoid spurious changes where possible.
-    // let mut discovery_hash = FnvHasher::with_key(0);
-    // for discovery_cm in build_discovery_configmaps(&kube, &sc, &sc, &server_role_service, None)
-    //     .await
-    //     .with_context(|| BuildDiscoveryConfig { sc: sc_ref.clone() })?
-    // {
-    //     let discovery_cm = apply_owned(&kube, FIELD_MANAGER, &discovery_cm)
-    //         .await
-    //         .with_context(|| ApplyDiscoveryConfig { sc: sc_ref.clone() })?;
-    //     if let Some(generation) = discovery_cm.metadata.resource_version {
-    //         discovery_hash.write(generation.as_bytes())
-    //     }
-    // }
-    // let status = SparkClusterStatus {
-    //     // Serialize as a string to discourage users from trying to parse the value,
-    //     // and to keep things flexible if we end up changing the hasher at some point.
-    //     discovery_hash: Some("TODO".to_string()),
-    // };
-    // let sc_with_status = {
-    //     let mut sc_with_status = SparkCluster::new(&sc_ref.name, SparkClusterSpec::default());
-    //     sc_with_status.metadata.namespace = sc.metadata.namespace.clone();
-    //     sc_with_status.status = Some(status);
-    //     sc_with_status
-    // };
-    // client
-    //     .apply_patch_status(FIELD_MANAGER_SCOPE, &sc_with_status, &sc_with_status)
-    //     .await
-    //     .map_err(|e| ApplyStatus {
-    //         source: e,
-    //         sc: sc_ref.clone(),
-    //     })?;
-
     Ok(ReconcilerAction {
         requeue_after: None,
+    })
+}
+
+fn build_master_role_service(
+    sc: &SparkCluster,
+    service_ports: Vec<ServicePort>,
+) -> Result<Service, Error> {
+    let role_name = SparkRole::Master.to_string();
+    let role_svc_name = sc
+        .server_role_service_name()
+        .ok_or(GlobalServiceNameNotFound {
+            obj_ref: ObjectRef::from_obj(sc),
+        })?;
+    Ok(Service {
+        metadata: ObjectMetaBuilder::new()
+            .name_and_namespace(sc)
+            .name(&role_svc_name)
+            .ownerreference_from_resource(sc, None, Some(true))
+            .map_err(|e| ObjectMissingMetadataForOwnerRef {
+                source: e,
+                obj_ref: ObjectRef::from_obj(sc),
+            })?
+            .with_recommended_labels(sc, APP_NAME, version(sc)?, &role_name, "global")
+            .build(),
+        spec: Some(ServiceSpec {
+            ports: Some(service_ports),
+            selector: Some(role_selector_labels(sc, APP_NAME, &role_name)),
+            type_: Some("NodePort".to_string()),
+            ..ServiceSpec::default()
+        }),
+        status: None,
     })
 }
 
@@ -155,8 +182,9 @@ fn build_server_rolegroup_config_map(
                 .name_and_namespace(sc)
                 .name(rolegroup.object_name())
                 .ownerreference_from_resource(sc, None, Some(true))
-                .map_err(|_| Error::ObjectMissingMetadataForOwnerRef {
-                    sc: ObjectRef::from_obj(sc),
+                .map_err(|e| Error::ObjectMissingMetadataForOwnerRef {
+                    source: e,
+                    obj_ref: ObjectRef::from_obj(sc),
                 })?
                 .with_recommended_labels(
                     sc,
@@ -221,8 +249,9 @@ fn build_server_rolegroup_service(
             .name_and_namespace(sc)
             .name(&rolegroup.object_name())
             .ownerreference_from_resource(sc, None, Some(true))
-            .map_err(|_| Error::ObjectMissingMetadataForOwnerRef {
-                sc: ObjectRef::from_obj(sc),
+            .map_err(|e| Error::ObjectMissingMetadataForOwnerRef {
+                source: e,
+                obj_ref: ObjectRef::from_obj(sc),
             })?
             .with_recommended_labels(
                 sc,
@@ -293,7 +322,7 @@ fn build_worker_stateful_set(
         })
         .collect::<Vec<_>>();
 
-    let container_sc = ContainerBuilder::new("history")
+    let container_sc = ContainerBuilder::new("worker")
         .image(image)
         .args(vec![
             "sbin/start-slave.sh".to_string(),
@@ -309,8 +338,9 @@ fn build_worker_stateful_set(
             .name_and_namespace(sc)
             .name(&rolegroup_ref.object_name())
             .ownerreference_from_resource(sc, None, Some(true))
-            .map_err(|_| Error::ObjectMissingMetadataForOwnerRef {
-                sc: ObjectRef::from_obj(sc),
+            .map_err(|e| Error::ObjectMissingMetadataForOwnerRef {
+                source: e,
+                obj_ref: ObjectRef::from_obj(sc),
             })?
             .with_recommended_labels(
                 sc,
@@ -424,8 +454,9 @@ fn build_history_stateful_set(
             .name_and_namespace(sc)
             .name(&rolegroup_ref.object_name())
             .ownerreference_from_resource(sc, None, Some(true))
-            .map_err(|_| Error::ObjectMissingMetadataForOwnerRef {
-                sc: ObjectRef::from_obj(sc),
+            .map_err(|e| Error::ObjectMissingMetadataForOwnerRef {
+                source: e,
+                obj_ref: ObjectRef::from_obj(sc),
             })?
             .with_recommended_labels(
                 sc,
@@ -539,8 +570,9 @@ fn build_master_stateful_set(
             .name_and_namespace(sc)
             .name(&rolegroup_ref.object_name())
             .ownerreference_from_resource(sc, None, Some(true))
-            .map_err(|_| Error::ObjectMissingMetadataForOwnerRef {
-                sc: ObjectRef::from_obj(sc),
+            .map_err(|e| Error::ObjectMissingMetadataForOwnerRef {
+                source: e,
+                obj_ref: ObjectRef::from_obj(sc),
             })?
             .with_recommended_labels(
                 sc,
@@ -761,8 +793,16 @@ fn build_ports(
         )],
     }
 }
-fn build_master_service_url(_sc: &SparkCluster) -> Result<String, Error> {
-    Ok("spark://simple-master-default:7078".to_string())
+
+fn build_master_service_url(sc: &SparkCluster) -> Result<String, Error> {
+    let master_role_service_name =
+        sc.server_role_service_name()
+            .ok_or(GlobalServiceNameNotFound {
+                obj_ref: ObjectRef::from_obj(sc),
+            })?;
+
+    // TODO: where to get the port from?
+    Ok(format!("spark://{}:7078", master_role_service_name))
 }
 
 /// Unroll a map into a String using a given assignment character (for writing config maps)
