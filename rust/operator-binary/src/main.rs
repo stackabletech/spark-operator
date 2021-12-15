@@ -87,6 +87,7 @@ async fn main() -> anyhow::Result<()> {
                             .state()
                             .into_iter()
                             .filter(move |sc| {
+                                let _ = &endpoints;
                                 sc.metadata.namespace == endpoints.metadata.namespace
                                     && sc.server_role_service_name() == endpoints.metadata.name
                             })

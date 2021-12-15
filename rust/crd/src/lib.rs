@@ -151,11 +151,7 @@ impl SparkCluster {
     /// a lot of spurious restarts, as well as opening us up to dangerous split-brain conditions because
     /// the pods have inconsistent snapshots of which servers they should expect to be in quorum.
     pub fn pods(&self) -> Result<impl Iterator<Item = SparkPodRef> + '_, NoNamespaceError> {
-        let ns = self
-            .metadata
-            .namespace
-            .clone()
-            .ok_or(NoNamespaceError)?;
+        let ns = self.metadata.namespace.clone().ok_or(NoNamespaceError)?;
         Ok(self
             .spec
             .masters
