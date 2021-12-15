@@ -38,7 +38,7 @@ use stackable_spark_crd::constants::{
     SPARK_ENV_MASTER_PORT, SPARK_ENV_MASTER_WEBUI_PORT, SPARK_ENV_SH, SPARK_ENV_WORKER_PORT,
     SPARK_ENV_WORKER_WEBUI_PORT, SPARK_METRICS_PROPERTIES,
 };
-use stackable_spark_crd::{SparkCluster, SparkClusterSpec, SparkClusterStatus, SparkRole};
+use stackable_spark_crd::{SparkCluster, SparkRole};
 use std::{
     collections::{BTreeMap, HashMap},
     time::Duration,
@@ -119,25 +119,24 @@ pub async fn reconcile(sc: SparkCluster, ctx: Context<Ctx>) -> Result<Reconciler
     //         discovery_hash.write(generation.as_bytes())
     //     }
     // }
-
-    let status = SparkClusterStatus {
-        // Serialize as a string to discourage users from trying to parse the value,
-        // and to keep things flexible if we end up changing the hasher at some point.
-        discovery_hash: Some("TODO".to_string()),
-    };
-    let sc_with_status = {
-        let mut sc_with_status = SparkCluster::new(&sc_ref.name, SparkClusterSpec::default());
-        sc_with_status.metadata.namespace = sc.metadata.namespace.clone();
-        sc_with_status.status = Some(status);
-        sc_with_status
-    };
-    client
-        .apply_patch_status(FIELD_MANAGER_SCOPE, &sc_with_status, &sc_with_status)
-        .await
-        .map_err(|e| ApplyStatus {
-            source: e,
-            sc: sc_ref.clone(),
-        })?;
+    // let status = SparkClusterStatus {
+    //     // Serialize as a string to discourage users from trying to parse the value,
+    //     // and to keep things flexible if we end up changing the hasher at some point.
+    //     discovery_hash: Some("TODO".to_string()),
+    // };
+    // let sc_with_status = {
+    //     let mut sc_with_status = SparkCluster::new(&sc_ref.name, SparkClusterSpec::default());
+    //     sc_with_status.metadata.namespace = sc.metadata.namespace.clone();
+    //     sc_with_status.status = Some(status);
+    //     sc_with_status
+    // };
+    // client
+    //     .apply_patch_status(FIELD_MANAGER_SCOPE, &sc_with_status, &sc_with_status)
+    //     .await
+    //     .map_err(|e| ApplyStatus {
+    //         source: e,
+    //         sc: sc_ref.clone(),
+    //     })?;
 
     Ok(ReconcilerAction {
         requeue_after: None,

@@ -87,7 +87,7 @@ async fn main() -> anyhow::Result<()> {
                             .state()
                             .into_iter()
                             .filter(move |sc| {
-                                let _ = &endpoints;
+                                let _ = &endpoints; // capture endpoints to prevent it from being dropped (2021 warning)
                                 sc.metadata.namespace == endpoints.metadata.namespace
                                     && sc.server_role_service_name() == endpoints.metadata.name
                             })
