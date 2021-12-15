@@ -86,11 +86,11 @@ async fn main() -> anyhow::Result<()> {
                         sc_store
                             .state()
                             .into_iter()
-                            .filter(move |zk| {
-                                zk.metadata.namespace == endpoints.metadata.namespace
-                                    && zk.server_role_service_name() == endpoints.metadata.name
+                            .filter(move |sc| {
+                                sc.metadata.namespace == endpoints.metadata.namespace
+                                    && sc.server_role_service_name() == endpoints.metadata.name
                             })
-                            .map(|zk| ObjectRef::from_obj(&zk))
+                            .map(|sc| ObjectRef::from_obj(&sc))
                     },
                 )
                 .owns(client.get_all_api::<StatefulSet>(), ListParams::default())

@@ -155,7 +155,7 @@ impl SparkCluster {
             .metadata
             .namespace
             .clone()
-            .ok_or_else(|| NoNamespaceError)?;
+            .ok_or(NoNamespaceError)?;
         Ok(self
             .spec
             .masters
