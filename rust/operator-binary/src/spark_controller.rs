@@ -16,12 +16,14 @@ use stackable_operator::{
         api::{
             apps::v1::{StatefulSet, StatefulSetSpec},
             core::v1::{
-                ConfigMap, ConfigMapVolumeSource, EnvVar, PersistentVolumeClaim,
-                PersistentVolumeClaimSpec, ResourceRequirements, Service, ServicePort, ServiceSpec,
-                Volume,
+                ConfigMap, ConfigMapVolumeSource, EnvVar, HTTPGetAction, PersistentVolumeClaim,
+                PersistentVolumeClaimSpec, Probe, ResourceRequirements, Service, ServicePort,
+                ServiceSpec, Volume,
             },
         },
-        apimachinery::pkg::{api::resource::Quantity, apis::meta::v1::LabelSelector},
+        apimachinery::pkg::{
+            api::resource::Quantity, apis::meta::v1::LabelSelector, util::intstr::IntOrString,
+        },
     },
     kube::{
         api::ObjectMeta,
@@ -35,9 +37,9 @@ use stackable_operator::{
     product_config_utils::{transform_all_roles_to_config, validate_all_roles_and_groups_config},
 };
 use stackable_spark_crd::constants::{
-    APP_NAME, FIELD_MANAGER_SCOPE, SPARK_DEFAULTS_CONF, SPARK_DEFAULTS_HISTORY_WEBUI_PORT,
-    SPARK_ENV_MASTER_PORT, SPARK_ENV_MASTER_WEBUI_PORT, SPARK_ENV_SH, SPARK_ENV_WORKER_PORT,
-    SPARK_ENV_WORKER_WEBUI_PORT, SPARK_METRICS_PROPERTIES,
+    APP_NAME, FIELD_MANAGER_SCOPE, PORT_NAME_WEB, SPARK_DEFAULTS_CONF,
+    SPARK_DEFAULTS_HISTORY_WEBUI_PORT, SPARK_ENV_MASTER_PORT, SPARK_ENV_MASTER_WEBUI_PORT,
+    SPARK_ENV_SH, SPARK_ENV_WORKER_PORT, SPARK_ENV_WORKER_WEBUI_PORT, SPARK_METRICS_PROPERTIES,
 };
 use stackable_spark_crd::{SparkCluster, SparkRole};
 use std::{
@@ -322,12 +324,25 @@ fn build_worker_stateful_set(
         })
         .collect::<Vec<_>>();
 
+    let probe = Probe {
+        http_get: Some(HTTPGetAction {
+            port: IntOrString::String(String::from(PORT_NAME_WEB)),
+            scheme: Some(String::from("HTTP")),
+            ..HTTPGetAction::default()
+        }),
+        period_seconds: Some(10),
+        initial_delay_seconds: Some(10),
+        ..Probe::default()
+    };
+
     let container_sc = ContainerBuilder::new("worker")
         .image(image)
         .args(vec![
             "sbin/start-slave.sh".to_string(),
             build_master_service_url(sc)?,
         ])
+        .readiness_probe(probe.clone())
+        .liveness_probe(probe)
         .add_env_vars(env)
         .add_container_ports(build_container_ports(sc, rolegroup_ref, rolegroup_config))
         .add_volume_mount("data", "/stackable/data")
@@ -441,11 +456,24 @@ fn build_history_stateful_set(
         })
         .collect::<Vec<_>>();
 
+    let probe = Probe {
+        http_get: Some(HTTPGetAction {
+            port: IntOrString::String(String::from(PORT_NAME_WEB)),
+            scheme: Some(String::from("HTTP")),
+            ..HTTPGetAction::default()
+        }),
+        period_seconds: Some(10),
+        initial_delay_seconds: Some(10),
+        ..Probe::default()
+    };
+
     let container_sc = ContainerBuilder::new("history")
         .image(image)
         .args(vec!["sbin/start-history-server.sh".to_string()])
         .add_env_vars(env)
         .add_container_ports(build_container_ports(sc, rolegroup_ref, rolegroup_config))
+        .liveness_probe(probe.clone())
+        .readiness_probe(probe)
         .add_volume_mount("log", "/stackable/data/log")
         .add_volume_mount("config", "/stackable/config")
         .build();
@@ -557,10 +585,22 @@ fn build_master_stateful_set(
         })
         .collect::<Vec<_>>();
 
+    let probe = Probe {
+        http_get: Some(HTTPGetAction {
+            port: IntOrString::String(String::from(PORT_NAME_WEB)),
+            ..HTTPGetAction::default()
+        }),
+        period_seconds: Some(10),
+        initial_delay_seconds: Some(10),
+        ..Probe::default()
+    };
+
     let container_sc = ContainerBuilder::new("master")
         .image(image)
         .args(vec!["sbin/start-master.sh".to_string()])
         .add_env_vars(env)
+        .readiness_probe(probe.clone())
+        .liveness_probe(probe)
         .add_container_ports(build_container_ports(sc, rolegroup_ref, rolegroup_config))
         .add_volume_mount("data", "/stackable/data")
         .add_volume_mount("config", "/stackable/config")
@@ -753,7 +793,7 @@ fn build_ports(
                     .unwrap(),
             ),
             (
-                "web".to_string(),
+                String::from(PORT_NAME_WEB),
                 rolegroup_config
                     .get(&PropertyNameKind::File(String::from(SPARK_ENV_SH)))
                     .and_then(|c| c.get(SPARK_ENV_MASTER_WEBUI_PORT))
@@ -773,7 +813,7 @@ fn build_ports(
                     .unwrap(),
             ),
             (
-                "web".to_string(),
+                String::from(PORT_NAME_WEB),
                 rolegroup_config
                     .get(&PropertyNameKind::File(String::from(SPARK_ENV_SH)))
                     .and_then(|c| c.get(SPARK_ENV_WORKER_WEBUI_PORT))
@@ -783,9 +823,9 @@ fn build_ports(
             ),
         ],
         SparkRole::HistoryServer => vec![(
-            "web".to_string(),
+            String::from(PORT_NAME_WEB),
             rolegroup_config
-                .get(&PropertyNameKind::File(String::from(SPARK_ENV_SH)))
+                .get(&PropertyNameKind::File(String::from(SPARK_DEFAULTS_CONF)))
                 .and_then(|c| c.get(SPARK_DEFAULTS_HISTORY_WEBUI_PORT))
                 .unwrap_or(&String::from("8080"))
                 .parse()

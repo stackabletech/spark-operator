@@ -1,7 +1,8 @@
 //! This module provides constants that are shared via multiple crates.
 
 pub const FIELD_MANAGER_SCOPE: &str = "sparkcluster";
-pub const APP_PORT: u16 = 2181;
+
+pub const PORT_NAME_WEB: &str = "web";
 
 /// Value for the APP_NAME_LABEL label key
 pub const APP_NAME: &str = "spark";
