@@ -339,7 +339,7 @@ fn build_worker_stateful_set(
         .image(image)
         .args(vec![
             "sbin/start-slave.sh".to_string(),
-            build_master_service_url(sc)?,
+            build_master_service_url(rolegroup_ref, 7078), // TODO: where to get the port from ?
         ])
         .readiness_probe(probe.clone())
         .liveness_probe(probe)
@@ -834,17 +834,6 @@ fn build_ports(
     }
 }
 
-fn build_master_service_url(sc: &SparkCluster) -> Result<String, Error> {
-    let master_role_service_name =
-        sc.server_role_service_name()
-            .ok_or(GlobalServiceNameNotFound {
-                obj_ref: ObjectRef::from_obj(sc),
-            })?;
-
-    // TODO: where to get the port from?
-    Ok(format!("spark://{}:7078", master_role_service_name))
-}
-
 /// Unroll a map into a String using a given assignment character (for writing config maps)
 ///
 /// # Arguments
@@ -857,4 +846,17 @@ fn convert_map_to_string(map: &BTreeMap<String, String>, assignment: &str) -> St
         data.push_str(format!("{}{}{}\n", key, assignment, value).as_str());
     }
     data
+}
+
+fn build_master_service_url(rolegroup_ref: &RoleGroupRef<SparkCluster>, port: i32) -> String {
+    format!(
+        "spark://{}:{}",
+        RoleGroupRef {
+            cluster: rolegroup_ref.cluster.clone(),
+            role: SparkRole::Master.to_string(),
+            role_group: "default".to_string(),
+        }
+        .object_name(),
+        port
+    )
 }
