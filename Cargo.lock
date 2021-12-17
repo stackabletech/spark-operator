@@ -1582,6 +1582,7 @@ dependencies = [
  "built",
  "fnv",
  "futures 0.3.18",
+ "lazy_static",
  "serde_yaml",
  "snafu",
  "stackable-operator",

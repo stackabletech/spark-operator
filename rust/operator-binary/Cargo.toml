@@ -19,6 +19,7 @@ snafu = "0.6.10"
 fnv = "1.0.7"
 structopt = "0.3.23"
 futures = { version = "0.3.17", features = ["compat"] }
+lazy_static = "1.4.0"
 
 [build-dependencies]
 built = { version =  "0.5", features = ["chrono", "git2"] }

@@ -47,6 +47,18 @@ use std::{
     time::Duration,
 };
 
+lazy_static! {
+    static ref PROBE: Probe = Probe {
+        http_get: Some(HTTPGetAction {
+            port: IntOrString::String(String::from(PORT_NAME_WEB)),
+            ..HTTPGetAction::default()
+        }),
+        period_seconds: Some(10),
+        initial_delay_seconds: Some(10),
+        ..Probe::default()
+    };
+}
+
 pub struct Ctx {
     pub client: stackable_operator::client::Client,
     pub product_config: ProductConfigManager,
@@ -324,25 +336,14 @@ fn build_worker_stateful_set(
         })
         .collect::<Vec<_>>();
 
-    let probe = Probe {
-        http_get: Some(HTTPGetAction {
-            port: IntOrString::String(String::from(PORT_NAME_WEB)),
-            scheme: Some(String::from("HTTP")),
-            ..HTTPGetAction::default()
-        }),
-        period_seconds: Some(10),
-        initial_delay_seconds: Some(10),
-        ..Probe::default()
-    };
-
     let container_sc = ContainerBuilder::new("worker")
         .image(image)
         .args(vec![
             "sbin/start-slave.sh".to_string(),
             build_master_service_url(rolegroup_ref, 7078), // TODO: where to get the port from ?
         ])
-        .readiness_probe(probe.clone())
-        .liveness_probe(probe)
+        .readiness_probe(PROBE.clone())
+        .liveness_probe(PROBE.clone())
         .add_env_vars(env)
         .add_container_ports(build_container_ports(sc, rolegroup_ref, rolegroup_config))
         .add_volume_mount("data", "/stackable/data")
@@ -456,24 +457,13 @@ fn build_history_stateful_set(
         })
         .collect::<Vec<_>>();
 
-    let probe = Probe {
-        http_get: Some(HTTPGetAction {
-            port: IntOrString::String(String::from(PORT_NAME_WEB)),
-            scheme: Some(String::from("HTTP")),
-            ..HTTPGetAction::default()
-        }),
-        period_seconds: Some(10),
-        initial_delay_seconds: Some(10),
-        ..Probe::default()
-    };
-
     let container_sc = ContainerBuilder::new("history")
         .image(image)
         .args(vec!["sbin/start-history-server.sh".to_string()])
         .add_env_vars(env)
         .add_container_ports(build_container_ports(sc, rolegroup_ref, rolegroup_config))
-        .liveness_probe(probe.clone())
-        .readiness_probe(probe)
+        .liveness_probe(PROBE.clone())
+        .readiness_probe(PROBE.clone())
         .add_volume_mount("log", "/stackable/data/log")
         .add_volume_mount("config", "/stackable/config")
         .build();
@@ -585,22 +575,12 @@ fn build_master_stateful_set(
         })
         .collect::<Vec<_>>();
 
-    let probe = Probe {
-        http_get: Some(HTTPGetAction {
-            port: IntOrString::String(String::from(PORT_NAME_WEB)),
-            ..HTTPGetAction::default()
-        }),
-        period_seconds: Some(10),
-        initial_delay_seconds: Some(10),
-        ..Probe::default()
-    };
-
     let container_sc = ContainerBuilder::new("master")
         .image(image)
         .args(vec!["sbin/start-master.sh".to_string()])
         .add_env_vars(env)
-        .readiness_probe(probe.clone())
-        .liveness_probe(probe)
+        .readiness_probe(PROBE.clone())
+        .liveness_probe(PROBE.clone())
         .add_container_ports(build_container_ports(sc, rolegroup_ref, rolegroup_config))
         .add_volume_mount("data", "/stackable/data")
         .add_volume_mount("config", "/stackable/config")

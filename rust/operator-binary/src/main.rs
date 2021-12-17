@@ -2,6 +2,9 @@ mod error;
 mod spark_controller;
 mod util;
 
+#[macro_use]
+extern crate lazy_static;
+
 use futures::stream::StreamExt;
 use stackable_operator::k8s_openapi::api::apps::v1::StatefulSet;
 use stackable_operator::k8s_openapi::api::core::v1::{ConfigMap, Endpoints, Service};
