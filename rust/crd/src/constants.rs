@@ -3,6 +3,8 @@
 pub const FIELD_MANAGER_SCOPE: &str = "sparkcluster";
 
 pub const PORT_NAME_WEB: &str = "web";
+pub const PORT_NAME_MASTER: &str = "master";
+
 pub const DEFAULT_LOG_DIR: &str = "/tmp/spark-events";
 
 /// Value for the APP_NAME_LABEL label key

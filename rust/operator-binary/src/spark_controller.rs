@@ -1,12 +1,7 @@
 //! Ensures that `Pod`s are configured and running for each [`SparkCluster`]
 
 use crate::error::Error;
-use crate::error::Error::{
-    ApplyRoleGroupConfig, ApplyRoleGroupService, ApplyRoleGroupStatefulSet, ApplyRoleService,
-    GlobalServiceNameNotFound, MasterRoleGroupDefaultExpected, ObjectMissingMetadataForOwnerRef,
-    SerializeSparkDefaults, SerializeSparkEnv, SerializeSparkMetrics,
-};
-use crate::util::version;
+use crate::error::Error::*;
 use stackable_operator::k8s_openapi::api::core::v1::ContainerPort;
 use stackable_operator::product_config_utils::Configuration;
 use stackable_operator::role_utils::{Role, RoleGroupRef};
@@ -44,6 +39,7 @@ use std::{
 };
 
 lazy_static! {
+    /// Liveliness probe used by all master, worker and history containers.
     static ref PROBE: Probe = Probe {
         http_get: Some(HTTPGetAction {
             port: IntOrString::String(String::from(PORT_NAME_WEB)),
@@ -60,6 +56,9 @@ pub struct Ctx {
     pub product_config: ProductConfigManager,
 }
 
+/// The main reconcile loop.
+///
+/// For each rolegroup a [`StatefulSet`] and a [`ClusterIP`] service is created.
 pub async fn reconcile(sc: SparkCluster, ctx: Context<Ctx>) -> Result<ReconcilerAction, Error> {
     tracing::info!("Starting reconcile");
     let sc_ref = ObjectRef::from_obj(&sc);
@@ -84,23 +83,38 @@ pub async fn reconcile(sc: SparkCluster, ctx: Context<Ctx>) -> Result<Reconciler
         sc: sc_ref.clone(),
     })?;
 
-    let default_master_role_service_ports = validated_config
+    // Extract the master role for the "default" group ports here  because they are needed twice:
+    // 1. For the NodePort service built by build_master_role_service()
+    // 2. For the worker's master URL built with build_worker_stateful_set()
+    let default_master_role_ports = validated_config
         .iter()
-        .filter(|(role_name, _groups)| "master".eq(*role_name))
+        .filter(|(role_name, _groups)| SparkRole::Master.to_string().eq(*role_name))
         .flat_map(|(_role_name, groups)| groups)
         .filter(|(group_name, _group_config)| "default".eq(*group_name))
         .take(1)
         .next()
         .map(|(rolegroup, rolegroup_config)| {
-            build_service_ports(
+            build_ports(
                 &sc,
-                &sc.server_rolegroup_ref("master", rolegroup),
+                &sc.server_rolegroup_ref(SparkRole::Master.to_string(), rolegroup),
                 rolegroup_config,
             )
         })
         .ok_or(MasterRoleGroupDefaultExpected)?;
 
-    let master_role_service = build_master_role_service(&sc, default_master_role_service_ports)?;
+    let master_role_service = build_master_role_service(
+        &sc,
+        default_master_role_ports
+            .iter()
+            .map(|(name, value)| ServicePort {
+                name: Some(name.clone()),
+                port: *value,
+                protocol: Some("TCP".to_string()),
+                ..ServicePort::default()
+            })
+            .collect(),
+    )?;
+
     client
         .apply_patch(
             FIELD_MANAGER_SCOPE,
@@ -116,10 +130,14 @@ pub async fn reconcile(sc: SparkCluster, ctx: Context<Ctx>) -> Result<Reconciler
     for (role_name, group_config) in validated_config.iter() {
         for (rolegroup_name, rolegroup_config) in group_config.iter() {
             let rolegroup = sc.server_rolegroup_ref(role_name, rolegroup_name);
-            let rg_service = build_server_rolegroup_service(&sc, &rolegroup, rolegroup_config)?;
-            let rg_configmap =
-                build_server_rolegroup_config_map(&sc, &rolegroup, rolegroup_config)?;
-            let rg_statefulset = build_rolegroup_statefulset(&sc, &rolegroup, rolegroup_config)?;
+            let rg_service = build_rolegroup_service(&sc, &rolegroup, rolegroup_config)?;
+            let rg_configmap = build_rolegroup_config_map(&sc, &rolegroup, rolegroup_config)?;
+            let rg_statefulset = build_rolegroup_statefulset(
+                &sc,
+                &default_master_role_ports,
+                &rolegroup,
+                rolegroup_config,
+            )?;
             client
                 .apply_patch(FIELD_MANAGER_SCOPE, &rg_service, &rg_service)
                 .await
@@ -149,6 +167,7 @@ pub async fn reconcile(sc: SparkCluster, ctx: Context<Ctx>) -> Result<Reconciler
     })
 }
 
+/// Build the [`NodePort`] service for clients.
 fn build_master_role_service(
     sc: &SparkCluster,
     service_ports: Vec<ServicePort>,
@@ -181,7 +200,7 @@ fn build_master_role_service(
 }
 
 /// The rolegroup [`ConfigMap`] configures the rolegroup based on the configuration given by the administrator
-fn build_server_rolegroup_config_map(
+fn build_rolegroup_config_map(
     sc: &SparkCluster,
     rolegroup: &RoleGroupRef<SparkCluster>,
     rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
@@ -249,7 +268,7 @@ fn build_server_rolegroup_config_map(
 /// The rolegroup [`Service`] is a headless service that allows direct access to the instances of a certain rolegroup
 ///
 /// This is mostly useful for internal communication between peers, or for clients that perform client-side load balancing.
-fn build_server_rolegroup_service(
+fn build_rolegroup_service(
     sc: &SparkCluster,
     rolegroup: &RoleGroupRef<SparkCluster>,
     rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
@@ -273,7 +292,17 @@ fn build_server_rolegroup_service(
             .build(),
         spec: Some(ServiceSpec {
             cluster_ip: Some("None".to_string()),
-            ports: Some(build_service_ports(sc, rolegroup, rolegroup_config)),
+            ports: Some(
+                build_ports(sc, rolegroup, rolegroup_config)
+                    .iter()
+                    .map(|(name, value)| ServicePort {
+                        name: Some(name.clone()),
+                        port: *value,
+                        protocol: Some("TCP".to_string()),
+                        ..ServicePort::default()
+                    })
+                    .collect(),
+            ),
             selector: Some(role_group_selector_labels(
                 sc,
                 APP_NAME,
@@ -287,23 +316,43 @@ fn build_server_rolegroup_service(
     })
 }
 
-/// The rolegroup [`StatefulSet`] runs the rolegroup, as configured by the administrator.
+/// Build the [`StatefulSet`]s for the given rolegroup.
 ///
-/// The [`Pod`](`stackable_operator::k8s_openapi::api::core::v1::Pod`)s are accessible through the corresponding [`Service`] (from [`build_rolegroup_service`]).
+/// # Arguments
+/// * `_sc`                       - The cluster resource object.
+/// * `default_master_role_ports` - Master role service (and container ports). Used to build the master URLs needed by the worker pods.
+/// * `rolegroup`                 - The rolegroup.
+/// * `rolegroup_config`          - The validated configuration for the rolegroup.
+///
 fn build_rolegroup_statefulset(
     sc: &SparkCluster,
+    default_master_role_ports: &[(String, i32)],
     rolegroup_ref: &RoleGroupRef<SparkCluster>,
     rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
 ) -> Result<StatefulSet, Error> {
     match serde_yaml::from_str(&rolegroup_ref.role).unwrap() {
         SparkRole::Master => build_master_stateful_set(sc, rolegroup_ref, rolegroup_config),
-        SparkRole::Worker => build_worker_stateful_set(sc, rolegroup_ref, rolegroup_config),
+        SparkRole::Worker => build_worker_stateful_set(
+            sc,
+            default_master_role_ports,
+            rolegroup_ref,
+            rolegroup_config,
+        ),
         SparkRole::HistoryServer => build_history_stateful_set(sc, rolegroup_ref, rolegroup_config),
     }
 }
 
+/// Build the [`StatefulSet`]s for the given [`SparkRole::Worker`] rolegroup.
+///
+/// # Arguments
+/// * `_sc`                       - The cluster resource object.
+/// * `default_master_role_ports` - Master role service (and container ports). Used to build the master URLs needed by the worker pods.
+/// * `rolegroup`                 - The rolegroup.
+/// * `rolegroup_config`          - The validated configuration for the rolegroup.
+///
 fn build_worker_stateful_set(
     sc: &SparkCluster,
+    default_master_role_ports: &[(String, i32)],
     rolegroup_ref: &RoleGroupRef<SparkCluster>,
     rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
 ) -> Result<StatefulSet, Error> {
@@ -336,7 +385,7 @@ fn build_worker_stateful_set(
         .image(image)
         .args(vec![
             "sbin/start-slave.sh".to_string(),
-            build_master_service_url(rolegroup_ref, 7078), // TODO: where to get the port from ?
+            build_master_service_url(rolegroup_ref, default_master_role_ports),
         ])
         .readiness_probe(PROBE.clone())
         .liveness_probe(PROBE.clone())
@@ -423,6 +472,14 @@ fn build_worker_stateful_set(
         status: None,
     })
 }
+
+/// Build the [`StatefulSet`]s for the given [`SparkRole::HistoryServer`] rolegroup.
+///
+/// # Arguments
+/// * `_sc`              - The cluster resource object.
+/// * `rolegroup`        - The rolegroup.
+/// * `rolegroup_config` - The validated configuration for the rolegroup.
+///
 fn build_history_stateful_set(
     sc: &SparkCluster,
     rolegroup_ref: &RoleGroupRef<SparkCluster>,
@@ -541,6 +598,14 @@ fn build_history_stateful_set(
         status: None,
     })
 }
+
+/// Build the [`StatefulSet`]s for the given [`SparkRole::Master`] rolegroup.
+///
+/// # Arguments
+/// * `_sc`              - The cluster resource object.
+/// * `rolegroup`        - The rolegroup.
+/// * `rolegroup_config` - The validated configuration for the rolegroup.
+///
 fn build_master_stateful_set(
     sc: &SparkCluster,
     rolegroup_ref: &RoleGroupRef<SparkCluster>,
@@ -571,7 +636,7 @@ fn build_master_stateful_set(
         })
         .collect::<Vec<_>>();
 
-    let container_sc = ContainerBuilder::new("master")
+    let container_sc = ContainerBuilder::new(&SparkRole::Master.to_string())
         .image(image)
         .args(vec!["sbin/start-master.sh".to_string()])
         .add_env_vars(env)
@@ -665,7 +730,9 @@ pub fn error_policy(_error: &Error, _ctx: Context<Ctx>) -> ReconcilerAction {
         requeue_after: Some(Duration::from_secs(5)),
     }
 }
-pub fn build_spark_role_properties(
+
+/// TODO: this is pure boilerplate code that should be part of product-config.
+fn build_spark_role_properties(
     resource: &SparkCluster,
 ) -> HashMap<
     String,
@@ -720,22 +787,13 @@ pub fn build_spark_role_properties(
     result
 }
 
-fn build_service_ports(
-    _sc: &SparkCluster,
-    rolegroup: &RoleGroupRef<SparkCluster>,
-    rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
-) -> Vec<ServicePort> {
-    build_ports(_sc, rolegroup, rolegroup_config)
-        .iter()
-        .map(|(name, value)| ServicePort {
-            name: Some(name.clone()),
-            port: *value,
-            protocol: Some("TCP".to_string()),
-            ..ServicePort::default()
-        })
-        .collect()
-}
-
+/// Build [`ContainerPort`]s for the given rolegroup.
+///
+/// # Arguments
+/// * `_sc`              - The cluster resource object.
+/// * `rolegroup`        - The rolegroup for which to extract the pods.
+/// * `rolegroup_config` - The validated configuration for the rolegroup.
+///
 fn build_container_ports(
     _sc: &SparkCluster,
     rolegroup: &RoleGroupRef<SparkCluster>,
@@ -752,6 +810,13 @@ fn build_container_ports(
         .collect()
 }
 
+/// Extract all named ports from the given validated configuration.
+///
+/// # Arguments
+/// * `_sc`              - The cluster resource object.
+/// * `rolegroup`        - The rolegroup for which to extract the pods.
+/// * `rolegroup_config` - The validated configuration for the rolegroup.
+///
 fn build_ports(
     _sc: &SparkCluster,
     rolegroup: &RoleGroupRef<SparkCluster>,
@@ -760,7 +825,7 @@ fn build_ports(
     match serde_yaml::from_str(&rolegroup.role).unwrap() {
         SparkRole::Master => vec![
             (
-                "master".to_string(),
+                PORT_NAME_MASTER.to_string(),
                 rolegroup_config
                     .get(&PropertyNameKind::File(String::from(SPARK_ENV_SH)))
                     .and_then(|c| c.get(SPARK_ENV_MASTER_PORT))
@@ -824,7 +889,26 @@ fn convert_map_to_string(map: &BTreeMap<String, String>, assignment: &str) -> St
     data
 }
 
-fn build_master_service_url(rolegroup_ref: &RoleGroupRef<SparkCluster>, port: i32) -> String {
+/// Build the connection string for the start-worker.sh script
+///
+/// # Arguments
+/// * `rolegroup_ref`             - The worker's RoleGroupRef.
+/// * `default_master_role_ports` - The ports used to create the master's ClusterIP service.
+///
+fn build_master_service_url(
+    rolegroup_ref: &RoleGroupRef<SparkCluster>,
+    default_master_role_ports: &[(String, i32)],
+) -> String {
+    let default_master_port = default_master_role_ports
+        .iter()
+        .filter_map(|(name, value)| match name.as_ref() {
+            PORT_NAME_MASTER => Some(*value),
+            _ => None,
+        })
+        .take(1)
+        .next()
+        .unwrap_or(7077);
+
     format!(
         "spark://{}:{}",
         RoleGroupRef {
@@ -833,10 +917,15 @@ fn build_master_service_url(rolegroup_ref: &RoleGroupRef<SparkCluster>, port: i3
             role_group: "default".to_string(),
         }
         .object_name(),
-        port
+        default_master_port
     )
 }
 
+/// Extract the SPARK_CONF_DIR path from the validated rolegroup configuration.
+///
+/// # Arguments
+/// * `rolegroup_config` - Validated config for a rolegroup.
+///
 fn spark_conf_dir(
     rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
 ) -> String {
@@ -853,6 +942,11 @@ fn spark_conf_dir(
         .unwrap_or_else(|| "/stackable/config".to_string())
 }
 
+/// Extract the log path from the validated rolegroup configuration.
+///
+/// # Arguments
+/// * `rolegroup_config` - Validated config for a rolegroup.
+///
 fn spark_log_dir(rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>) -> String {
     rolegroup_config
         .get(&PropertyNameKind::File(String::from(SPARK_DEFAULTS_CONF)))
@@ -865,4 +959,10 @@ fn spark_log_dir(rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, S
         .take(1)
         .next()
         .unwrap_or_else(|| DEFAULT_LOG_DIR.to_string())
+}
+
+fn version(sc: &SparkCluster) -> Result<&str, Error> {
+    sc.spec.version.as_deref().ok_or(ObjectHasNoVersion {
+        obj_ref: ObjectRef::from_obj(sc),
+    })
 }

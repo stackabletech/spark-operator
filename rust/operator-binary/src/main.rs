@@ -1,6 +1,5 @@
 mod error;
 mod spark_controller;
-mod util;
 
 #[macro_use]
 extern crate lazy_static;
