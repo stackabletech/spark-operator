@@ -72,7 +72,7 @@ and from outside:
 
     spark-shell --master spark://172.18.0.2:31585
 
-where `172.18.0.2` is the IP address o one your nodes.
+where `172.18.0.2` is the IP address of one of your nodes.
 
 == Configuration properties
 

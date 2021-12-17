@@ -1,6 +1,5 @@
 [package]
-authors = ["Malte Sander <malte.sander.it@gmail.com>"]
-build = "build.rs"
+authors = ["Stackable GmbH <info@stackable.de>"]
 description = "Stackable Operator for Apache Spark"
 edition = "2018"
 license = "OSL-3.0"

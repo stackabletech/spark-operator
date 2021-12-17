@@ -17,8 +17,3 @@ serde_yaml = "0.8"
 strum = { version = "0.22", features = ["derive"] }
 strum_macros = "0.22"
 snafu = "0.6.10"
-
-[features]
-default = ["native-tls"]
-native-tls = ["stackable-operator/native-tls"]
-rustls-tls = ["stackable-operator/rustls-tls"]
