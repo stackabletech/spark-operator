@@ -36,11 +36,7 @@ use stackable_operator::{
     product_config::{types::PropertyNameKind, ProductConfigManager},
     product_config_utils::{transform_all_roles_to_config, validate_all_roles_and_groups_config},
 };
-use stackable_spark_crd::constants::{
-    APP_NAME, FIELD_MANAGER_SCOPE, PORT_NAME_WEB, SPARK_CONF_DIR, SPARK_DEFAULTS_CONF,
-    SPARK_DEFAULTS_HISTORY_WEBUI_PORT, SPARK_ENV_MASTER_PORT, SPARK_ENV_MASTER_WEBUI_PORT,
-    SPARK_ENV_SH, SPARK_ENV_WORKER_PORT, SPARK_ENV_WORKER_WEBUI_PORT, SPARK_METRICS_PROPERTIES,
-};
+use stackable_spark_crd::constants::*;
 use stackable_spark_crd::{SparkCluster, SparkRole};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -346,7 +342,7 @@ fn build_worker_stateful_set(
         .liveness_probe(PROBE.clone())
         .add_env_vars(env)
         .add_container_ports(build_container_ports(sc, rolegroup_ref, rolegroup_config))
-        .add_volume_mount("data", "/stackable/data")
+        .add_volume_mount("log", spark_log_dir(rolegroup_config))
         .add_volume_mount("config", spark_conf_dir(rolegroup_config))
         .build();
     Ok(StatefulSet {
@@ -405,7 +401,7 @@ fn build_worker_stateful_set(
                 .build_template(),
             volume_claim_templates: Some(vec![PersistentVolumeClaim {
                 metadata: ObjectMeta {
-                    name: Some("data".to_string()),
+                    name: Some("log".to_string()),
                     ..ObjectMeta::default()
                 },
                 spec: Some(PersistentVolumeClaimSpec {
@@ -582,7 +578,7 @@ fn build_master_stateful_set(
         .readiness_probe(PROBE.clone())
         .liveness_probe(PROBE.clone())
         .add_container_ports(build_container_ports(sc, rolegroup_ref, rolegroup_config))
-        .add_volume_mount("data", "/stackable/data")
+        .add_volume_mount("log", spark_log_dir(rolegroup_config))
         .add_volume_mount("config", spark_conf_dir(rolegroup_config))
         .build();
     Ok(StatefulSet {
@@ -641,7 +637,7 @@ fn build_master_stateful_set(
                 .build_template(),
             volume_claim_templates: Some(vec![PersistentVolumeClaim {
                 metadata: ObjectMeta {
-                    name: Some("data".to_string()),
+                    name: Some("log".to_string()),
                     ..ObjectMeta::default()
                 },
                 spec: Some(PersistentVolumeClaimSpec {
@@ -855,4 +851,18 @@ fn spark_conf_dir(
         .take(1)
         .next()
         .unwrap_or_else(|| "/stackable/config".to_string())
+}
+
+fn spark_log_dir(rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>) -> String {
+    rolegroup_config
+        .get(&PropertyNameKind::File(String::from(SPARK_DEFAULTS_CONF)))
+        .iter()
+        .flat_map(|vars| vars.iter())
+        .filter_map(|(k, v)| match k.as_ref() {
+            SPARK_DEFAULTS_EVENT_LOG_DIR => Some(v.clone()),
+            _ => None,
+        })
+        .take(1)
+        .next()
+        .unwrap_or_else(|| DEFAULT_LOG_DIR.to_string())
 }

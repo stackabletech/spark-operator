@@ -64,6 +64,15 @@ This is how the list of services might look like:
     simple-master-default           ClusterIP   None            <none>        7078/TCP,8081/TCP               31s
     simple-slave-2core2g            ClusterIP   None            <none>        3031/TCP,8083/TCP               31s
 
+To start a Spark shell from inside the cluster you would run:
+
+    /stackable/spark/bin/spark-shell --master spark://simple-master-default:7078
+
+and from outside: 
+
+    spark-shell --master spark://172.18.0.2:31585
+
+where `172.18.0.2` is the IP address o one your nodes.
 
 == Configuration properties
 

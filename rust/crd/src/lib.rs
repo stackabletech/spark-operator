@@ -1,13 +1,8 @@
 //! This module provides all required CRD definitions and additional helper methods.
 pub mod constants;
 
-use constants::{
-    SPARK_DEFAULTS_AUTHENTICATE, SPARK_DEFAULTS_AUTHENTICATE_SECRET, SPARK_DEFAULTS_EVENT_LOG_DIR,
-    SPARK_DEFAULTS_HISTORY_FS_LOG_DIRECTORY, SPARK_DEFAULTS_HISTORY_STORE_PATH,
-    SPARK_DEFAULTS_HISTORY_WEBUI_PORT, SPARK_DEFAULTS_PORT_MAX_RETRIES, SPARK_ENV_MASTER_PORT,
-    SPARK_ENV_MASTER_WEBUI_PORT, SPARK_ENV_WORKER_CORES, SPARK_ENV_WORKER_MEMORY,
-    SPARK_ENV_WORKER_PORT, SPARK_ENV_WORKER_WEBUI_PORT,
-};
+use constants::*;
+
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
 use stackable_operator::role_utils::RoleGroupRef;
@@ -20,10 +15,6 @@ use stackable_operator::{
 use std::collections::BTreeMap;
 use std::hash::Hash;
 use strum_macros::EnumIter;
-
-const DEFAULT_LOG_DIR: &str = "/tmp";
-const SPARK_DEFAULTS_CONF: &str = "spark-defaults.conf";
-const SPARK_ENV_SH: &str = "spark-env.sh";
 
 #[derive(Clone, CustomResource, Debug, Default, Deserialize, JsonSchema, PartialEq, Serialize)]
 #[kube(
@@ -347,18 +338,6 @@ impl Configuration for HistoryServerConfig {
         match file {
             SPARK_ENV_SH => {}
             SPARK_DEFAULTS_CONF => {
-                if let Some(CommonConfiguration {
-                    config: Some(common_config),
-                    ..
-                }) = &resource.spec.config
-                {
-                    let log_dir = common_config.log_dir.as_deref().unwrap_or(DEFAULT_LOG_DIR);
-                    config.insert(
-                        SPARK_DEFAULTS_HISTORY_FS_LOG_DIRECTORY.to_string(),
-                        Some(log_dir.to_string()),
-                    );
-                }
-
                 if let Some(store_path) = &self.store_path {
                     config.insert(
                         SPARK_DEFAULTS_HISTORY_STORE_PATH.to_string(),
@@ -382,7 +361,7 @@ impl Configuration for HistoryServerConfig {
 }
 
 fn add_common_spark_defaults(
-    role: &str,
+    _role: &str,
     config: &mut BTreeMap<String, Option<String>>,
     spec: &SparkClusterSpec,
 ) {
@@ -409,18 +388,16 @@ fn add_common_spark_defaults(
             Some(max_port_retries.to_string()),
         );
 
+        // These two are always set together
         let log_dir = common_config.log_dir.as_deref().unwrap_or(DEFAULT_LOG_DIR);
-        if role == SparkRole::HistoryServer.to_string() {
-            config.insert(
-                SPARK_DEFAULTS_HISTORY_FS_LOG_DIRECTORY.to_string(),
-                Some(log_dir.to_string()),
-            );
-        } else {
-            config.insert(
-                SPARK_DEFAULTS_EVENT_LOG_DIR.to_string(),
-                Some(log_dir.to_string()),
-            );
-        }
+        config.insert(
+            SPARK_DEFAULTS_HISTORY_FS_LOG_DIRECTORY.to_string(),
+            Some(log_dir.to_string()),
+        );
+        config.insert(
+            SPARK_DEFAULTS_EVENT_LOG_DIR.to_string(),
+            Some(log_dir.to_string()),
+        );
     }
 }
 
