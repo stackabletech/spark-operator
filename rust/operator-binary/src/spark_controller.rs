@@ -37,7 +37,7 @@ use stackable_operator::{
     product_config_utils::{transform_all_roles_to_config, validate_all_roles_and_groups_config},
 };
 use stackable_spark_crd::constants::{
-    APP_NAME, FIELD_MANAGER_SCOPE, PORT_NAME_WEB, SPARK_DEFAULTS_CONF,
+    APP_NAME, FIELD_MANAGER_SCOPE, PORT_NAME_WEB, SPARK_CONF_DIR, SPARK_DEFAULTS_CONF,
     SPARK_DEFAULTS_HISTORY_WEBUI_PORT, SPARK_ENV_MASTER_PORT, SPARK_ENV_MASTER_WEBUI_PORT,
     SPARK_ENV_SH, SPARK_ENV_WORKER_PORT, SPARK_ENV_WORKER_WEBUI_PORT, SPARK_METRICS_PROPERTIES,
 };
@@ -347,7 +347,7 @@ fn build_worker_stateful_set(
         .add_env_vars(env)
         .add_container_ports(build_container_ports(sc, rolegroup_ref, rolegroup_config))
         .add_volume_mount("data", "/stackable/data")
-        .add_volume_mount("config", "/stackable/config")
+        .add_volume_mount("config", spark_conf_dir(rolegroup_config))
         .build();
     Ok(StatefulSet {
         metadata: ObjectMetaBuilder::new()
@@ -465,7 +465,7 @@ fn build_history_stateful_set(
         .liveness_probe(PROBE.clone())
         .readiness_probe(PROBE.clone())
         .add_volume_mount("log", "/stackable/data/log")
-        .add_volume_mount("config", "/stackable/config")
+        .add_volume_mount("config", spark_conf_dir(rolegroup_config))
         .build();
     Ok(StatefulSet {
         metadata: ObjectMetaBuilder::new()
@@ -583,7 +583,7 @@ fn build_master_stateful_set(
         .liveness_probe(PROBE.clone())
         .add_container_ports(build_container_ports(sc, rolegroup_ref, rolegroup_config))
         .add_volume_mount("data", "/stackable/data")
-        .add_volume_mount("config", "/stackable/config")
+        .add_volume_mount("config", spark_conf_dir(rolegroup_config))
         .build();
     Ok(StatefulSet {
         metadata: ObjectMetaBuilder::new()
@@ -839,4 +839,20 @@ fn build_master_service_url(rolegroup_ref: &RoleGroupRef<SparkCluster>, port: i3
         .object_name(),
         port
     )
+}
+
+fn spark_conf_dir(
+    rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
+) -> String {
+    rolegroup_config
+        .get(&PropertyNameKind::Env)
+        .iter()
+        .flat_map(|env_vars| env_vars.iter())
+        .filter_map(|(k, v)| match k.as_ref() {
+            SPARK_CONF_DIR => Some(v.clone()),
+            _ => None,
+        })
+        .take(1)
+        .next()
+        .unwrap_or_else(|| "/stackable/config".to_string())
 }
