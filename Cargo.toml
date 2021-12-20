@@ -3,4 +3,3 @@
 members = [
     "rust/crd", "rust/operator-binary"
 ]
-exclude = [ "rust/operator" ]

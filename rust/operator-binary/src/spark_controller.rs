@@ -64,15 +64,8 @@ pub async fn reconcile(sc: SparkCluster, ctx: Context<Ctx>) -> Result<Reconciler
     let sc_ref = ObjectRef::from_obj(&sc);
     let client = &ctx.get_ref().client;
 
-    let sc_version = sc
-        .spec
-        .version
-        .as_deref()
-        .ok_or(Error::ObjectHasNoVersion {
-            obj_ref: sc_ref.clone(),
-        })?;
     let validated_config = validate_all_roles_and_groups_config(
-        sc_version,
+        version(&sc)?,
         &transform_all_roles_to_config(&sc, build_spark_role_properties(&sc)),
         &ctx.get_ref().product_config,
         false,
@@ -83,7 +76,7 @@ pub async fn reconcile(sc: SparkCluster, ctx: Context<Ctx>) -> Result<Reconciler
         sc: sc_ref.clone(),
     })?;
 
-    // Extract the master role for the "default" group ports here  because they are needed twice:
+    // Extract the master default group ports here because they are needed twice:
     // 1. For the NodePort service built by build_master_role_service()
     // 2. For the worker's master URL built with build_worker_stateful_set()
     let default_master_role_ports = validated_config
@@ -100,7 +93,7 @@ pub async fn reconcile(sc: SparkCluster, ctx: Context<Ctx>) -> Result<Reconciler
                 rolegroup_config,
             )
         })
-        .ok_or(MasterRoleGroupDefaultExpected)?;
+        .ok_or(MasterRoleGroupDefaultExpected)??;
 
     let master_role_service = build_master_role_service(
         &sc,
@@ -254,9 +247,7 @@ fn build_rolegroup_config_map(
                             *.sink.prometheusServlet.class=org.apache.spark.metrics.sink.PrometheusServlet\n\
                             *.sink.prometheusServlet.path=/metrics\n\
                             *.source.jvm.class=org.apache.spark.metrics.source.JvmSource")
-                .ok_or_else(|| SerializeSparkMetrics {
-                    rolegroup: rolegroup.clone(),
-                })?
+                .unwrap_or_default()
         )
         .build()
         .map_err(|e| Error::BuildRoleGroupConfig {
@@ -293,7 +284,7 @@ fn build_rolegroup_service(
         spec: Some(ServiceSpec {
             cluster_ip: Some("None".to_string()),
             ports: Some(
-                build_ports(sc, rolegroup, rolegroup_config)
+                build_ports(sc, rolegroup, rolegroup_config)?
                     .iter()
                     .map(|(name, value)| ServicePort {
                         name: Some(name.clone()),
@@ -319,7 +310,7 @@ fn build_rolegroup_service(
 /// Build the [`StatefulSet`]s for the given rolegroup.
 ///
 /// # Arguments
-/// * `_sc`                       - The cluster resource object.
+/// * `sc`                       - The cluster resource object.
 /// * `default_master_role_ports` - Master role service (and container ports). Used to build the master URLs needed by the worker pods.
 /// * `rolegroup`                 - The rolegroup.
 /// * `rolegroup_config`          - The validated configuration for the rolegroup.
@@ -360,8 +351,8 @@ fn build_worker_stateful_set(
         .spec
         .workers
         .as_ref()
-        .ok_or(Error::NoServerRole {
-            obj_ref: ObjectRef::from_obj(sc),
+        .ok_or(Error::MissingRoleGroup {
+            obj_ref: rolegroup_ref.clone(),
         })?
         .role_groups
         .get(&rolegroup_ref.role_group);
@@ -390,7 +381,7 @@ fn build_worker_stateful_set(
         .readiness_probe(PROBE.clone())
         .liveness_probe(PROBE.clone())
         .add_env_vars(env)
-        .add_container_ports(build_container_ports(sc, rolegroup_ref, rolegroup_config))
+        .add_container_ports(build_container_ports(sc, rolegroup_ref, rolegroup_config)?)
         .add_volume_mount("log", spark_log_dir(rolegroup_config))
         .add_volume_mount("config", spark_conf_dir(rolegroup_config))
         .build();
@@ -489,8 +480,8 @@ fn build_history_stateful_set(
         .spec
         .history_servers
         .as_ref()
-        .ok_or(Error::NoServerRole {
-            obj_ref: ObjectRef::from_obj(sc),
+        .ok_or(Error::MissingRoleGroup {
+            obj_ref: rolegroup_ref.clone(),
         })?
         .role_groups
         .get(&rolegroup_ref.role_group);
@@ -514,7 +505,7 @@ fn build_history_stateful_set(
         .image(image)
         .args(vec!["sbin/start-history-server.sh".to_string()])
         .add_env_vars(env)
-        .add_container_ports(build_container_ports(sc, rolegroup_ref, rolegroup_config))
+        .add_container_ports(build_container_ports(sc, rolegroup_ref, rolegroup_config)?)
         .liveness_probe(PROBE.clone())
         .readiness_probe(PROBE.clone())
         .add_volume_mount("log", "/stackable/data/log")
@@ -615,8 +606,8 @@ fn build_master_stateful_set(
         .spec
         .masters
         .as_ref()
-        .ok_or(Error::NoServerRole {
-            obj_ref: ObjectRef::from_obj(sc),
+        .ok_or(Error::MissingRoleGroup {
+            obj_ref: rolegroup_ref.clone(),
         })?
         .role_groups
         .get(&rolegroup_ref.role_group);
@@ -642,7 +633,7 @@ fn build_master_stateful_set(
         .add_env_vars(env)
         .readiness_probe(PROBE.clone())
         .liveness_probe(PROBE.clone())
-        .add_container_ports(build_container_ports(sc, rolegroup_ref, rolegroup_config))
+        .add_container_ports(build_container_ports(sc, rolegroup_ref, rolegroup_config)?)
         .add_volume_mount("log", spark_log_dir(rolegroup_config))
         .add_volume_mount("config", spark_conf_dir(rolegroup_config))
         .build();
@@ -798,8 +789,8 @@ fn build_container_ports(
     _sc: &SparkCluster,
     rolegroup: &RoleGroupRef<SparkCluster>,
     rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
-) -> Vec<ContainerPort> {
-    build_ports(_sc, rolegroup, rolegroup_config)
+) -> Result<Vec<ContainerPort>, Error> {
+    Ok(build_ports(_sc, rolegroup, rolegroup_config)?
         .iter()
         .map(|(name, value)| ContainerPort {
             name: Some(name.clone()),
@@ -807,7 +798,7 @@ fn build_container_ports(
             protocol: Some("TCP".to_string()),
             ..ContainerPort::default()
         })
-        .collect()
+        .collect())
 }
 
 /// Extract all named ports from the given validated configuration.
@@ -821,17 +812,20 @@ fn build_ports(
     _sc: &SparkCluster,
     rolegroup: &RoleGroupRef<SparkCluster>,
     rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
-) -> Vec<(String, i32)> {
-    match serde_yaml::from_str(&rolegroup.role).unwrap() {
+) -> Result<Vec<(String, i32)>, Error> {
+    Ok(match serde_yaml::from_str(&rolegroup.role).unwrap() {
         SparkRole::Master => vec![
             (
-                PORT_NAME_MASTER.to_string(),
+                PORT_NAME_SPARK.to_string(),
                 rolegroup_config
                     .get(&PropertyNameKind::File(String::from(SPARK_ENV_SH)))
                     .and_then(|c| c.get(SPARK_ENV_MASTER_PORT))
                     .unwrap_or(&String::from("7077"))
-                    .parse()
-                    .unwrap(),
+                    .parse::<i32>()
+                    .map_err(|e| Error::InvalidPort {
+                        source: e,
+                        rolegroup_ref: rolegroup.clone(),
+                    })?,
             ),
             (
                 String::from(PORT_NAME_WEB),
@@ -839,19 +833,25 @@ fn build_ports(
                     .get(&PropertyNameKind::File(String::from(SPARK_ENV_SH)))
                     .and_then(|c| c.get(SPARK_ENV_MASTER_WEBUI_PORT))
                     .unwrap_or(&String::from("8080"))
-                    .parse()
-                    .unwrap(),
+                    .parse::<i32>()
+                    .map_err(|e| Error::InvalidPort {
+                        source: e,
+                        rolegroup_ref: rolegroup.clone(),
+                    })?,
             ),
         ],
         SparkRole::Worker => vec![
             (
-                "worker".to_string(),
+                PORT_NAME_SPARK.to_string(),
                 rolegroup_config
                     .get(&PropertyNameKind::File(String::from(SPARK_ENV_SH)))
                     .and_then(|c| c.get(SPARK_ENV_WORKER_PORT))
                     .unwrap_or(&String::from("7077"))
-                    .parse()
-                    .unwrap(),
+                    .parse::<i32>()
+                    .map_err(|e| Error::InvalidPort {
+                        source: e,
+                        rolegroup_ref: rolegroup.clone(),
+                    })?,
             ),
             (
                 String::from(PORT_NAME_WEB),
@@ -859,8 +859,11 @@ fn build_ports(
                     .get(&PropertyNameKind::File(String::from(SPARK_ENV_SH)))
                     .and_then(|c| c.get(SPARK_ENV_WORKER_WEBUI_PORT))
                     .unwrap_or(&String::from("8080"))
-                    .parse()
-                    .unwrap(),
+                    .parse::<i32>()
+                    .map_err(|e| Error::InvalidPort {
+                        source: e,
+                        rolegroup_ref: rolegroup.clone(),
+                    })?,
             ),
         ],
         SparkRole::HistoryServer => vec![(
@@ -869,10 +872,13 @@ fn build_ports(
                 .get(&PropertyNameKind::File(String::from(SPARK_DEFAULTS_CONF)))
                 .and_then(|c| c.get(SPARK_DEFAULTS_HISTORY_WEBUI_PORT))
                 .unwrap_or(&String::from("8080"))
-                .parse()
-                .unwrap(),
+                .parse::<i32>()
+                .map_err(|e| Error::InvalidPort {
+                    source: e,
+                    rolegroup_ref: rolegroup.clone(),
+                })?,
         )],
-    }
+    })
 }
 
 /// Unroll a map into a String using a given assignment character (for writing config maps)
@@ -902,7 +908,7 @@ fn build_master_service_url(
     let default_master_port = default_master_role_ports
         .iter()
         .filter_map(|(name, value)| match name.as_ref() {
-            PORT_NAME_MASTER => Some(*value),
+            PORT_NAME_SPARK => Some(*value),
             _ => None,
         })
         .take(1)

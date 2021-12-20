@@ -2,18 +2,14 @@
 
 pub const FIELD_MANAGER_SCOPE: &str = "sparkcluster";
 
-pub const PORT_NAME_WEB: &str = "web";
-pub const PORT_NAME_MASTER: &str = "master";
+pub const PORT_NAME_WEB: &str = "http";
+pub const PORT_NAME_SPARK: &str = "spark";
 
 pub const DEFAULT_LOG_DIR: &str = "/tmp/spark-events";
 
 /// Value for the APP_NAME_LABEL label key
 pub const APP_NAME: &str = "spark";
-/// Value for the APP_MANAGED_BY_LABEL label key
-pub const MANAGED_BY: &str = "spark-operator";
-/// Pod label which indicates the known master urls for a worker pod
 pub const MASTER_URLS_HASH_LABEL: &str = "spark.stackable.tech/masterUrls";
-/// Name of the config properties file where spark nodes look for configuration data
 pub const SPARK_DEFAULTS_CONF: &str = "spark-defaults.conf";
 /// Name of the environment variables file where spark nodes look for configuration data
 pub const SPARK_ENV_SH: &str = "spark-env.sh";

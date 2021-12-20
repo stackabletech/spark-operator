@@ -4,6 +4,7 @@ use stackable_operator::kube::runtime::reflector::ObjectRef;
 use stackable_operator::role_utils::RoleGroupRef;
 use stackable_spark_crd::SparkCluster;
 use std::num::TryFromIntError;
+use std::str::FromStr;
 
 #[derive(Snafu, Debug)]
 #[allow(clippy::enum_variant_names)]
@@ -19,8 +20,6 @@ pub enum Error {
     },
     #[snafu(display("object has no name associated"))]
     NoName,
-    #[snafu(display("object has no namespace associated"))]
-    NoNamespace,
     #[snafu(display("failed to list expected pods"))]
     ExpectedPods {
         source: stackable_spark_crd::NoNamespaceError,
@@ -47,8 +46,8 @@ pub enum Error {
         obj_ref: ObjectRef<SparkCluster>,
     },
     #[snafu(display("{} has no server role", obj_ref))]
-    NoServerRole {
-        obj_ref: ObjectRef<SparkCluster>,
+    MissingRoleGroup {
+        obj_ref: RoleGroupRef<SparkCluster>,
     },
     #[snafu(display("failed to calculate global service name for {}", obj_ref))]
     GlobalServiceNameNotFound {
@@ -105,11 +104,6 @@ pub enum Error {
         source: stackable_operator::error::Error,
         sc: ObjectRef<SparkCluster>,
     },
-    #[snafu(display("failed to apply discovery ConfigMap for {}", sc))]
-    ApplyDiscoveryConfig {
-        source: stackable_operator::error::Error,
-        sc: ObjectRef<SparkCluster>,
-    },
     #[snafu(display("failed to update status of {}", sc))]
     ApplyStatus {
         source: stackable_operator::error::Error,
@@ -117,4 +111,9 @@ pub enum Error {
     },
     #[snafu(display("a master role group named 'default' is expected in the cluster defintion"))]
     MasterRoleGroupDefaultExpected,
+    #[snafu(display("Invalid port configuration for rolegroup {}", rolegroup_ref))]
+    InvalidPort {
+        source: <i32 as FromStr>::Err,
+        rolegroup_ref: RoleGroupRef<SparkCluster>,
+    },
 }

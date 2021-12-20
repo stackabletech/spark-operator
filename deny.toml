@@ -36,7 +36,6 @@ allow = [
 exceptions = [
     { name = "stackable-spark-crd", allow = ["OSL-3.0"] },
     { name = "stackable-spark-operator", allow = ["OSL-3.0"] },
-    { name = "stackable-spark-operator-binary", allow = ["OSL-3.0"] },
     ]
 
 [[licenses.clarify]]

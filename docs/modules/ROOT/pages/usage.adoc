@@ -33,7 +33,6 @@ Because of `enableMonitoring: true`, all pods will be annotated for metric scrap
             selector:
               matchLabels:
                 kubernetes.io/os: linux
-            replicas: 1
             config:
               cores: 2
               memory: "2g"
