@@ -508,7 +508,7 @@ fn build_history_stateful_set(
         .add_container_ports(build_container_ports(sc, rolegroup_ref, rolegroup_config)?)
         .liveness_probe(PROBE.clone())
         .readiness_probe(PROBE.clone())
-        .add_volume_mount("log", "/stackable/data/log")
+        .add_volume_mount("log", spark_log_dir(rolegroup_config))
         .add_volume_mount("config", spark_conf_dir(rolegroup_config))
         .build();
     Ok(StatefulSet {
