@@ -733,16 +733,17 @@ fn build_spark_role_properties(
     ),
 > {
     let mut result = HashMap::new();
-    if let Some(masters) = &resource.spec.masters {
-        result.insert(
-            SparkRole::Master.to_string(),
-            (
-                vec![
+    let pnk: Vec<PropertyNameKind> = vec![
                     PropertyNameKind::File(SPARK_ENV_SH.to_string()),
                     PropertyNameKind::File(SPARK_DEFAULTS_CONF.to_string()),
                     PropertyNameKind::File(SPARK_METRICS_PROPERTIES.to_string()),
                     PropertyNameKind::Env,
-                ],
+                ];
+    if let Some(masters) = &resource.spec.masters {
+        result.insert(
+            SparkRole::Master.to_string(),
+            (
+                pnk.clone(),
                 masters.clone().erase(),
             ),
         );
@@ -751,12 +752,7 @@ fn build_spark_role_properties(
         result.insert(
             SparkRole::Worker.to_string(),
             (
-                vec![
-                    PropertyNameKind::File(SPARK_ENV_SH.to_string()),
-                    PropertyNameKind::File(SPARK_DEFAULTS_CONF.to_string()),
-                    PropertyNameKind::File(SPARK_METRICS_PROPERTIES.to_string()),
-                    PropertyNameKind::Env,
-                ],
+                pnk.clone(),
                 workers.clone().erase(),
             ),
         );
@@ -765,12 +761,7 @@ fn build_spark_role_properties(
         result.insert(
             SparkRole::HistoryServer.to_string(),
             (
-                vec![
-                    PropertyNameKind::File(SPARK_ENV_SH.to_string()),
-                    PropertyNameKind::File(SPARK_DEFAULTS_CONF.to_string()),
-                    PropertyNameKind::File(SPARK_METRICS_PROPERTIES.to_string()),
-                    PropertyNameKind::Env,
-                ],
+                pnk.clone(),
                 history_servers.clone().erase(),
             ),
         );
