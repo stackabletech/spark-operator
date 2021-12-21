@@ -321,41 +321,6 @@ fn build_rolegroup_statefulset(
     rolegroup_ref: &RoleGroupRef<SparkCluster>,
     rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
 ) -> Result<StatefulSet, Error> {
-    match serde_yaml::from_str(&rolegroup_ref.role).unwrap() {
-        SparkRole::Master => build_master_stateful_set(sc, rolegroup_ref, rolegroup_config),
-        SparkRole::Worker => build_worker_stateful_set(
-            sc,
-            default_master_role_ports,
-            rolegroup_ref,
-            rolegroup_config,
-        ),
-        SparkRole::HistoryServer => build_history_stateful_set(sc, rolegroup_ref, rolegroup_config),
-    }
-}
-
-/// Build the [`StatefulSet`]s for the given [`SparkRole::Worker`] rolegroup.
-///
-/// # Arguments
-/// * `_sc`                       - The cluster resource object.
-/// * `default_master_role_ports` - Master role service (and container ports). Used to build the master URLs needed by the worker pods.
-/// * `rolegroup`                 - The rolegroup.
-/// * `rolegroup_config`          - The validated configuration for the rolegroup.
-///
-fn build_worker_stateful_set(
-    sc: &SparkCluster,
-    default_master_role_ports: &[(String, i32)],
-    rolegroup_ref: &RoleGroupRef<SparkCluster>,
-    rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
-) -> Result<StatefulSet, Error> {
-    let rolegroup = sc
-        .spec
-        .workers
-        .as_ref()
-        .ok_or(Error::MissingRoleGroup {
-            obj_ref: rolegroup_ref.clone(),
-        })?
-        .role_groups
-        .get(&rolegroup_ref.role_group);
     let sc_version = version(sc)?;
     let image = format!(
         "docker.stackable.tech/stackable/spark:{}-stackable0",
@@ -372,12 +337,9 @@ fn build_worker_stateful_set(
         })
         .collect::<Vec<_>>();
 
-    let container_sc = ContainerBuilder::new("worker")
+    let container_sc = ContainerBuilder::new("spark")
         .image(image)
-        .args(vec![
-            "sbin/start-slave.sh".to_string(),
-            build_master_service_url(rolegroup_ref, default_master_role_ports),
-        ])
+        .args(container_command(rolegroup_ref, default_master_role_ports))
         .readiness_probe(PROBE.clone())
         .liveness_probe(PROBE.clone())
         .add_env_vars(env)
@@ -385,6 +347,7 @@ fn build_worker_stateful_set(
         .add_volume_mount("log", spark_log_dir(rolegroup_config))
         .add_volume_mount("config", spark_conf_dir(rolegroup_config))
         .build();
+
     Ok(StatefulSet {
         metadata: ObjectMetaBuilder::new()
             .name_and_namespace(sc)
@@ -404,263 +367,7 @@ fn build_worker_stateful_set(
             .build(),
         spec: Some(StatefulSetSpec {
             pod_management_policy: Some("Parallel".to_string()),
-            replicas: if sc.spec.stopped.unwrap_or(false) {
-                Some(0)
-            } else {
-                rolegroup.and_then(|rg| rg.replicas).map(i32::from)
-            },
-            selector: LabelSelector {
-                match_labels: Some(role_group_selector_labels(
-                    sc,
-                    APP_NAME,
-                    &rolegroup_ref.role,
-                    &rolegroup_ref.role_group,
-                )),
-                ..LabelSelector::default()
-            },
-            service_name: rolegroup_ref.object_name(),
-            template: PodBuilder::new()
-                .metadata_builder(|m| {
-                    m.with_recommended_labels(
-                        sc,
-                        APP_NAME,
-                        sc_version,
-                        &rolegroup_ref.role,
-                        &rolegroup_ref.role_group,
-                    )
-                })
-                .add_container(container_sc)
-                .add_volume(Volume {
-                    name: "config".to_string(),
-                    config_map: Some(ConfigMapVolumeSource {
-                        name: Some(rolegroup_ref.object_name()),
-                        ..ConfigMapVolumeSource::default()
-                    }),
-                    ..Volume::default()
-                })
-                .build_template(),
-            volume_claim_templates: Some(vec![PersistentVolumeClaim {
-                metadata: ObjectMeta {
-                    name: Some("log".to_string()),
-                    ..ObjectMeta::default()
-                },
-                spec: Some(PersistentVolumeClaimSpec {
-                    access_modes: Some(vec!["ReadWriteOnce".to_string()]),
-                    resources: Some(ResourceRequirements {
-                        requests: Some({
-                            let mut map = BTreeMap::new();
-                            map.insert("storage".to_string(), Quantity("1Gi".to_string()));
-                            map
-                        }),
-                        ..ResourceRequirements::default()
-                    }),
-                    ..PersistentVolumeClaimSpec::default()
-                }),
-                ..PersistentVolumeClaim::default()
-            }]),
-            ..StatefulSetSpec::default()
-        }),
-        status: None,
-    })
-}
-
-/// Build the [`StatefulSet`]s for the given [`SparkRole::HistoryServer`] rolegroup.
-///
-/// # Arguments
-/// * `_sc`              - The cluster resource object.
-/// * `rolegroup`        - The rolegroup.
-/// * `rolegroup_config` - The validated configuration for the rolegroup.
-///
-fn build_history_stateful_set(
-    sc: &SparkCluster,
-    rolegroup_ref: &RoleGroupRef<SparkCluster>,
-    rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
-) -> Result<StatefulSet, Error> {
-    let rolegroup = sc
-        .spec
-        .history_servers
-        .as_ref()
-        .ok_or(Error::MissingRoleGroup {
-            obj_ref: rolegroup_ref.clone(),
-        })?
-        .role_groups
-        .get(&rolegroup_ref.role_group);
-    let sc_version = version(sc)?;
-    let image = format!(
-        "docker.stackable.tech/stackable/spark:{}-stackable0",
-        sc_version
-    );
-    let env = rolegroup_config
-        .get(&PropertyNameKind::Env)
-        .iter()
-        .flat_map(|env_vars| env_vars.iter())
-        .map(|(k, v)| EnvVar {
-            name: k.clone(),
-            value: Some(v.clone()),
-            ..EnvVar::default()
-        })
-        .collect::<Vec<_>>();
-
-    let container_sc = ContainerBuilder::new("history")
-        .image(image)
-        .args(vec!["sbin/start-history-server.sh".to_string()])
-        .add_env_vars(env)
-        .add_container_ports(build_container_ports(sc, rolegroup_ref, rolegroup_config)?)
-        .liveness_probe(PROBE.clone())
-        .readiness_probe(PROBE.clone())
-        .add_volume_mount("log", spark_log_dir(rolegroup_config))
-        .add_volume_mount("config", spark_conf_dir(rolegroup_config))
-        .build();
-    Ok(StatefulSet {
-        metadata: ObjectMetaBuilder::new()
-            .name_and_namespace(sc)
-            .name(&rolegroup_ref.object_name())
-            .ownerreference_from_resource(sc, None, Some(true))
-            .map_err(|e| Error::ObjectMissingMetadataForOwnerRef {
-                source: e,
-                obj_ref: ObjectRef::from_obj(sc),
-            })?
-            .with_recommended_labels(
-                sc,
-                APP_NAME,
-                sc_version,
-                &rolegroup_ref.role,
-                &rolegroup_ref.role_group,
-            )
-            .build(),
-        spec: Some(StatefulSetSpec {
-            pod_management_policy: Some("Parallel".to_string()),
-            replicas: if sc.spec.stopped.unwrap_or(false) {
-                Some(0)
-            } else {
-                rolegroup.and_then(|rg| rg.replicas).map(i32::from)
-            },
-            selector: LabelSelector {
-                match_labels: Some(role_group_selector_labels(
-                    sc,
-                    APP_NAME,
-                    &rolegroup_ref.role,
-                    &rolegroup_ref.role_group,
-                )),
-                ..LabelSelector::default()
-            },
-            service_name: rolegroup_ref.object_name(),
-            template: PodBuilder::new()
-                .metadata_builder(|m| {
-                    m.with_recommended_labels(
-                        sc,
-                        APP_NAME,
-                        sc_version,
-                        &rolegroup_ref.role,
-                        &rolegroup_ref.role_group,
-                    )
-                })
-                .add_container(container_sc)
-                .add_volume(Volume {
-                    name: "config".to_string(),
-                    config_map: Some(ConfigMapVolumeSource {
-                        name: Some(rolegroup_ref.object_name()),
-                        ..ConfigMapVolumeSource::default()
-                    }),
-                    ..Volume::default()
-                })
-                .build_template(),
-            volume_claim_templates: Some(vec![PersistentVolumeClaim {
-                metadata: ObjectMeta {
-                    name: Some("log".to_string()),
-                    ..ObjectMeta::default()
-                },
-                spec: Some(PersistentVolumeClaimSpec {
-                    access_modes: Some(vec!["ReadWriteOnce".to_string()]),
-                    resources: Some(ResourceRequirements {
-                        requests: Some({
-                            let mut map = BTreeMap::new();
-                            map.insert("storage".to_string(), Quantity("1Gi".to_string()));
-                            map
-                        }),
-                        ..ResourceRequirements::default()
-                    }),
-                    ..PersistentVolumeClaimSpec::default()
-                }),
-                ..PersistentVolumeClaim::default()
-            }]),
-            ..StatefulSetSpec::default()
-        }),
-        status: None,
-    })
-}
-
-/// Build the [`StatefulSet`]s for the given [`SparkRole::Master`] rolegroup.
-///
-/// # Arguments
-/// * `_sc`              - The cluster resource object.
-/// * `rolegroup`        - The rolegroup.
-/// * `rolegroup_config` - The validated configuration for the rolegroup.
-///
-fn build_master_stateful_set(
-    sc: &SparkCluster,
-    rolegroup_ref: &RoleGroupRef<SparkCluster>,
-    rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
-) -> Result<StatefulSet, Error> {
-    let rolegroup = sc
-        .spec
-        .masters
-        .as_ref()
-        .ok_or(Error::MissingRoleGroup {
-            obj_ref: rolegroup_ref.clone(),
-        })?
-        .role_groups
-        .get(&rolegroup_ref.role_group);
-    let sc_version = version(sc)?;
-    let image = format!(
-        "docker.stackable.tech/stackable/spark:{}-stackable0",
-        sc_version
-    );
-    let env = rolegroup_config
-        .get(&PropertyNameKind::Env)
-        .iter()
-        .flat_map(|env_vars| env_vars.iter())
-        .map(|(k, v)| EnvVar {
-            name: k.clone(),
-            value: Some(v.clone()),
-            ..EnvVar::default()
-        })
-        .collect::<Vec<_>>();
-
-    let container_sc = ContainerBuilder::new(&SparkRole::Master.to_string())
-        .image(image)
-        .args(vec!["sbin/start-master.sh".to_string()])
-        .add_env_vars(env)
-        .readiness_probe(PROBE.clone())
-        .liveness_probe(PROBE.clone())
-        .add_container_ports(build_container_ports(sc, rolegroup_ref, rolegroup_config)?)
-        .add_volume_mount("log", spark_log_dir(rolegroup_config))
-        .add_volume_mount("config", spark_conf_dir(rolegroup_config))
-        .build();
-    Ok(StatefulSet {
-        metadata: ObjectMetaBuilder::new()
-            .name_and_namespace(sc)
-            .name(&rolegroup_ref.object_name())
-            .ownerreference_from_resource(sc, None, Some(true))
-            .map_err(|e| Error::ObjectMissingMetadataForOwnerRef {
-                source: e,
-                obj_ref: ObjectRef::from_obj(sc),
-            })?
-            .with_recommended_labels(
-                sc,
-                APP_NAME,
-                sc_version,
-                &rolegroup_ref.role,
-                &rolegroup_ref.role_group,
-            )
-            .build(),
-        spec: Some(StatefulSetSpec {
-            pod_management_policy: Some("Parallel".to_string()),
-            replicas: if sc.spec.stopped.unwrap_or(false) {
-                Some(0)
-            } else {
-                rolegroup.and_then(|rg| rg.replicas).map(i32::from)
-            },
+            replicas: Some(rolegroup_replicas(sc, rolegroup_ref)?),
             selector: LabelSelector {
                 match_labels: Some(role_group_selector_labels(
                     sc,
@@ -734,36 +441,27 @@ fn build_spark_role_properties(
 > {
     let mut result = HashMap::new();
     let pnk: Vec<PropertyNameKind> = vec![
-                    PropertyNameKind::File(SPARK_ENV_SH.to_string()),
-                    PropertyNameKind::File(SPARK_DEFAULTS_CONF.to_string()),
-                    PropertyNameKind::File(SPARK_METRICS_PROPERTIES.to_string()),
-                    PropertyNameKind::Env,
-                ];
+        PropertyNameKind::File(SPARK_ENV_SH.to_string()),
+        PropertyNameKind::File(SPARK_DEFAULTS_CONF.to_string()),
+        PropertyNameKind::File(SPARK_METRICS_PROPERTIES.to_string()),
+        PropertyNameKind::Env,
+    ];
     if let Some(masters) = &resource.spec.masters {
         result.insert(
             SparkRole::Master.to_string(),
-            (
-                pnk.clone(),
-                masters.clone().erase(),
-            ),
+            (pnk.clone(), masters.clone().erase()),
         );
     }
     if let Some(workers) = &resource.spec.workers {
         result.insert(
             SparkRole::Worker.to_string(),
-            (
-                pnk.clone(),
-                workers.clone().erase(),
-            ),
+            (pnk.clone(), workers.clone().erase()),
         );
     }
     if let Some(history_servers) = &resource.spec.history_servers {
         result.insert(
             SparkRole::HistoryServer.to_string(),
-            (
-                pnk.clone(),
-                history_servers.clone().erase(),
-            ),
+            (pnk, history_servers.clone().erase()),
         );
     }
     result
@@ -962,4 +660,68 @@ fn version(sc: &SparkCluster) -> Result<&str, Error> {
     sc.spec.version.as_deref().ok_or(ObjectHasNoVersion {
         obj_ref: ObjectRef::from_obj(sc),
     })
+}
+
+fn container_command(
+    rolegroup_ref: &RoleGroupRef<SparkCluster>,
+    default_master_role_ports: &[(String, i32)],
+) -> Vec<String> {
+    match serde_yaml::from_str(&rolegroup_ref.role).unwrap() {
+        SparkRole::Master => vec!["sbin/start-master.sh".to_string()],
+        SparkRole::HistoryServer => vec!["sbin/start-history-server.sh".to_string()],
+        SparkRole::Worker => vec![
+            "sbin/start-slave.sh".to_string(),
+            build_master_service_url(rolegroup_ref, default_master_role_ports),
+        ],
+    }
+}
+
+fn rolegroup_replicas(
+    sc: &SparkCluster,
+    rolegroup_ref: &RoleGroupRef<SparkCluster>,
+) -> Result<i32, Error> {
+    let replicas = match serde_yaml::from_str(&rolegroup_ref.role).unwrap() {
+        SparkRole::Worker => sc
+            .spec
+            .workers
+            .as_ref()
+            .ok_or(Error::MissingRoleGroup {
+                obj_ref: rolegroup_ref.clone(),
+            })?
+            .role_groups
+            .get(&rolegroup_ref.role_group)
+            .and_then(|rg| rg.replicas)
+            .map(i32::from)
+            .unwrap_or(0),
+        SparkRole::HistoryServer => sc
+            .spec
+            .history_servers
+            .as_ref()
+            .ok_or(Error::MissingRoleGroup {
+                obj_ref: rolegroup_ref.clone(),
+            })?
+            .role_groups
+            .get(&rolegroup_ref.role_group)
+            .and_then(|rg| rg.replicas)
+            .map(i32::from)
+            .unwrap_or(0),
+        SparkRole::Master => sc
+            .spec
+            .masters
+            .as_ref()
+            .ok_or(Error::MissingRoleGroup {
+                obj_ref: rolegroup_ref.clone(),
+            })?
+            .role_groups
+            .get(&rolegroup_ref.role_group)
+            .and_then(|rg| rg.replicas)
+            .map(i32::from)
+            .unwrap_or(0),
+    };
+
+    if sc.spec.stopped.unwrap_or(false) {
+        Ok(0)
+    } else {
+        Ok(replicas)
+    }
 }
