@@ -1,14 +1,11 @@
 = Usage
 
-After installation, the CRD for this operator must be created:
+== Create an Apache Spark cluster
 
-    kubectl apply -f /etc/stackable/spark-operator/crd/sparkcluster.crd.yaml
+If you followed the installation instructions, you should now have a Stackable Operator for Apache Spark up and running and you are ready to create your first Apache Spark cluster.
 
 The example below creates an Apache Spark 3.0.1 cluster with one master (because of `replicas: 1`), one history server and as many workers as nodes available.
-Multiple instances in the same selector may lead to port duplicates which results in the affected node
-to increase the port one by one (if max_port_retries is not set to 0). Keep that in mind when, for example running multiple masters without specified ports on the same node.
-
-Because of `enableMonitoring: true`, all pods will be annotated for metric scraping. Metrics are retrieved from Spark's built in Prometheus Servlet. Only cluster-wide metrics are scraped currently (no application metrics).
+Because of `enableMonitoring: true`, all pods will be annotated for metric scraping. Metrics are retrieved from Spark's built in Prometheus Servlet.
 
     cat <<EOF | kubectl apply -f -
     apiVersion: spark.stackable.tech/v1alpha1
@@ -52,7 +49,31 @@ Because of `enableMonitoring: true`, all pods will be annotated for metric scrap
               historyWebUiPort: 18081
     EOF
 
-=== Structure
+== Using the Apache Spark cluster
+
+The example above sets up a https://kubernetes.io/docs/concepts/services-networking/service/#type-nodeport[NodePort] service named `simple` that clients can use to run Spark jobs.
+
+This is how the list of services might look like:
+
+    kubectl get svc
+    NAME                            TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)                         AGE
+    kubernetes                      ClusterIP   10.96.0.1       <none>        443/TCP                         20m
+    simple                          NodePort    10.96.220.230   <none>        7078:31585/TCP,8081:30497/TCP   31s
+    simple-history-server-default   ClusterIP   None            <none>        18081/TCP                       31s
+    simple-master-default           ClusterIP   None            <none>        7078/TCP,8081/TCP               31s
+    simple-slave-2core2g            ClusterIP   None            <none>        3031/TCP,8083/TCP               31s
+
+To start a Spark shell from inside the cluster you would run:
+
+    /stackable/spark/bin/spark-shell --master spark://simple-master-default:7078
+
+and from outside: 
+
+    spark-shell --master spark://172.18.0.2:31585
+
+where `172.18.0.2` is the IP address of one of your nodes.
+
+== Configuration properties
 
 There are three levels of configuration:
 

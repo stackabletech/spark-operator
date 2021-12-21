@@ -1,14 +1,19 @@
 //! This module provides constants that are shared via multiple crates.
 
-/// Name of the config properties file where spark nodes look for configuration data
+pub const FIELD_MANAGER_SCOPE: &str = "sparkcluster";
+
+pub const PORT_NAME_WEB: &str = "http";
+pub const PORT_NAME_SPARK: &str = "spark";
+
+pub const DEFAULT_LOG_DIR: &str = "/tmp/spark-events";
+
+/// Value for the APP_NAME_LABEL label key
+pub const APP_NAME: &str = "spark";
 pub const SPARK_DEFAULTS_CONF: &str = "spark-defaults.conf";
 /// Name of the environment variables file where spark nodes look for configuration data
 pub const SPARK_ENV_SH: &str = "spark-env.sh";
 /// Name of the metrics properties file to enable e.g. JMX metrics.
 pub const SPARK_METRICS_PROPERTIES: &str = "metrics.properties";
-/// Basic start up parameter: We do not want to let processes work in background,
-/// so SPARK_NO_DAEMONIZE = true must be set at all times (before starting the process).
-pub const SPARK_NO_DAEMONIZE: &str = "SPARK_NO_DAEMONIZE";
 /// Basic start up parameter: We need to point the spark nodes to "our" configuration
 /// folder. Must be set at all times (before starting the process).
 pub const SPARK_CONF_DIR: &str = "SPARK_CONF_DIR";

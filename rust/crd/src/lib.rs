@@ -1,34 +1,22 @@
 //! This module provides all required CRD definitions and additional helper methods.
-pub mod commands;
+pub mod constants;
 
-pub use commands::{Restart, Start, Stop};
-use semver::Version;
+use constants::*;
+
 use serde::{Deserialize, Serialize};
-use stackable_operator::identity::PodToNodeMapping;
-use stackable_operator::k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
-use stackable_operator::kube::CustomResource;
-use stackable_operator::product_config_utils::{ConfigError, Configuration};
-use stackable_operator::role_utils::{CommonConfiguration, Role};
-use stackable_operator::schemars::{self, JsonSchema};
-use stackable_operator::status::{Conditions, Status, Versioned};
-use stackable_operator::versioning::{ProductVersion, Versioning, VersioningState};
-use stackable_spark_common::constants::{
-    SPARK_DEFAULTS_AUTHENTICATE, SPARK_DEFAULTS_AUTHENTICATE_SECRET, SPARK_DEFAULTS_EVENT_LOG_DIR,
-    SPARK_DEFAULTS_HISTORY_FS_LOG_DIRECTORY, SPARK_DEFAULTS_HISTORY_STORE_PATH,
-    SPARK_DEFAULTS_HISTORY_WEBUI_PORT, SPARK_DEFAULTS_PORT_MAX_RETRIES, SPARK_ENV_MASTER_PORT,
-    SPARK_ENV_MASTER_WEBUI_PORT, SPARK_ENV_WORKER_CORES, SPARK_ENV_WORKER_MEMORY,
-    SPARK_ENV_WORKER_PORT, SPARK_ENV_WORKER_WEBUI_PORT,
+use snafu::Snafu;
+use stackable_operator::role_utils::RoleGroupRef;
+use stackable_operator::{
+    kube::{runtime::reflector::ObjectRef, CustomResource},
+    product_config_utils::{ConfigError, Configuration},
+    role_utils::{CommonConfiguration, Role},
+    schemars::{self, JsonSchema},
 };
-use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::hash::Hash;
 use strum_macros::EnumIter;
 
-const DEFAULT_LOG_DIR: &str = "/tmp";
-const SPARK_DEFAULTS_CONF: &str = "spark-defaults.conf";
-const SPARK_ENV_SH: &str = "spark-env.sh";
-
-#[derive(Clone, CustomResource, Debug, Deserialize, JsonSchema, Serialize)]
+#[derive(Clone, CustomResource, Debug, Default, Deserialize, JsonSchema, PartialEq, Serialize)]
 #[kube(
     group = "spark.stackable.tech",
     version = "v1alpha1",
@@ -36,44 +24,34 @@ const SPARK_ENV_SH: &str = "spark-env.sh";
     shortname = "sc",
     status = "SparkClusterStatus",
     namespaced,
-    kube_core = "stackable_operator::kube::core",
-    k8s_openapi = "stackable_operator::k8s_openapi",
-    schemars = "stackable_operator::schemars"
+    crates(
+        kube_core = "stackable_operator::kube::core",
+        k8s_openapi = "stackable_operator::k8s_openapi",
+        schemars = "stackable_operator::schemars"
+    )
 )]
 #[serde(rename_all = "camelCase")]
 pub struct SparkClusterSpec {
-    pub version: SparkVersion,
-    pub masters: Role<MasterConfig>,
-    pub workers: Role<WorkerConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub masters: Option<Role<MasterConfig>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workers: Option<Role<WorkerConfig>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history_servers: Option<Role<HistoryServerConfig>>,
     #[serde(flatten)]
     pub config: Option<CommonConfiguration<CommonConfig>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stopped: Option<bool>,
 }
 
-impl Status<SparkClusterStatus> for SparkCluster {
-    fn status(&self) -> &Option<SparkClusterStatus> {
-        &self.status
-    }
-    fn status_mut(&mut self) -> &mut Option<SparkClusterStatus> {
-        &mut self.status
-    }
-}
-
-impl SparkClusterSpec {
-    pub fn monitoring_enabled(&self) -> bool {
-        if let Some(CommonConfiguration {
-            config:
-                Some(CommonConfig {
-                    enable_monitoring: Some(enabled),
-                    ..
-                }),
-            ..
-        }) = &self.config
-        {
-            return *enabled;
-        }
-        false
-    }
+#[derive(Clone, Default, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SparkClusterStatus {
+    /// An opaque value that changes every time a discovery detail does
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discovery_hash: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
@@ -106,6 +84,119 @@ pub struct WorkerConfig {
 pub struct HistoryServerConfig {
     pub store_path: Option<String>,
     pub history_web_ui_port: Option<u16>,
+}
+
+/// Reference to a single `Pod` that is a component of a [`SparkCluster`]
+///
+/// Used for service discovery.
+pub struct SparkPodRef {
+    pub namespace: String,
+    pub role_group_service_name: String,
+    pub pod_name: String,
+}
+
+impl SparkPodRef {
+    pub fn fqdn(&self) -> String {
+        format!(
+            "{}.{}.{}.svc.cluster.local",
+            self.pod_name, self.role_group_service_name, self.namespace
+        )
+    }
+}
+
+#[derive(Debug, Snafu)]
+#[snafu(display("object has no namespace associated"))]
+pub struct NoNamespaceError;
+impl SparkCluster {
+    /// The name of the role-level load-balanced Kubernetes `Service`
+    pub fn server_role_service_name(&self) -> Option<String> {
+        self.metadata.name.clone()
+    }
+
+    /// The fully-qualified domain name of the role-level load-balanced Kubernetes `Service`
+    pub fn server_role_service_fqdn(&self) -> Option<String> {
+        Some(format!(
+            "{}.{}.svc.cluster.local",
+            self.server_role_service_name()?,
+            self.metadata.namespace.as_ref()?
+        ))
+    }
+
+    /// Metadata about a server rolegroup
+    pub fn server_rolegroup_ref(
+        &self,
+        role_name: impl Into<String>,
+        group_name: impl Into<String>,
+    ) -> RoleGroupRef<SparkCluster> {
+        RoleGroupRef {
+            cluster: ObjectRef::from_obj(self),
+            role: role_name.into(),
+            role_group: group_name.into(),
+        }
+    }
+
+    /// List all pods expected to form the cluster
+    ///
+    /// We try to predict the pods here rather than looking at the current cluster state in order to
+    /// avoid instance churn.
+    pub fn pods(&self) -> Result<impl Iterator<Item = SparkPodRef> + '_, NoNamespaceError> {
+        let ns = self.metadata.namespace.clone().ok_or(NoNamespaceError)?;
+        Ok(self
+            .spec
+            .masters
+            .iter()
+            .flat_map(|role| &role.role_groups)
+            .map(|(rolegroup_name, rg)| {
+                (
+                    SparkRole::Master.to_string(),
+                    rolegroup_name,
+                    rg.replicas.unwrap_or(0),
+                )
+            })
+            .chain(
+                self.spec
+                    .workers
+                    .iter()
+                    .flat_map(|role| &role.role_groups)
+                    .map(|(rolegroup_name, rg)| {
+                        (
+                            SparkRole::Worker.to_string(),
+                            rolegroup_name,
+                            rg.replicas.unwrap_or(0),
+                        )
+                    }),
+            )
+            .chain(
+                self.spec
+                    .history_servers
+                    .iter()
+                    .flat_map(|role| &role.role_groups)
+                    .map(|(rolegroup_name, rg)| {
+                        (
+                            SparkRole::HistoryServer.to_string(),
+                            rolegroup_name,
+                            rg.replicas.unwrap_or(0),
+                        )
+                    }),
+            )
+            .flat_map(move |(role_name, rolegroup_name, replicas)| {
+                let rolegroup_ref = self.server_rolegroup_ref(role_name, rolegroup_name);
+                let ns = ns.clone();
+                (0..replicas).map(move |i| SparkPodRef {
+                    namespace: ns.clone(),
+                    role_group_service_name: rolegroup_ref.object_name(),
+                    pod_name: format!("{}-{}", rolegroup_ref.object_name(), i),
+                })
+            }))
+    }
+
+    pub fn enable_monitoring(&self) -> Option<bool> {
+        self.spec
+            .config
+            .as_ref()
+            .and_then(|common_configuration| common_configuration.config.as_ref())
+            .and_then(|common_config| common_config.enable_monitoring)
+    }
 }
 
 impl Configuration for MasterConfig {
@@ -245,18 +336,6 @@ impl Configuration for HistoryServerConfig {
         match file {
             SPARK_ENV_SH => {}
             SPARK_DEFAULTS_CONF => {
-                if let Some(CommonConfiguration {
-                    config: Some(common_config),
-                    ..
-                }) = &resource.spec.config
-                {
-                    let log_dir = common_config.log_dir.as_deref().unwrap_or(DEFAULT_LOG_DIR);
-                    config.insert(
-                        SPARK_DEFAULTS_HISTORY_FS_LOG_DIRECTORY.to_string(),
-                        Some(log_dir.to_string()),
-                    );
-                }
-
                 if let Some(store_path) = &self.store_path {
                     config.insert(
                         SPARK_DEFAULTS_HISTORY_STORE_PATH.to_string(),
@@ -280,7 +359,7 @@ impl Configuration for HistoryServerConfig {
 }
 
 fn add_common_spark_defaults(
-    role: &str,
+    _role: &str,
     config: &mut BTreeMap<String, Option<String>>,
     spec: &SparkClusterSpec,
 ) {
@@ -307,18 +386,16 @@ fn add_common_spark_defaults(
             Some(max_port_retries.to_string()),
         );
 
+        // These two are always set together
         let log_dir = common_config.log_dir.as_deref().unwrap_or(DEFAULT_LOG_DIR);
-        if role == SparkRole::HistoryServer.to_string() {
-            config.insert(
-                SPARK_DEFAULTS_HISTORY_FS_LOG_DIRECTORY.to_string(),
-                Some(log_dir.to_string()),
-            );
-        } else {
-            config.insert(
-                SPARK_DEFAULTS_EVENT_LOG_DIR.to_string(),
-                Some(log_dir.to_string()),
-            );
-        }
+        config.insert(
+            SPARK_DEFAULTS_HISTORY_FS_LOG_DIRECTORY.to_string(),
+            Some(log_dir.to_string()),
+        );
+        config.insert(
+            SPARK_DEFAULTS_EVENT_LOG_DIR.to_string(),
+            Some(log_dir.to_string()),
+        );
     }
 }
 
@@ -348,188 +425,4 @@ pub enum SparkRole {
     #[serde(rename = "history-server")]
     #[strum(serialize = "history-server")]
     HistoryServer,
-}
-
-impl SparkRole {
-    /// Returns the container start command for a spark node
-    /// Right now works only for images using hadoop2.7
-    /// # Arguments
-    ///
-    /// * `version` - Current specified cluster version
-    pub fn get_command(&self) -> String {
-        format!("./sbin/start-{}.sh", self.to_string())
-    }
-
-    /// Returns a tuple of the required container ports for each role.
-    /// (protocol_port, web_ui_port / metrics_port)
-    ///
-    /// # Arguments
-    ///
-    /// * `config` - The validated product-config containing user defined or default ports
-    pub fn container_ports<'a>(
-        &self,
-        config: &'a BTreeMap<String, String>,
-    ) -> (Option<&'a String>, Option<&'a String>) {
-        return match &self {
-            SparkRole::Master => (
-                config.get(SPARK_ENV_MASTER_PORT),
-                config.get(SPARK_ENV_MASTER_WEBUI_PORT),
-            ),
-            SparkRole::Worker => (
-                config.get(SPARK_ENV_WORKER_PORT),
-                config.get(SPARK_ENV_WORKER_WEBUI_PORT),
-            ),
-            SparkRole::HistoryServer => (None, config.get(SPARK_DEFAULTS_HISTORY_WEBUI_PORT)),
-        };
-    }
-}
-
-#[derive(Clone, Debug, Hash, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
-pub struct ConfigOption {
-    pub name: String,
-    pub value: String,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, JsonSchema, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SparkClusterStatus {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub version: Option<ProductVersion<SparkVersion>>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub conditions: Vec<Condition>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub current_command: Option<CurrentCommand>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cluster_execution_status: Option<ClusterExecutionStatus>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub history: Option<PodToNodeMapping>,
-}
-
-impl Versioned<SparkVersion> for SparkClusterStatus {
-    fn version(&self) -> &Option<ProductVersion<SparkVersion>> {
-        &self.version
-    }
-    fn version_mut(&mut self) -> &mut Option<ProductVersion<SparkVersion>> {
-        &mut self.version
-    }
-}
-
-impl Conditions for SparkClusterStatus {
-    fn conditions(&self) -> &[Condition] {
-        self.conditions.as_slice()
-    }
-    fn conditions_mut(&mut self) -> &mut Vec<Condition> {
-        &mut self.conditions
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
-pub enum ClusterExecutionStatus {
-    Stopped,
-    Running,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, JsonSchema, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CurrentCommand {
-    pub command_ref: String,
-    pub command_type: String,
-    pub started_at: String,
-}
-
-#[allow(non_camel_case_types)]
-#[derive(
-    Clone,
-    Debug,
-    Deserialize,
-    Eq,
-    JsonSchema,
-    PartialEq,
-    Serialize,
-    strum_macros::Display,
-    strum_macros::EnumString,
-)]
-pub enum SparkVersion {
-    #[serde(rename = "2.4.7")]
-    #[strum(serialize = "2.4.7")]
-    v2_4_7,
-
-    #[serde(rename = "3.0.1")]
-    #[strum(serialize = "3.0.1")]
-    v3_0_1,
-
-    #[serde(rename = "3.0.2")]
-    #[strum(serialize = "3.0.2")]
-    v3_0_2,
-
-    #[serde(rename = "3.1.1")]
-    #[strum(serialize = "3.1.1")]
-    v3_1_1,
-}
-
-impl SparkVersion {
-    pub fn package_name(&self) -> String {
-        format!("spark-{}-bin-hadoop2.7", self.to_string())
-    }
-}
-
-impl Versioning for SparkVersion {
-    fn versioning_state(&self, other: &Self) -> VersioningState {
-        let from_version = match Version::parse(&self.to_string()) {
-            Ok(v) => v,
-            Err(e) => {
-                return VersioningState::Invalid(format!(
-                    "Could not parse [{}] to SemVer: {}",
-                    self.to_string(),
-                    e.to_string()
-                ))
-            }
-        };
-
-        let to_version = match Version::parse(&other.to_string()) {
-            Ok(v) => v,
-            Err(e) => {
-                return VersioningState::Invalid(format!(
-                    "Could not parse [{}] to SemVer: {}",
-                    other.to_string(),
-                    e.to_string()
-                ))
-            }
-        };
-
-        match to_version.cmp(&from_version) {
-            Ordering::Greater => VersioningState::ValidUpgrade,
-            Ordering::Less => VersioningState::ValidDowngrade,
-            Ordering::Equal => VersioningState::NoOp,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_spark_node_type_get_command() {
-        assert_eq!(
-            SparkRole::Master.get_command(),
-            format!("./sbin/start-{}.sh", SparkRole::Master.to_string())
-        );
-    }
-
-    #[test]
-    fn test_spark_version_versioning() {
-        assert_eq!(
-            SparkVersion::v2_4_7.versioning_state(&SparkVersion::v3_1_1),
-            VersioningState::ValidUpgrade
-        );
-        assert_eq!(
-            SparkVersion::v3_1_1.versioning_state(&SparkVersion::v2_4_7),
-            VersioningState::ValidDowngrade
-        );
-        assert_eq!(
-            SparkVersion::v2_4_7.versioning_state(&SparkVersion::v2_4_7),
-            VersioningState::NoOp
-        );
-    }
 }

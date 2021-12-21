@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Complete rewrite to use `StatefulSet`, `Service` and the Kubernetes overlay network. ([#222])
+
+[#222]: https://github.com/stackabletech/spark-operator/pull/222
+
 ## [0.4.0] - 2021-12-06
 
 
