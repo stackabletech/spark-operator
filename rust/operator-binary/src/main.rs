@@ -5,34 +5,21 @@ mod spark_controller;
 extern crate lazy_static;
 
 use futures::stream::StreamExt;
+use stackable_operator::cli::Command;
 use stackable_operator::k8s_openapi::api::apps::v1::StatefulSet;
 use stackable_operator::k8s_openapi::api::core::v1::{ConfigMap, Endpoints, Service};
 use stackable_operator::kube::api::{DynamicObject, ListParams};
 use stackable_operator::kube::runtime::controller::{Context, Controller, ReconcilerAction};
 use stackable_operator::kube::runtime::reflector::ObjectRef;
 use stackable_operator::kube::{CustomResourceExt, Resource};
-use stackable_operator::product_config::ProductConfigManager;
 use stackable_spark_crd::SparkCluster;
-use std::str::FromStr;
 use structopt::StructOpt;
 
 #[derive(StructOpt)]
 #[structopt(about = built_info::PKG_DESCRIPTION, author = "Stackable GmbH - info@stackable.de")]
 struct Opts {
     #[structopt(subcommand)]
-    cmd: Cmd,
-}
-
-#[derive(StructOpt)]
-enum Cmd {
-    /// Print CRD objects
-    Crd,
-    /// Run operator
-    Run {
-        /// Provides the path to a product-config file
-        #[structopt(long, short = "p", value_name = "FILE")]
-        product_config: Option<String>,
-    },
+    cmd: Command,
 }
 
 mod built_info {
@@ -56,8 +43,8 @@ async fn main() -> anyhow::Result<()> {
     stackable_operator::logging::initialize_logging("SPARK_OPERATOR_LOG");
     let opts = Opts::from_args();
     match opts.cmd {
-        Cmd::Crd => println!("{}", serde_yaml::to_string(&SparkCluster::crd())?,),
-        Cmd::Run { product_config } => {
+        Command::Crd => println!("{}", serde_yaml::to_string(&SparkCluster::crd())?,),
+        Command::Run { product_config } => {
             stackable_operator::utils::print_startup_string(
                 built_info::PKG_DESCRIPTION,
                 built_info::PKG_VERSION,
@@ -66,13 +53,12 @@ async fn main() -> anyhow::Result<()> {
                 built_info::BUILT_TIME_UTC,
                 built_info::RUSTC_VERSION,
             );
-            let product_config = if let Some(product_config_path) = product_config {
-                ProductConfigManager::from_yaml_file(&product_config_path)?
-            } else {
-                ProductConfigManager::from_str(include_str!(
-                    "../../../deploy/config-spec/properties.yaml"
-                ))?
-            };
+
+            let product_config = product_config.load(&[
+                "deploy/config-spec/properties.yaml",
+                "/etc/stackable/spark-operator/config-spec/properties.yaml",
+            ])?;
+
             let client =
                 stackable_operator::client::create_client(Some("spark.stackable.tech".to_string()))
                     .await?;
