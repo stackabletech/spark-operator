@@ -58,7 +58,7 @@ pub struct Ctx {
 
 /// The main reconcile loop.
 ///
-/// For each rolegroup a [`StatefulSet`] and a [`ClusterIP`] service is created.
+/// For each rolegroup a [`StatefulSet`] and a `ClusterIP` service is created.
 pub async fn reconcile(sc: SparkCluster, ctx: Context<Ctx>) -> Result<ReconcilerAction, Error> {
     tracing::info!("Starting reconcile");
     let sc_ref = ObjectRef::from_obj(&sc);
@@ -160,7 +160,7 @@ pub async fn reconcile(sc: SparkCluster, ctx: Context<Ctx>) -> Result<Reconciler
     })
 }
 
-/// Build the [`NodePort`] service for clients.
+/// Build the `NodePort` service for clients.
 fn build_master_role_service(
     sc: &SparkCluster,
     service_ports: Vec<ServicePort>,
