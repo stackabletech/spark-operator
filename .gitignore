@@ -7,5 +7,3 @@ target/
 *.iml
 
 *.tgz
-deploy/helm/spark-operator/configs
-deploy/helm/spark-operator/templates/crds.yaml
