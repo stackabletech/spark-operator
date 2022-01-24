@@ -59,7 +59,7 @@ This is how the list of services might look like:
 
 To start a Spark shell from inside the cluster you would run:
 
-    /stackable/spark/bin/spark-shell --master spark://simple-master-default:7077
+    /stackable/spark/bin/spark-shell --master spark://simple-spark-master-default:7077
 
 and from outside: 
 
