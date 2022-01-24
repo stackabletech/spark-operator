@@ -2,9 +2,9 @@
 pub mod constants;
 
 use constants::*;
-
 use serde::{Deserialize, Serialize};
-use snafu::Snafu;
+use snafu::{OptionExt, Snafu};
+use stackable_operator::k8s_openapi::api::core::v1::{ContainerPort, ServicePort};
 use stackable_operator::role_utils::RoleGroupRef;
 use stackable_operator::{
     kube::{runtime::reflector::ObjectRef, CustomResource},
@@ -14,7 +14,17 @@ use stackable_operator::{
 };
 use std::collections::BTreeMap;
 use std::hash::Hash;
+use std::str::FromStr;
+use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
+
+#[derive(Snafu, Debug)]
+pub enum Error {
+    #[snafu(display("object has no namespace associated"))]
+    NoNamespace,
+    #[snafu(display("Unknown spark role found {role}. Should be one of {roles:?}"))]
+    UnknownSparkRole { role: String, roles: Vec<String> },
+}
 
 #[derive(Clone, CustomResource, Debug, Default, Deserialize, JsonSchema, PartialEq, Serialize)]
 #[kube(
@@ -65,30 +75,22 @@ pub struct CommonConfig {
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct MasterConfig {
-    pub master_port: Option<u16>,
-    pub master_web_ui_port: Option<u16>,
-}
+pub struct MasterConfig {}
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkerConfig {
     pub cores: Option<usize>,
     pub memory: Option<String>,
-    pub worker_port: Option<u16>,
-    pub worker_web_ui_port: Option<u16>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryServerConfig {
     pub store_path: Option<String>,
-    pub history_web_ui_port: Option<u16>,
 }
 
 /// Reference to a single `Pod` that is a component of a [`SparkCluster`]
-///
-/// Used for service discovery.
 pub struct SparkPodRef {
     pub namespace: String,
     pub role_group_service_name: String,
@@ -104,85 +106,42 @@ impl SparkPodRef {
     }
 }
 
-#[derive(Debug, Snafu)]
-#[snafu(display("object has no namespace associated"))]
-pub struct NoNamespaceError;
 impl SparkCluster {
     /// The name of the role-level load-balanced Kubernetes `Service`
-    pub fn server_role_service_name(&self) -> Option<String> {
-        self.metadata.name.clone()
+    pub fn master_role_service_name(&self) -> Option<String> {
+        self.metadata
+            .name
+            .as_ref()
+            .map(|name| format!("{}-{}", name, SparkRole::Master.to_string()))
     }
 
     /// The fully-qualified domain name of the role-level load-balanced Kubernetes `Service`
-    pub fn server_role_service_fqdn(&self) -> Option<String> {
+    pub fn master_role_service_fqdn(&self) -> Option<String> {
         Some(format!(
             "{}.{}.svc.cluster.local",
-            self.server_role_service_name()?,
+            self.master_role_service_name()?,
             self.metadata.namespace.as_ref()?
         ))
     }
 
-    /// Metadata about a server rolegroup
-    pub fn server_rolegroup_ref(
-        &self,
-        role_name: impl Into<String>,
-        group_name: impl Into<String>,
-    ) -> RoleGroupRef<SparkCluster> {
-        RoleGroupRef {
-            cluster: ObjectRef::from_obj(self),
-            role: role_name.into(),
-            role_group: group_name.into(),
-        }
-    }
-
-    /// List all pods expected to form the cluster
+    /// List all master pods expected to form the cluster
     ///
     /// We try to predict the pods here rather than looking at the current cluster state in order to
     /// avoid instance churn.
-    pub fn pods(&self) -> Result<impl Iterator<Item = SparkPodRef> + '_, NoNamespaceError> {
-        let ns = self.metadata.namespace.clone().ok_or(NoNamespaceError)?;
+    pub fn master_pods(&self) -> Result<impl Iterator<Item = SparkPodRef> + '_, Error> {
+        let ns = self.metadata.namespace.clone().context(NoNamespaceSnafu)?;
         Ok(self
             .spec
             .masters
             .iter()
             .flat_map(|role| &role.role_groups)
-            .map(|(rolegroup_name, rg)| {
-                (
-                    SparkRole::Master.to_string(),
-                    rolegroup_name,
-                    rg.replicas.unwrap_or(0),
-                )
-            })
-            .chain(
-                self.spec
-                    .workers
-                    .iter()
-                    .flat_map(|role| &role.role_groups)
-                    .map(|(rolegroup_name, rg)| {
-                        (
-                            SparkRole::Worker.to_string(),
-                            rolegroup_name,
-                            rg.replicas.unwrap_or(0),
-                        )
-                    }),
-            )
-            .chain(
-                self.spec
-                    .history_servers
-                    .iter()
-                    .flat_map(|role| &role.role_groups)
-                    .map(|(rolegroup_name, rg)| {
-                        (
-                            SparkRole::HistoryServer.to_string(),
-                            rolegroup_name,
-                            rg.replicas.unwrap_or(0),
-                        )
-                    }),
-            )
-            .flat_map(move |(role_name, rolegroup_name, replicas)| {
-                let rolegroup_ref = self.server_rolegroup_ref(role_name, rolegroup_name);
+            // Order rolegroups consistently, to avoid spurious downstream rewrites
+            .collect::<BTreeMap<_, _>>()
+            .into_iter()
+            .flat_map(move |(rolegroup_name, rolegroup)| {
+                let rolegroup_ref = SparkRole::Master.rolegroup_ref(self, rolegroup_name);
                 let ns = ns.clone();
-                (0..replicas).map(move |i| SparkPodRef {
+                (0..rolegroup.replicas.unwrap_or(0)).map(move |i| SparkPodRef {
                     namespace: ns.clone(),
                     role_group_service_name: rolegroup_ref.object_name(),
                     pod_name: format!("{}-{}", rolegroup_ref.object_name(), i),
@@ -191,10 +150,10 @@ impl SparkCluster {
     }
 
     pub fn enable_monitoring(&self) -> Option<bool> {
-        self.spec
-            .config
+        let spec: &SparkClusterSpec = &self.spec;
+        spec.config
             .as_ref()
-            .and_then(|common_configuration| common_configuration.config.as_ref())
+            .map(|common_configuration| &common_configuration.config)
             .and_then(|common_config| common_config.enable_monitoring)
     }
 }
@@ -227,17 +186,6 @@ impl Configuration for MasterConfig {
         let mut config = BTreeMap::new();
 
         match file {
-            SPARK_ENV_SH => {
-                if let Some(port) = &self.master_port {
-                    config.insert(SPARK_ENV_MASTER_PORT.to_string(), Some(port.to_string()));
-                }
-                if let Some(web_ui_port) = &self.master_web_ui_port {
-                    config.insert(
-                        SPARK_ENV_MASTER_WEBUI_PORT.to_string(),
-                        Some(web_ui_port.to_string()),
-                    );
-                }
-            }
             SPARK_DEFAULTS_CONF => {
                 add_common_spark_defaults(role_name, &mut config, &resource.spec)
             }
@@ -286,15 +234,6 @@ impl Configuration for WorkerConfig {
                         Some(memory.to_string()),
                     );
                 }
-                if let Some(port) = &self.worker_port {
-                    config.insert(SPARK_ENV_WORKER_PORT.to_string(), Some(port.to_string()));
-                }
-                if let Some(web_ui_port) = &self.worker_web_ui_port {
-                    config.insert(
-                        SPARK_ENV_WORKER_WEBUI_PORT.to_string(),
-                        Some(web_ui_port.to_string()),
-                    );
-                }
             }
             SPARK_DEFAULTS_CONF => {
                 add_common_spark_defaults(role_name, &mut config, &resource.spec)
@@ -334,18 +273,11 @@ impl Configuration for HistoryServerConfig {
         let mut config = BTreeMap::new();
 
         match file {
-            SPARK_ENV_SH => {}
             SPARK_DEFAULTS_CONF => {
                 if let Some(store_path) = &self.store_path {
                     config.insert(
                         SPARK_DEFAULTS_HISTORY_STORE_PATH.to_string(),
                         Some(store_path.to_string()),
-                    );
-                }
-                if let Some(port) = &self.history_web_ui_port {
-                    config.insert(
-                        SPARK_DEFAULTS_HISTORY_WEBUI_PORT.to_string(),
-                        Some(port.to_string()),
                     );
                 }
 
@@ -364,7 +296,7 @@ fn add_common_spark_defaults(
     spec: &SparkClusterSpec,
 ) {
     if let Some(CommonConfiguration {
-        config: Some(common_config),
+        config: common_config,
         ..
     }) = &spec.config
     {
@@ -385,35 +317,21 @@ fn add_common_spark_defaults(
             SPARK_DEFAULTS_PORT_MAX_RETRIES.to_string(),
             Some(max_port_retries.to_string()),
         );
-
-        // These two are always set together
-        let log_dir = common_config.log_dir.as_deref().unwrap_or(DEFAULT_LOG_DIR);
-        config.insert(
-            SPARK_DEFAULTS_HISTORY_FS_LOG_DIRECTORY.to_string(),
-            Some(log_dir.to_string()),
-        );
-        config.insert(
-            SPARK_DEFAULTS_EVENT_LOG_DIR.to_string(),
-            Some(log_dir.to_string()),
-        );
     }
 }
 
 /// Enum to manage the different Spark roles.
-/// `WARNING`: Do not alter the order of the roles because they are iterated over (via strum)
-/// and it always has to start with master (then worker, then history server).
 #[derive(
-    EnumIter,
     Clone,
     Debug,
-    Hash,
     Deserialize,
+    EnumIter,
     Eq,
+    Hash,
     JsonSchema,
     PartialEq,
     Serialize,
     strum_macros::Display,
-    strum_macros::EnumString,
 )]
 pub enum SparkRole {
     #[serde(rename = "master")]
@@ -425,4 +343,135 @@ pub enum SparkRole {
     #[serde(rename = "history-server")]
     #[strum(serialize = "history-server")]
     HistoryServer,
+}
+
+impl SparkRole {
+    pub fn http_port(&self) -> u16 {
+        match self {
+            SparkRole::Master => MASTER_HTTP_PORT,
+            SparkRole::Worker => WORKER_HTTP_PORT,
+            SparkRole::HistoryServer => HISTORY_SERVER_HTTP_PORT,
+        }
+    }
+
+    pub fn rpc_port(&self) -> Option<u16> {
+        match self {
+            SparkRole::Master => Some(MASTER_RPC_PORT),
+            _ => None,
+        }
+    }
+
+    pub fn container_ports(&self) -> Vec<ContainerPort> {
+        let mut ports = vec![ContainerPort {
+            name: Some(HTTP_PORT_NAME.to_string()),
+            container_port: self.http_port().into(),
+            protocol: Some("TCP".to_string()),
+            ..ContainerPort::default()
+        }];
+
+        if let Some(rpc) = self.rpc_port() {
+            ports.push(ContainerPort {
+                name: Some(RPC_PORT_NAME.to_string()),
+                container_port: rpc.into(),
+                protocol: Some("TCP".to_string()),
+                ..ContainerPort::default()
+            })
+        }
+
+        ports
+    }
+
+    pub fn service_ports(&self) -> Vec<ServicePort> {
+        let mut ports = vec![ServicePort {
+            name: Some(HTTP_PORT_NAME.to_string()),
+            port: self.http_port().into(),
+            protocol: Some("TCP".to_string()),
+            ..ServicePort::default()
+        }];
+
+        if let Some(rpc) = self.rpc_port() {
+            ports.push(ServicePort {
+                name: Some(RPC_PORT_NAME.to_string()),
+                port: rpc.into(),
+                protocol: Some("TCP".to_string()),
+                ..ServicePort::default()
+            })
+        }
+
+        ports
+    }
+
+    pub fn command(&self, spark: &SparkCluster) -> Result<Vec<String>, Error> {
+        let mut command = vec![format!("sbin/start-{}.sh", self.to_string())];
+
+        if *self == Self::Worker {
+            let master_pods = spark
+                .master_pods()?
+                .map(|pod_ref| format!("spark://{}:{}", pod_ref.fqdn(), MASTER_RPC_PORT))
+                .collect::<Vec<_>>();
+
+            command.push(master_pods.join(","));
+        }
+
+        Ok(command)
+    }
+
+    pub fn rolegroup_ref(
+        &self,
+        spark: &SparkCluster,
+        group_name: impl Into<String>,
+    ) -> RoleGroupRef<SparkCluster> {
+        RoleGroupRef {
+            cluster: ObjectRef::from_obj(spark),
+            role: self.to_string(),
+            role_group: group_name.into(),
+        }
+    }
+
+    pub fn replicas(&self, spark: &SparkCluster, role_group: &str) -> Option<u16> {
+        match self {
+            SparkRole::Master => spark.spec.masters.as_ref().and_then(|role| {
+                role.role_groups
+                    .get(role_group)
+                    .and_then(|role_group| role_group.replicas)
+            }),
+            SparkRole::Worker => spark.spec.workers.as_ref().and_then(|role| {
+                role.role_groups
+                    .get(role_group)
+                    .and_then(|role_group| role_group.replicas)
+            }),
+            SparkRole::HistoryServer => spark.spec.history_servers.as_ref().and_then(|role| {
+                role.role_groups
+                    .get(role_group)
+                    .and_then(|role_group| role_group.replicas)
+            }),
+        }
+    }
+
+    fn roles() -> Vec<String> {
+        let mut roles = vec![];
+        for role in Self::iter() {
+            roles.push(role.to_string())
+        }
+        roles
+    }
+}
+
+impl FromStr for SparkRole {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s == Self::Master.to_string() {
+            Ok(Self::Master)
+        } else if s == Self::Worker.to_string() {
+            Ok(Self::Worker)
+        } else if s == Self::HistoryServer.to_string() {
+            Ok(Self::HistoryServer)
+        } else {
+            Err(Error::UnknownSparkRole {
+                role: s.to_string(),
+                roles: Self::roles(),
+            })
+        }
+    }
 }

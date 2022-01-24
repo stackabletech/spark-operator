@@ -1,11 +1,10 @@
 apiVersion: spark.stackable.tech/v1alpha1
 kind: SparkCluster
 metadata:
-  name: simple
+  name: simple-spark
 spec:
   version: "3.0.1"
   config:
-    logDir: /stackable/data/log
     enableMonitoring: true
   masters:
     roleGroups:
@@ -14,9 +13,7 @@ spec:
           matchLabels:
             kubernetes.io/os: linux
         replicas: 1
-        config:
-          masterPort: 7078
-          masterWebUiPort: 8081
+        config: {}
   workers:
     roleGroups:
       2core2g:
@@ -27,8 +24,6 @@ spec:
         config:
           cores: 2
           memory: "2g"
-          workerPort: 3031
-          workerWebUiPort: 8083
   historyServers:
     roleGroups:
       default:
@@ -36,6 +31,5 @@ spec:
           matchLabels:
             kubernetes.io/os: linux
         replicas: 1
-        config:
-          historyWebUiPort: 18081
+        config: {}
 

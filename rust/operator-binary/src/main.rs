@@ -1,50 +1,37 @@
-mod error;
 mod spark_controller;
 
 #[macro_use]
 extern crate lazy_static;
 
+use clap::Parser;
 use futures::stream::StreamExt;
-use stackable_operator::cli::Command;
+use stackable_operator::cli::{Command, ProductOperatorRun};
 use stackable_operator::k8s_openapi::api::apps::v1::StatefulSet;
-use stackable_operator::k8s_openapi::api::core::v1::{ConfigMap, Endpoints, Service};
-use stackable_operator::kube::api::{DynamicObject, ListParams};
-use stackable_operator::kube::runtime::controller::{Context, Controller, ReconcilerAction};
-use stackable_operator::kube::runtime::reflector::ObjectRef;
-use stackable_operator::kube::{CustomResourceExt, Resource};
+use stackable_operator::k8s_openapi::api::core::v1::{ConfigMap, Service};
+use stackable_operator::kube::api::ListParams;
+use stackable_operator::kube::runtime::controller::{Context, Controller};
+use stackable_operator::kube::CustomResourceExt;
 use stackable_spark_crd::SparkCluster;
-use structopt::StructOpt;
-
-#[derive(StructOpt)]
-#[structopt(about = built_info::PKG_DESCRIPTION, author = "Stackable GmbH - info@stackable.de")]
-struct Opts {
-    #[structopt(subcommand)]
-    cmd: Command,
-}
 
 mod built_info {
     // The file has been placed there by the build script.
     include!(concat!(env!("OUT_DIR"), "/built.rs"));
 }
 
-/// Erases the concrete types of the controller result, so that we can merge the streams of multiple controllers for different resources.
-///
-/// In particular, we convert `ObjectRef<K>` into `ObjectRef<DynamicObject>` (which carries `K`'s metadata at runtime instead), and
-/// `E` into the trait object `anyhow::Error`.
-fn erase_controller_result_type<K: Resource, E: std::error::Error + Send + Sync + 'static>(
-    res: Result<(ObjectRef<K>, ReconcilerAction), E>,
-) -> anyhow::Result<(ObjectRef<DynamicObject>, ReconcilerAction)> {
-    let (obj_ref, action) = res?;
-    Ok((obj_ref.erase(), action))
+#[derive(Parser)]
+#[clap(about = built_info::PKG_DESCRIPTION, author = stackable_operator::cli::AUTHOR)]
+struct Opts {
+    #[clap(subcommand)]
+    cmd: Command,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     stackable_operator::logging::initialize_logging("SPARK_OPERATOR_LOG");
-    let opts = Opts::from_args();
+    let opts = Opts::parse();
     match opts.cmd {
         Command::Crd => println!("{}", serde_yaml::to_string(&SparkCluster::crd())?,),
-        Command::Run { product_config } => {
+        Command::Run(ProductOperatorRun { product_config }) => {
             stackable_operator::utils::print_startup_string(
                 built_info::PKG_DESCRIPTION,
                 built_info::PKG_VERSION,
@@ -62,26 +49,9 @@ async fn main() -> anyhow::Result<()> {
             let client =
                 stackable_operator::client::create_client(Some("spark.stackable.tech".to_string()))
                     .await?;
-            let controller_builder =
-                Controller::new(client.get_all_api::<SparkCluster>(), ListParams::default());
-            let sc_store = controller_builder.store();
-            let controller = controller_builder
+
+            Controller::new(client.get_all_api::<SparkCluster>(), ListParams::default())
                 .owns(client.get_all_api::<Service>(), ListParams::default())
-                .watches(
-                    client.get_all_api::<Endpoints>(),
-                    ListParams::default(),
-                    move |endpoints| {
-                        sc_store
-                            .state()
-                            .into_iter()
-                            .filter(move |sc| {
-                                let _ = &endpoints; // capture endpoints to prevent it from being dropped (2021 warning)
-                                sc.metadata.namespace == endpoints.metadata.namespace
-                                    && sc.server_role_service_name() == endpoints.metadata.name
-                            })
-                            .map(|sc| ObjectRef::from_obj(&sc))
-                    },
-                )
                 .owns(client.get_all_api::<StatefulSet>(), ListParams::default())
                 .owns(client.get_all_api::<ConfigMap>(), ListParams::default())
                 .shutdown_on_signal()
@@ -92,16 +62,13 @@ async fn main() -> anyhow::Result<()> {
                         client: client.clone(),
                         product_config,
                     }),
-                );
-
-            controller
-                .map(erase_controller_result_type)
+                )
                 .for_each(|res| async {
                     match res {
                         Ok((obj, _)) => tracing::info!(object = %obj, "Reconciled object"),
                         Err(err) => {
                             tracing::error!(
-                                error = &*err as &dyn std::error::Error,
+                                error = &err as &dyn std::error::Error,
                                 "Failed to reconcile object",
                             )
                         }

@@ -1,8 +1,6 @@
 //! Ensures that `Pod`s are configured and running for each [`SparkCluster`]
 
-use crate::error::Error;
-use crate::error::Error::*;
-use stackable_operator::k8s_openapi::api::core::v1::ContainerPort;
+use snafu::{OptionExt, ResultExt, Snafu};
 use stackable_operator::product_config_utils::Configuration;
 use stackable_operator::role_utils::{Role, RoleGroupRef};
 use stackable_operator::{
@@ -12,8 +10,8 @@ use stackable_operator::{
             apps::v1::{StatefulSet, StatefulSetSpec},
             core::v1::{
                 ConfigMap, ConfigMapVolumeSource, EnvVar, HTTPGetAction, PersistentVolumeClaim,
-                PersistentVolumeClaimSpec, Probe, ResourceRequirements, Service, ServicePort,
-                ServiceSpec, Volume,
+                PersistentVolumeClaimSpec, Probe, ResourceRequirements, Service, ServiceSpec,
+                Volume,
             },
         },
         apimachinery::pkg::{
@@ -33,10 +31,13 @@ use stackable_operator::{
 };
 use stackable_spark_crd::constants::*;
 use stackable_spark_crd::{SparkCluster, SparkRole};
+use std::str::FromStr;
 use std::{
     collections::{BTreeMap, HashMap},
     time::Duration,
 };
+
+const FIELD_MANAGER_SCOPE: &str = "sparkcluster";
 
 lazy_static! {
     /// Liveliness probe used by all master, worker and history containers.
@@ -56,57 +57,98 @@ pub struct Ctx {
     pub product_config: ProductConfigManager,
 }
 
+#[derive(Snafu, Debug)]
+#[allow(clippy::enum_variant_names)]
+pub enum Error {
+    #[snafu(display("object {obj_ref} is missing metadata to build owner reference"))]
+    ObjectMissingMetadataForOwnerRef {
+        source: stackable_operator::error::Error,
+        obj_ref: ObjectRef<SparkCluster>,
+    },
+    #[snafu(display("object {obj_ref} defines no version"))]
+    ObjectHasNoVersion { obj_ref: ObjectRef<SparkCluster> },
+    #[snafu(display("object defines no {} role", role))]
+    MissingSparkRole { role: String },
+    #[snafu(display("{obj_ref} has no server role"))]
+    MissingRoleGroup { obj_ref: RoleGroupRef<SparkCluster> },
+    #[snafu(display("failed to calculate global service name for {obj_ref}"))]
+    GlobalServiceNameNotFound { obj_ref: ObjectRef<SparkCluster> },
+    #[snafu(display("failed to apply global Service for {obj_ref}"))]
+    ApplyRoleService {
+        source: stackable_operator::error::Error,
+        obj_ref: ObjectRef<SparkCluster>,
+    },
+    #[snafu(display("failed to apply Service for {rolegroup}"))]
+    ApplyRoleGroupService {
+        source: stackable_operator::error::Error,
+        rolegroup: RoleGroupRef<SparkCluster>,
+    },
+    #[snafu(display("failed to build ConfigMap for {rolegroup}"))]
+    BuildRoleGroupConfig {
+        source: stackable_operator::error::Error,
+        rolegroup: RoleGroupRef<SparkCluster>,
+    },
+    #[snafu(display("failed to apply ConfigMap for {rolegroup}"))]
+    ApplyRoleGroupConfig {
+        source: stackable_operator::error::Error,
+        rolegroup: RoleGroupRef<SparkCluster>,
+    },
+    #[snafu(display("failed to apply StatefulSet for {rolegroup}"))]
+    ApplyRoleGroupStatefulSet {
+        source: stackable_operator::error::Error,
+        rolegroup: RoleGroupRef<SparkCluster>,
+    },
+    #[snafu(display("invalid product config for {obj_ref}"))]
+    InvalidProductConfig {
+        source: stackable_operator::error::Error,
+        obj_ref: ObjectRef<SparkCluster>,
+    },
+    #[snafu(display("failed to serialize spark-defaults.conf for {rolegroup}"))]
+    SerializeSparkDefaults {
+        rolegroup: RoleGroupRef<SparkCluster>,
+    },
+    #[snafu(display("failed to serialize spark-env.sh for {rolegroup}"))]
+    SerializeSparkEnv {
+        rolegroup: RoleGroupRef<SparkCluster>,
+    },
+    #[snafu(display("a master role group named 'default' is expected in the cluster defintion"))]
+    MasterRoleGroupDefaultExpected,
+    #[snafu(display("Invalid port configuration for rolegroup {rolegroup_ref}"))]
+    InvalidPort {
+        source: <i32 as FromStr>::Err,
+        rolegroup_ref: RoleGroupRef<SparkCluster>,
+    },
+    #[snafu(display("failed to transform configs"))]
+    ProductConfigTransform {
+        source: stackable_operator::product_config_utils::ConfigError,
+    },
+    #[snafu(display("internal operator failure"))]
+    InternalOperatorFailure { source: stackable_spark_crd::Error },
+}
+
+type Result<T, E = Error> = std::result::Result<T, E>;
+
 /// The main reconcile loop.
 ///
 /// For each rolegroup a [`StatefulSet`] and a `ClusterIP` service is created.
-pub async fn reconcile(sc: SparkCluster, ctx: Context<Ctx>) -> Result<ReconcilerAction, Error> {
+pub async fn reconcile(spark: SparkCluster, ctx: Context<Ctx>) -> Result<ReconcilerAction, Error> {
     tracing::info!("Starting reconcile");
-    let sc_ref = ObjectRef::from_obj(&sc);
+    let spark_ref = ObjectRef::from_obj(&spark);
     let client = &ctx.get_ref().client;
 
     let validated_config = validate_all_roles_and_groups_config(
-        version(&sc)?,
-        &transform_all_roles_to_config(&sc, build_spark_role_properties(&sc)),
+        version(&spark)?,
+        &transform_all_roles_to_config(&spark, build_spark_role_properties(&spark))
+            .context(ProductConfigTransformSnafu)?,
         &ctx.get_ref().product_config,
         false,
         false,
     )
-    .map_err(|e| Error::InvalidProductConfig {
-        source: e,
-        sc: sc_ref.clone(),
+    .with_context(|_| InvalidProductConfigSnafu {
+        obj_ref: ObjectRef::from_obj(&spark),
     })?;
 
-    // Extract the master default group ports here because they are needed twice:
-    // 1. For the NodePort service built by build_master_role_service()
-    // 2. For the worker's master URL built with build_worker_stateful_set()
-    let default_master_role_ports = validated_config
-        .iter()
-        .filter(|(role_name, _groups)| SparkRole::Master.to_string().eq(*role_name))
-        .flat_map(|(_role_name, groups)| groups)
-        .filter(|(group_name, _group_config)| "default".eq(*group_name))
-        .take(1)
-        .next()
-        .map(|(rolegroup, rolegroup_config)| {
-            build_ports(
-                &sc,
-                &sc.server_rolegroup_ref(SparkRole::Master.to_string(), rolegroup),
-                rolegroup_config,
-            )
-        })
-        .ok_or(MasterRoleGroupDefaultExpected)??;
-
-    let master_role_service = build_master_role_service(
-        &sc,
-        default_master_role_ports
-            .iter()
-            .map(|(name, value)| ServicePort {
-                name: Some(name.clone()),
-                port: *value,
-                protocol: Some("TCP".to_string()),
-                ..ServicePort::default()
-            })
-            .collect(),
-    )?;
+    let master_role_service = build_master_role_service(&spark)?;
 
     client
         .apply_patch(
@@ -115,41 +157,35 @@ pub async fn reconcile(sc: SparkCluster, ctx: Context<Ctx>) -> Result<Reconciler
             &master_role_service,
         )
         .await
-        .map_err(|e| ApplyRoleService {
-            source: e,
-            sc: sc_ref.clone(),
+        .with_context(|_| ApplyRoleServiceSnafu {
+            obj_ref: spark_ref.clone(),
         })?;
 
     for (role_name, group_config) in validated_config.iter() {
         for (rolegroup_name, rolegroup_config) in group_config.iter() {
-            let rolegroup = sc.server_rolegroup_ref(role_name, rolegroup_name);
-            let rg_service = build_rolegroup_service(&sc, &rolegroup, rolegroup_config)?;
-            let rg_configmap = build_rolegroup_config_map(&sc, &rolegroup, rolegroup_config)?;
-            let rg_statefulset = build_rolegroup_statefulset(
-                &sc,
-                &default_master_role_ports,
-                &rolegroup,
-                rolegroup_config,
-            )?;
+            let role = &SparkRole::from_str(role_name).context(InternalOperatorFailureSnafu)?;
+
+            let rolegroup = role.rolegroup_ref(&spark, rolegroup_name);
+            let rg_service = build_rolegroup_service(&spark, role, &rolegroup)?;
+            let rg_configmap = build_rolegroup_config_map(&spark, &rolegroup, rolegroup_config)?;
+            let rg_statefulset =
+                build_rolegroup_statefulset(&spark, role, &rolegroup, rolegroup_config)?;
             client
                 .apply_patch(FIELD_MANAGER_SCOPE, &rg_service, &rg_service)
                 .await
-                .map_err(|e| ApplyRoleGroupService {
-                    source: e,
+                .with_context(|_| ApplyRoleGroupServiceSnafu {
                     rolegroup: rolegroup.clone(),
                 })?;
             client
                 .apply_patch(FIELD_MANAGER_SCOPE, &rg_configmap, &rg_configmap)
                 .await
-                .map_err(|e| ApplyRoleGroupConfig {
-                    source: e,
+                .with_context(|_| ApplyRoleGroupConfigSnafu {
                     rolegroup: rolegroup.clone(),
                 })?;
             client
                 .apply_patch(FIELD_MANAGER_SCOPE, &rg_statefulset, &rg_statefulset)
                 .await
-                .map_err(|e| ApplyRoleGroupStatefulSet {
-                    source: e,
+                .with_context(|_| ApplyRoleGroupStatefulSetSnafu {
                     rolegroup: rolegroup.clone(),
                 })?;
         }
@@ -161,30 +197,33 @@ pub async fn reconcile(sc: SparkCluster, ctx: Context<Ctx>) -> Result<Reconciler
 }
 
 /// Build the `NodePort` service for clients.
-fn build_master_role_service(
-    sc: &SparkCluster,
-    service_ports: Vec<ServicePort>,
-) -> Result<Service, Error> {
-    let role_name = SparkRole::Master.to_string();
-    let role_svc_name = sc
-        .server_role_service_name()
-        .ok_or(GlobalServiceNameNotFound {
-            obj_ref: ObjectRef::from_obj(sc),
-        })?;
+fn build_master_role_service(spark: &SparkCluster) -> Result<Service, Error> {
+    let role = SparkRole::Master;
+    let role_svc_name =
+        spark
+            .master_role_service_name()
+            .with_context(|| GlobalServiceNameNotFoundSnafu {
+                obj_ref: ObjectRef::from_obj(spark),
+            })?;
     Ok(Service {
         metadata: ObjectMetaBuilder::new()
-            .name_and_namespace(sc)
+            .name_and_namespace(spark)
             .name(&role_svc_name)
-            .ownerreference_from_resource(sc, None, Some(true))
-            .map_err(|e| ObjectMissingMetadataForOwnerRef {
-                source: e,
-                obj_ref: ObjectRef::from_obj(sc),
+            .ownerreference_from_resource(spark, None, Some(true))
+            .with_context(|_| ObjectMissingMetadataForOwnerRefSnafu {
+                obj_ref: ObjectRef::from_obj(spark),
             })?
-            .with_recommended_labels(sc, APP_NAME, version(sc)?, &role_name, "global")
+            .with_recommended_labels(
+                spark,
+                APP_NAME,
+                version(spark)?,
+                &role.to_string(),
+                "global",
+            )
             .build(),
         spec: Some(ServiceSpec {
-            ports: Some(service_ports),
-            selector: Some(role_selector_labels(sc, APP_NAME, &role_name)),
+            ports: Some(role.service_ports()),
+            selector: Some(role_selector_labels(spark, APP_NAME, &role.to_string())),
             type_: Some("NodePort".to_string()),
             ..ServiceSpec::default()
         }),
@@ -222,7 +261,7 @@ fn build_rolegroup_config_map(
             rolegroup_config
                 .get(&PropertyNameKind::File(SPARK_DEFAULTS_CONF.to_string()))
                 .map(|c| convert_map_to_string(c, " "))
-                .ok_or_else(|| SerializeSparkDefaults {
+                .with_context(|| SerializeSparkDefaultsSnafu {
                     rolegroup: rolegroup.clone(),
                 })?,
         )
@@ -231,7 +270,7 @@ fn build_rolegroup_config_map(
             rolegroup_config
                 .get(&PropertyNameKind::File(SPARK_ENV_SH.to_string()))
                 .map(|c| convert_map_to_string(c, "="))
-                .ok_or_else(|| SerializeSparkEnv {
+                .with_context(|| SerializeSparkEnvSnafu {
                     rolegroup: rolegroup.clone(),
                 })?,
         )
@@ -250,8 +289,7 @@ fn build_rolegroup_config_map(
                 .unwrap_or_default()
         )
         .build()
-        .map_err(|e| Error::BuildRoleGroupConfig {
-            source: e,
+        .with_context(|_| BuildRoleGroupConfigSnafu {
             rolegroup: rolegroup.clone(),
         })
 }
@@ -260,42 +298,32 @@ fn build_rolegroup_config_map(
 ///
 /// This is mostly useful for internal communication between peers, or for clients that perform client-side load balancing.
 fn build_rolegroup_service(
-    sc: &SparkCluster,
+    spark: &SparkCluster,
+    role: &SparkRole,
     rolegroup: &RoleGroupRef<SparkCluster>,
-    rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
 ) -> Result<Service, Error> {
     Ok(Service {
         metadata: ObjectMetaBuilder::new()
-            .name_and_namespace(sc)
+            .name_and_namespace(spark)
             .name(&rolegroup.object_name())
-            .ownerreference_from_resource(sc, None, Some(true))
+            .ownerreference_from_resource(spark, None, Some(true))
             .map_err(|e| Error::ObjectMissingMetadataForOwnerRef {
                 source: e,
-                obj_ref: ObjectRef::from_obj(sc),
+                obj_ref: ObjectRef::from_obj(spark),
             })?
             .with_recommended_labels(
-                sc,
+                spark,
                 APP_NAME,
-                version(sc)?,
+                version(spark)?,
                 &rolegroup.role,
                 &rolegroup.role_group,
             )
             .build(),
         spec: Some(ServiceSpec {
             cluster_ip: Some("None".to_string()),
-            ports: Some(
-                build_ports(sc, rolegroup, rolegroup_config)?
-                    .iter()
-                    .map(|(name, value)| ServicePort {
-                        name: Some(name.clone()),
-                        port: *value,
-                        protocol: Some("TCP".to_string()),
-                        ..ServicePort::default()
-                    })
-                    .collect(),
-            ),
+            ports: Some(role.service_ports()),
             selector: Some(role_group_selector_labels(
-                sc,
+                spark,
                 APP_NAME,
                 &rolegroup.role,
                 &rolegroup.role_group,
@@ -310,21 +338,22 @@ fn build_rolegroup_service(
 /// Build the [`StatefulSet`]s for the given rolegroup.
 ///
 /// # Arguments
-/// * `sc`                       - The cluster resource object.
-/// * `default_master_role_ports` - Master role service (and container ports). Used to build the master URLs needed by the worker pods.
-/// * `rolegroup`                 - The rolegroup.
-/// * `rolegroup_config`          - The validated configuration for the rolegroup.
+/// * `spark` - The cluster resource object.
+/// * `role` - The SparkRole.
+/// * `rolegroup` - The rolegroup.
+/// * `rolegroup_config` - The validated configuration for the rolegroup.
 ///
 fn build_rolegroup_statefulset(
-    sc: &SparkCluster,
-    default_master_role_ports: &[(String, i32)],
+    spark: &SparkCluster,
+    role: &SparkRole,
     rolegroup_ref: &RoleGroupRef<SparkCluster>,
     rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
 ) -> Result<StatefulSet, Error> {
-    let sc_version = version(sc)?;
+    let version = version(spark)?;
+
     let image = format!(
         "docker.stackable.tech/stackable/spark:{}-stackable0",
-        sc_version
+        version
     );
     let env = rolegroup_config
         .get(&PropertyNameKind::Env)
@@ -339,38 +368,43 @@ fn build_rolegroup_statefulset(
 
     let container_sc = ContainerBuilder::new("spark")
         .image(image)
-        .args(container_command(rolegroup_ref, default_master_role_ports))
+        .args(role.command(spark).context(InternalOperatorFailureSnafu)?)
         .readiness_probe(PROBE.clone())
         .liveness_probe(PROBE.clone())
         .add_env_vars(env)
-        .add_container_ports(build_container_ports(sc, rolegroup_ref, rolegroup_config)?)
-        .add_volume_mount("log", spark_log_dir(rolegroup_config))
-        .add_volume_mount("config", spark_conf_dir(rolegroup_config))
+        .add_container_ports(role.container_ports())
+        .add_volume_mount("log", LOG_DIR)
+        .add_volume_mount("config", CONF_DIR)
         .build();
 
     Ok(StatefulSet {
         metadata: ObjectMetaBuilder::new()
-            .name_and_namespace(sc)
+            .name_and_namespace(spark)
             .name(&rolegroup_ref.object_name())
-            .ownerreference_from_resource(sc, None, Some(true))
+            .ownerreference_from_resource(spark, None, Some(true))
             .map_err(|e| Error::ObjectMissingMetadataForOwnerRef {
                 source: e,
-                obj_ref: ObjectRef::from_obj(sc),
+                obj_ref: ObjectRef::from_obj(spark),
             })?
             .with_recommended_labels(
-                sc,
+                spark,
                 APP_NAME,
-                sc_version,
+                version,
                 &rolegroup_ref.role,
                 &rolegroup_ref.role_group,
             )
             .build(),
         spec: Some(StatefulSetSpec {
             pod_management_policy: Some("Parallel".to_string()),
-            replicas: Some(rolegroup_replicas(sc, rolegroup_ref)?),
+            replicas: if spark.spec.stopped.unwrap_or(false) {
+                Some(0)
+            } else {
+                role.replicas(spark, &rolegroup_ref.role_group)
+                    .map(i32::from)
+            },
             selector: LabelSelector {
                 match_labels: Some(role_group_selector_labels(
-                    sc,
+                    spark,
                     APP_NAME,
                     &rolegroup_ref.role,
                     &rolegroup_ref.role_group,
@@ -381,9 +415,9 @@ fn build_rolegroup_statefulset(
             template: PodBuilder::new()
                 .metadata_builder(|m| {
                     m.with_recommended_labels(
-                        sc,
+                        spark,
                         APP_NAME,
-                        sc_version,
+                        version,
                         &rolegroup_ref.role,
                         &rolegroup_ref.role_group,
                     )
@@ -467,109 +501,6 @@ fn build_spark_role_properties(
     result
 }
 
-/// Build [`ContainerPort`]s for the given rolegroup.
-///
-/// # Arguments
-/// * `_sc`              - The cluster resource object.
-/// * `rolegroup`        - The rolegroup for which to extract the pods.
-/// * `rolegroup_config` - The validated configuration for the rolegroup.
-///
-fn build_container_ports(
-    _sc: &SparkCluster,
-    rolegroup: &RoleGroupRef<SparkCluster>,
-    rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
-) -> Result<Vec<ContainerPort>, Error> {
-    Ok(build_ports(_sc, rolegroup, rolegroup_config)?
-        .iter()
-        .map(|(name, value)| ContainerPort {
-            name: Some(name.clone()),
-            container_port: *value,
-            protocol: Some("TCP".to_string()),
-            ..ContainerPort::default()
-        })
-        .collect())
-}
-
-/// Extract all named ports from the given validated configuration.
-///
-/// # Arguments
-/// * `_sc`              - The cluster resource object.
-/// * `rolegroup`        - The rolegroup for which to extract the pods.
-/// * `rolegroup_config` - The validated configuration for the rolegroup.
-///
-fn build_ports(
-    _sc: &SparkCluster,
-    rolegroup: &RoleGroupRef<SparkCluster>,
-    rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
-) -> Result<Vec<(String, i32)>, Error> {
-    Ok(match serde_yaml::from_str(&rolegroup.role).unwrap() {
-        SparkRole::Master => vec![
-            (
-                PORT_NAME_SPARK.to_string(),
-                rolegroup_config
-                    .get(&PropertyNameKind::File(String::from(SPARK_ENV_SH)))
-                    .and_then(|c| c.get(SPARK_ENV_MASTER_PORT))
-                    .unwrap_or(&String::from("7077"))
-                    .parse::<i32>()
-                    .map_err(|e| Error::InvalidPort {
-                        source: e,
-                        rolegroup_ref: rolegroup.clone(),
-                    })?,
-            ),
-            (
-                String::from(PORT_NAME_WEB),
-                rolegroup_config
-                    .get(&PropertyNameKind::File(String::from(SPARK_ENV_SH)))
-                    .and_then(|c| c.get(SPARK_ENV_MASTER_WEBUI_PORT))
-                    .unwrap_or(&String::from("8080"))
-                    .parse::<i32>()
-                    .map_err(|e| Error::InvalidPort {
-                        source: e,
-                        rolegroup_ref: rolegroup.clone(),
-                    })?,
-            ),
-        ],
-        SparkRole::Worker => vec![
-            (
-                PORT_NAME_SPARK.to_string(),
-                rolegroup_config
-                    .get(&PropertyNameKind::File(String::from(SPARK_ENV_SH)))
-                    .and_then(|c| c.get(SPARK_ENV_WORKER_PORT))
-                    .unwrap_or(&String::from("7077"))
-                    .parse::<i32>()
-                    .map_err(|e| Error::InvalidPort {
-                        source: e,
-                        rolegroup_ref: rolegroup.clone(),
-                    })?,
-            ),
-            (
-                String::from(PORT_NAME_WEB),
-                rolegroup_config
-                    .get(&PropertyNameKind::File(String::from(SPARK_ENV_SH)))
-                    .and_then(|c| c.get(SPARK_ENV_WORKER_WEBUI_PORT))
-                    .unwrap_or(&String::from("8080"))
-                    .parse::<i32>()
-                    .map_err(|e| Error::InvalidPort {
-                        source: e,
-                        rolegroup_ref: rolegroup.clone(),
-                    })?,
-            ),
-        ],
-        SparkRole::HistoryServer => vec![(
-            String::from(PORT_NAME_WEB),
-            rolegroup_config
-                .get(&PropertyNameKind::File(String::from(SPARK_DEFAULTS_CONF)))
-                .and_then(|c| c.get(SPARK_DEFAULTS_HISTORY_WEBUI_PORT))
-                .unwrap_or(&String::from("8080"))
-                .parse::<i32>()
-                .map_err(|e| Error::InvalidPort {
-                    source: e,
-                    rolegroup_ref: rolegroup.clone(),
-                })?,
-        )],
-    })
-}
-
 /// Unroll a map into a String using a given assignment character (for writing config maps)
 ///
 /// # Arguments
@@ -584,144 +515,12 @@ fn convert_map_to_string(map: &BTreeMap<String, String>, assignment: &str) -> St
     data
 }
 
-/// Build the connection string for the start-worker.sh script
-///
-/// # Arguments
-/// * `rolegroup_ref`             - The worker's RoleGroupRef.
-/// * `default_master_role_ports` - The ports used to create the master's ClusterIP service.
-///
-fn build_master_service_url(
-    rolegroup_ref: &RoleGroupRef<SparkCluster>,
-    default_master_role_ports: &[(String, i32)],
-) -> String {
-    let default_master_port = default_master_role_ports
-        .iter()
-        .filter_map(|(name, value)| match name.as_ref() {
-            PORT_NAME_SPARK => Some(*value),
-            _ => None,
+fn version(spark: &SparkCluster) -> Result<&str, Error> {
+    spark
+        .spec
+        .version
+        .as_deref()
+        .with_context(|| ObjectHasNoVersionSnafu {
+            obj_ref: ObjectRef::from_obj(spark),
         })
-        .take(1)
-        .next()
-        .unwrap_or(7077);
-
-    format!(
-        "spark://{}:{}",
-        RoleGroupRef {
-            cluster: rolegroup_ref.cluster.clone(),
-            role: SparkRole::Master.to_string(),
-            role_group: "default".to_string(),
-        }
-        .object_name(),
-        default_master_port
-    )
-}
-
-/// Extract the SPARK_CONF_DIR path from the validated rolegroup configuration.
-///
-/// # Arguments
-/// * `rolegroup_config` - Validated config for a rolegroup.
-///
-fn spark_conf_dir(
-    rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
-) -> String {
-    rolegroup_config
-        .get(&PropertyNameKind::Env)
-        .iter()
-        .flat_map(|env_vars| env_vars.iter())
-        .filter_map(|(k, v)| match k.as_ref() {
-            SPARK_CONF_DIR => Some(v.clone()),
-            _ => None,
-        })
-        .take(1)
-        .next()
-        .unwrap_or_else(|| "/stackable/config".to_string())
-}
-
-/// Extract the log path from the validated rolegroup configuration.
-///
-/// # Arguments
-/// * `rolegroup_config` - Validated config for a rolegroup.
-///
-fn spark_log_dir(rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>) -> String {
-    rolegroup_config
-        .get(&PropertyNameKind::File(String::from(SPARK_DEFAULTS_CONF)))
-        .iter()
-        .flat_map(|vars| vars.iter())
-        .filter_map(|(k, v)| match k.as_ref() {
-            SPARK_DEFAULTS_EVENT_LOG_DIR => Some(v.clone()),
-            _ => None,
-        })
-        .take(1)
-        .next()
-        .unwrap_or_else(|| DEFAULT_LOG_DIR.to_string())
-}
-
-fn version(sc: &SparkCluster) -> Result<&str, Error> {
-    sc.spec.version.as_deref().ok_or(ObjectHasNoVersion {
-        obj_ref: ObjectRef::from_obj(sc),
-    })
-}
-
-fn container_command(
-    rolegroup_ref: &RoleGroupRef<SparkCluster>,
-    default_master_role_ports: &[(String, i32)],
-) -> Vec<String> {
-    match serde_yaml::from_str(&rolegroup_ref.role).unwrap() {
-        SparkRole::Master => vec!["sbin/start-master.sh".to_string()],
-        SparkRole::HistoryServer => vec!["sbin/start-history-server.sh".to_string()],
-        SparkRole::Worker => vec![
-            "sbin/start-slave.sh".to_string(),
-            build_master_service_url(rolegroup_ref, default_master_role_ports),
-        ],
-    }
-}
-
-fn rolegroup_replicas(
-    sc: &SparkCluster,
-    rolegroup_ref: &RoleGroupRef<SparkCluster>,
-) -> Result<i32, Error> {
-    let replicas = match serde_yaml::from_str(&rolegroup_ref.role).unwrap() {
-        SparkRole::Worker => sc
-            .spec
-            .workers
-            .as_ref()
-            .ok_or(Error::MissingRoleGroup {
-                obj_ref: rolegroup_ref.clone(),
-            })?
-            .role_groups
-            .get(&rolegroup_ref.role_group)
-            .and_then(|rg| rg.replicas)
-            .map(i32::from)
-            .unwrap_or(0),
-        SparkRole::HistoryServer => sc
-            .spec
-            .history_servers
-            .as_ref()
-            .ok_or(Error::MissingRoleGroup {
-                obj_ref: rolegroup_ref.clone(),
-            })?
-            .role_groups
-            .get(&rolegroup_ref.role_group)
-            .and_then(|rg| rg.replicas)
-            .map(i32::from)
-            .unwrap_or(0),
-        SparkRole::Master => sc
-            .spec
-            .masters
-            .as_ref()
-            .ok_or(Error::MissingRoleGroup {
-                obj_ref: rolegroup_ref.clone(),
-            })?
-            .role_groups
-            .get(&rolegroup_ref.role_group)
-            .and_then(|rg| rg.replicas)
-            .map(i32::from)
-            .unwrap_or(0),
-    };
-
-    if sc.spec.stopped.unwrap_or(false) {
-        Ok(0)
-    } else {
-        Ok(replicas)
-    }
 }
