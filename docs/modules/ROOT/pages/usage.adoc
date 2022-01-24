@@ -11,7 +11,7 @@ Because of `enableMonitoring: true`, all pods will be annotated for metric scrap
     apiVersion: spark.stackable.tech/v1alpha1
     kind: SparkCluster
     metadata:
-      name: simple
+      name: simple-spark
     spec:
       version: "3.0.1"
       config:
