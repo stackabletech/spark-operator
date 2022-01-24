@@ -45,7 +45,7 @@ Because of `enableMonitoring: true`, all pods will be annotated for metric scrap
 
 == Using the Apache Spark cluster
 
-The example above sets up a https://kubernetes.io/docs/concepts/services-networking/service/#type-nodeport[NodePort] service named `simple` that clients can use to run Spark jobs.
+The example above sets up a https://kubernetes.io/docs/concepts/services-networking/service/#type-nodeport[NodePort] service named `simple-spark-master` that clients can use to run Spark jobs.
 
 This is how the list of services might look like:
 
