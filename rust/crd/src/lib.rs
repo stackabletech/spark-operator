@@ -112,7 +112,7 @@ impl SparkCluster {
         self.metadata
             .name
             .as_ref()
-            .map(|name| format!("{}-{}", name, SparkRole::Master.to_string()))
+            .map(|name| format!("{}-{}", name, SparkRole::Master))
     }
 
     /// The fully-qualified domain name of the role-level load-balanced Kubernetes `Service`
@@ -185,11 +185,8 @@ impl Configuration for MasterConfig {
     ) -> Result<BTreeMap<String, Option<String>>, ConfigError> {
         let mut config = BTreeMap::new();
 
-        match file {
-            SPARK_DEFAULTS_CONF => {
-                add_common_spark_defaults(role_name, &mut config, &resource.spec)
-            }
-            _ => {}
+        if file == SPARK_DEFAULTS_CONF {
+            add_common_spark_defaults(role_name, &mut config, &resource.spec)
         }
 
         Ok(config)
@@ -272,18 +269,15 @@ impl Configuration for HistoryServerConfig {
     ) -> Result<BTreeMap<String, Option<String>>, ConfigError> {
         let mut config = BTreeMap::new();
 
-        match file {
-            SPARK_DEFAULTS_CONF => {
-                if let Some(store_path) = &self.store_path {
-                    config.insert(
-                        SPARK_DEFAULTS_HISTORY_STORE_PATH.to_string(),
-                        Some(store_path.to_string()),
-                    );
-                }
-
-                add_common_spark_defaults(role_name, &mut config, &resource.spec)
+        if file == SPARK_DEFAULTS_CONF {
+            if let Some(store_path) = &self.store_path {
+                config.insert(
+                    SPARK_DEFAULTS_HISTORY_STORE_PATH.to_string(),
+                    Some(store_path.to_string()),
+                );
             }
-            _ => {}
+
+            add_common_spark_defaults(role_name, &mut config, &resource.spec)
         }
 
         Ok(config)
@@ -402,7 +396,7 @@ impl SparkRole {
     }
 
     pub fn command(&self, spark: &SparkCluster) -> Result<Vec<String>, Error> {
-        let mut command = vec![format!("sbin/start-{}.sh", self.to_string())];
+        let mut command = vec![format!("sbin/start-{}.sh", self)];
 
         if *self == Self::Worker {
             let master_pods = spark
