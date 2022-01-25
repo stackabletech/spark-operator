@@ -1,11 +1,18 @@
 //! This module provides constants that are shared via multiple crates.
 
-pub const FIELD_MANAGER_SCOPE: &str = "sparkcluster";
-
 pub const PORT_NAME_WEB: &str = "http";
 pub const PORT_NAME_SPARK: &str = "spark";
 
-pub const DEFAULT_LOG_DIR: &str = "/tmp/spark-events";
+pub const MASTER_HTTP_PORT: u16 = 8080;
+pub const MASTER_RPC_PORT: u16 = 7077;
+pub const WORKER_HTTP_PORT: u16 = 8081;
+pub const HISTORY_SERVER_HTTP_PORT: u16 = 18080;
+
+pub const HTTP_PORT_NAME: &str = "http";
+pub const RPC_PORT_NAME: &str = "spark";
+
+pub const CONF_DIR: &str = "/stackable/config";
+pub const LOG_DIR: &str = "/stackable/log";
 
 /// Value for the APP_NAME_LABEL label key
 pub const APP_NAME: &str = "spark";

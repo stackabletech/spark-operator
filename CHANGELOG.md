@@ -8,9 +8,18 @@ All notable changes to this project will be documented in this file.
 
 - Complete rewrite to use `StatefulSet`, `Service` and the Kubernetes overlay network. ([#222])
 - Shut down gracefully ([#237]).
+- `operator-rs` `0.6.0` → `0.8.0` ([#243]).
+- `snafu` `0.6.0` → `0.7.0` ([#243]).
+- Fixed ports for master, worker and history server ([#243]).
+
+### Removed
+
+- Port configuration from CRD and product config ([#243]).
+- Obsolete code to extract these ports ([#243]).
 
 [#222]: https://github.com/stackabletech/spark-operator/pull/222
 [#237]: https://github.com/stackabletech/spark-operator/pull/237
+[#243]: https://github.com/stackabletech/spark-operator/pull/243
 
 ## [0.4.0] - 2021-12-06
 

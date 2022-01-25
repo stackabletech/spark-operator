@@ -11,11 +11,10 @@ Because of `enableMonitoring: true`, all pods will be annotated for metric scrap
     apiVersion: spark.stackable.tech/v1alpha1
     kind: SparkCluster
     metadata:
-      name: simple
+      name: simple-spark
     spec:
       version: "3.0.1"
       config:
-        logDir: /stackable/data/log
         enableMonitoring: true
       masters:
         roleGroups:
@@ -24,9 +23,7 @@ Because of `enableMonitoring: true`, all pods will be annotated for metric scrap
               matchLabels:
                 kubernetes.io/os: linux
             replicas: 1
-            config:
-              masterPort: 7078
-              masterWebUiPort: 8081
+            config: {}
       workers:
         roleGroups:
           2core2g:
@@ -36,8 +33,6 @@ Because of `enableMonitoring: true`, all pods will be annotated for metric scrap
             config:
               cores: 2
               memory: "2g"
-              workerPort: 3031
-              workerWebUiPort: 8083
       historyServers:
         roleGroups:
           default:
@@ -45,33 +40,32 @@ Because of `enableMonitoring: true`, all pods will be annotated for metric scrap
               matchLabels:
                 kubernetes.io/os: linux
             replicas: 1
-            config:
-              historyWebUiPort: 18081
+            config: {}
     EOF
 
 == Using the Apache Spark cluster
 
-The example above sets up a https://kubernetes.io/docs/concepts/services-networking/service/#type-nodeport[NodePort] service named `simple` that clients can use to run Spark jobs.
+The example above sets up a https://kubernetes.io/docs/concepts/services-networking/service/#type-nodeport[NodePort] service named `simple-spark-master` that clients can use to run Spark jobs.
 
 This is how the list of services might look like:
 
     kubectl get svc
-    NAME                            TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)                         AGE
-    kubernetes                      ClusterIP   10.96.0.1       <none>        443/TCP                         20m
-    simple                          NodePort    10.96.220.230   <none>        7078:31585/TCP,8081:30497/TCP   31s
-    simple-history-server-default   ClusterIP   None            <none>        18081/TCP                       31s
-    simple-master-default           ClusterIP   None            <none>        7078/TCP,8081/TCP               31s
-    simple-slave-2core2g            ClusterIP   None            <none>        3031/TCP,8083/TCP               31s
+    NAME                                  TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)                         AGE
+    kubernetes                            ClusterIP   10.96.0.1      <none>        443/TCP                         5h38m
+    simple-spark-history-server-default   ClusterIP   None           <none>        18080/TCP                       2m54s
+    simple-spark-master                   NodePort    10.96.63.134   <none>        8080:31296/TCP,7077:32274/TCP   2m54s
+    simple-spark-master-default           ClusterIP   None           <none>        8080/TCP,7077/TCP               2m54s
+    simple-spark-slave-2core2g            ClusterIP   None           <none>        8081/TCP                        2m54s
 
 To start a Spark shell from inside the cluster you would run:
 
-    /stackable/spark/bin/spark-shell --master spark://simple-master-default:7078
+    /stackable/spark/bin/spark-shell --master spark://simple-spark-master-default:7077
 
 and from outside: 
 
-    spark-shell --master spark://172.18.0.2:31585
+    spark-shell --master spark://<node-ip>>:32274
 
-where `172.18.0.2` is the IP address of one of your nodes.
+where `<node-ip>` is the IP address of the node running your master.
 
 == Configuration properties
 
@@ -102,11 +96,6 @@ There are three levels of configuration:
 |The spark version used in the format: x.y.z
 |
 
-|logDir
-|string
-|The log folder for spark applications
-|spark.history.fs.logDirectory=logDir, spark.eventLog.enabled=true, spark.eventLog.dir=logDir;
-
 |secret
 |string
 |A secret shared between nodes and required to submit applications via spark-submit
@@ -129,17 +118,8 @@ T.b.d.
 |Type
 |Description
 |Related Spark properties
-
-|masterPort
-|integer
-|Start the master on a different port (default: 7077).
-|SPARK_MASTER_PORT
-
-|masterWebUiPort
-|integer
-|Port for the master web UI (default: 8080).
-|SPARK_MASTER_WEBUI_PORT
 |===
+
 ==== Worker
 [cols="1,1,1,1"]
 |===
@@ -147,16 +127,6 @@ T.b.d.
 |Type
 |Description
 |Related Spark properties
-
-|workerPort
-|integer
-|Start the Spark worker on a specific port (default: random).
-|SPARK_WORKER_PORT
-
-|workerWebUiPort
-|integer
-|Port for the worker web UI (default: 8081).
-|SPARK_WORKER_WEBUI_PORT
 
 |cores
 |integer
@@ -181,9 +151,4 @@ T.b.d.
 |string
 |A local directory where to cache application data. If set, the history server will store application data on disk instead of keeping it in memory. The data written to disk will be re-used in the event of a history server restart.
 |spark.history.store.path
-
-|historyUiPort
-|integer
-|The port to which the web interface of the history server binds (default: 18080).
-|spark.history.ui.port
 |===
