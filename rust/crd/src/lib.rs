@@ -401,7 +401,13 @@ impl SparkRole {
         let mut command = vec![format!("sbin/start-{}.sh", self)];
 
         if *self == Self::Worker {
-            command.push(format!("spark://{}:{}", spark.master_role_service_fqdn().ok_or(Error::SparkMasterFqdnIsMissing)?, MASTER_RPC_PORT));
+            command.push(format!(
+                "spark://{}:{}",
+                spark
+                    .master_role_service_fqdn()
+                    .ok_or(Error::SparkMasterFqdnIsMissing)?,
+                MASTER_RPC_PORT
+            ));
         }
 
         Ok(command)
