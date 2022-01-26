@@ -24,6 +24,8 @@ pub enum Error {
     NoNamespace,
     #[snafu(display("Unknown spark role found {role}. Should be one of {roles:?}"))]
     UnknownSparkRole { role: String, roles: Vec<String> },
+    #[snafu(display("spark master fqdn is missing"))]
+    SparkMasterFqdnIsMissing,
 }
 
 #[derive(Clone, CustomResource, Debug, Default, Deserialize, JsonSchema, PartialEq, Serialize)]
@@ -399,12 +401,7 @@ impl SparkRole {
         let mut command = vec![format!("sbin/start-{}.sh", self)];
 
         if *self == Self::Worker {
-            let master_pods = spark
-                .master_pods()?
-                .map(|pod_ref| format!("spark://{}:{}", pod_ref.fqdn(), MASTER_RPC_PORT))
-                .collect::<Vec<_>>();
-
-            command.push(master_pods.join(","));
+            command.push(format!("spark://{}:{}", spark.master_role_service_fqdn().ok_or(Error::SparkMasterFqdnIsMissing)?, MASTER_RPC_PORT));
         }
 
         Ok(command)
