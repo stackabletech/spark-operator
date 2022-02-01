@@ -34,21 +34,16 @@ compile-chart: version crds config
 chart-clean:
 	rm -rf deploy/helm/spark-operator/configs
 	rm -rf deploy/helm/spark-operator/crds
-	rm -rf deploy/helm/spark-operator/templates/crds.yaml
 
 version:
 	yq eval -i '.version = ${VERSION} | .appVersion = ${VERSION}' deploy/helm/spark-operator/Chart.yaml
 
-config: deploy/helm/spark-operator/configs
-
-deploy/helm/spark-operator/configs:
+config:
 	cp -r deploy/config-spec deploy/helm/spark-operator/configs
 
-crds: deploy/helm/spark-operator/crds/crds.yaml
-
-deploy/helm/spark-operator/crds/crds.yaml:
+crds:
 	mkdir -p deploy/helm/spark-operator/crds
-	cat deploy/crd/*.yaml | yq eval '.metadata.annotations["helm.sh/resource-policy"]="keep"' - > ${@}
+	cat deploy/crd/*.yaml | yq eval '.metadata.annotations["helm.sh/resource-policy"]="keep"' - > deploy/helm/spark-operator/crds/crds.yaml
 
 chart-lint: compile-chart
 	docker run -it -v $(shell pwd):/build/helm-charts -w /build/helm-charts quay.io/helmpack/chart-testing:v3.5.0  ct lint --config deploy/helm/ct.yaml
