@@ -176,8 +176,7 @@ impl Configuration for MasterConfig {
             "SPARK_MASTER_PORT".to_string(),
             Some(MASTER_RPC_PORT.to_string()),
         )]
-        .into_iter()
-        .collect())
+        .into())
     }
 
     fn compute_cli(
