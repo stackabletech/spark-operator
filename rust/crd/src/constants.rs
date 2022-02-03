@@ -9,7 +9,7 @@ pub const WORKER_HTTP_PORT: u16 = 8081;
 pub const HISTORY_SERVER_HTTP_PORT: u16 = 18080;
 
 pub const HTTP_PORT_NAME: &str = "http";
-pub const RPC_PORT_NAME: &str = "spark";
+pub const RPC_PORT_NAME: &str = "rpc";
 
 pub const CONF_DIR: &str = "/stackable/config";
 pub const LOG_DIR: &str = "/stackable/log";
