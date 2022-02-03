@@ -1,7 +1,7 @@
 apiVersion: spark.stackable.tech/v1alpha1
 kind: SparkCluster
 metadata:
-  name: spark
+  name: simple-spark
 spec:
   version: "3.0.1"
   config:
