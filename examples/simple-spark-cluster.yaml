@@ -13,17 +13,13 @@ spec:
           matchLabels:
             kubernetes.io/os: linux
         replicas: 1
-        config: {}
   workers:
     roleGroups:
-      2core2g:
+      default:
         selector:
           matchLabels:
             kubernetes.io/os: linux
         replicas: 1
-        config:
-          cores: 2
-          memory: "2g"
   historyServers:
     roleGroups:
       default:
@@ -31,5 +27,4 @@ spec:
           matchLabels:
             kubernetes.io/os: linux
         replicas: 1
-        config: {}
 

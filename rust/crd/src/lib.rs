@@ -168,7 +168,15 @@ impl Configuration for MasterConfig {
         _resource: &Self::Configurable,
         _role_name: &str,
     ) -> Result<BTreeMap<String, Option<String>>, ConfigError> {
-        Ok(BTreeMap::new())
+        // IMPORTANT: we need to make sure this env var is set explicitly otherwise
+        // it would be impossible to create a cluster simply named "spark".
+        // In that case, this variable is created by the rolegroup service but set to tcp://<ip>:8080 or similar.
+        // which will break the start-master.sh script.
+        Ok([(
+            "SPARK_MASTER_PORT".to_string(),
+            Some(MASTER_RPC_PORT.to_string()),
+        )]
+        .into())
     }
 
     fn compute_cli(
