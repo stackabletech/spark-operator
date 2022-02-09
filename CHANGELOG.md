@@ -12,6 +12,7 @@ All notable changes to this project will be documented in this file.
 - `snafu` `0.6.0` → `0.7.0` ([#243]).
 - Fixed ports for master, worker and history server ([#243]).
 - `operator-rs` `0.8.0` → `0.10.0` ([#271]).
+- Monitoring scraping label `prometheus.io/scrape: true` ([#271]).
 
 ### Removed
 

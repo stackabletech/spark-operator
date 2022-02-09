@@ -32,6 +32,7 @@ use stackable_operator::{
 use stackable_spark_crd::constants::*;
 use stackable_spark_crd::{SparkCluster, SparkRole};
 use std::str::FromStr;
+use std::sync::Arc;
 use std::{
     collections::{BTreeMap, HashMap},
     time::Duration,
@@ -131,21 +132,24 @@ type Result<T, E = Error> = std::result::Result<T, E>;
 /// The main reconcile loop.
 ///
 /// For each rolegroup a [`StatefulSet`] and a `ClusterIP` service is created.
-pub async fn reconcile(spark: SparkCluster, ctx: Context<Ctx>) -> Result<ReconcilerAction, Error> {
+pub async fn reconcile(
+    spark: Arc<SparkCluster>,
+    ctx: Context<Ctx>,
+) -> Result<ReconcilerAction, Error> {
     tracing::info!("Starting reconcile");
-    let spark_ref = ObjectRef::from_obj(&spark);
+    let spark_ref = ObjectRef::from_obj(&*spark);
     let client = &ctx.get_ref().client;
 
     let validated_config = validate_all_roles_and_groups_config(
-        version(&spark)?,
-        &transform_all_roles_to_config(&spark, build_spark_role_properties(&spark))
+        version(&*spark)?,
+        &transform_all_roles_to_config(&*spark, build_spark_role_properties(&*spark))
             .context(ProductConfigTransformSnafu)?,
         &ctx.get_ref().product_config,
         false,
         false,
     )
     .with_context(|_| InvalidProductConfigSnafu {
-        obj_ref: ObjectRef::from_obj(&spark),
+        obj_ref: ObjectRef::from_obj(&*spark),
     })?;
 
     let master_role_service = build_master_role_service(&spark)?;
