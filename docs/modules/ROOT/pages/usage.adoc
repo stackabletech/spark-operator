@@ -67,88 +67,76 @@ and from outside:
 
 where `<node-ip>` is the IP address of the node running your master.
 
-== Configuration properties
+== Configuration & Environment Overrides
 
-There are three levels of configuration:
+The cluster definition also supports overriding configuration properties and environment variables, either per role or per role group, where the more specific override (role group) has precedence over the less specific one (role).
 
-[cols="1,1"]
-|===
-|Common properties
-|Contains configuration that is shared within the whole cluster. For example the spark version, secrets, encryption or logging options.
+IMPORTANT: Overriding certain properties (such as `spark.port.maxRetries`) which are set by operator can lead to faulty installations.
 
-|Role properties
-|This configuration is shared for all nodes of a certain type (Master, Worker, History-Server)
+=== Configuration Properties
 
-|Role Group properties
-|Options provided in the role group are limited to one specific role and role group.
-|===
+For a role or role group, at the same level of `config`, you can specify: `configOverrides` for the `spark-env.sh` and `spark-defaults.conf` files. For a list of possible configuration properties see: https://spark.apache.org/docs/latest/configuration.html
 
-=== Common properties
-[cols="1,1,1,1"]
-|===
-|Name
-|Type
-|Description
-|Related Spark properties
+[source,yaml]
+----
+masters:
+  roleGroups:
+    default:
+      config: [...]
+      configOverrides:
+        spark-env.sh:
+          JAVA_HOME=/some/other/java
+        spark-defaults.conf:
+          spark.driver.cores: "2"
+      replicas: 1
+----
 
-|version
-|string
-|The spark version used in the format: x.y.z
-|
+Just as for the `config`, it is possible to specify this at role level as well:
 
-|secret
-|string
-|A secret shared between nodes and required to submit applications via spark-submit
-|spark.authenticate=true, spark.authenticate.secret=secret;
+[source,yaml]
+----
+masters:
+  configOverrides:
+    spark-env.sh:
+      JAVA_HOME=/some/other/java
+    spark-defaults.conf:
+      spark.driver.cores: "2"
+  roleGroups:
+    default:
+      config: [...]
+      replicas: 1
+----
 
-|maxPortRetries
-|integer
-|Maximum number of retries when binding to a port before giving up. When a port is given a specific value (non 0), each subsequent retry will increment the port used in the previous attempt by 1 before retrying. This essentially allows it to try a range of ports from the start port specified to port + maxRetries.
-|spark.port.maxRetries
-|===
+All override property values must be strings. The properties will be passed on without any escaping or formatting.
 
-=== Role properties
-T.b.d.
+=== Environment Variables
 
-=== Role Group properties
-==== Master
-[cols="1,1,1,1"]
-|===
-|Name
-|Type
-|Description
-|Related Spark properties
-|===
+Environment variables can be (over)written by adding them to `spark-env.sh` file as described above or by using the `envOverrides` property.
 
-==== Worker
-[cols="1,1,1,1"]
-|===
-|Name
-|Type
-|Description
-|Related Spark properties
+For example per role group:
 
-|cores
-|integer
-|Total number of cores to allow Spark jobs to use on the machine (default: all available cores).
-|SPARK_WORKER_CORES
+[source,yaml]
+----
+routers:
+  roleGroups:
+    default:
+      config: {}
+      envOverrides:
+        MY_ENV_VAR: "MY_VALUE"
+      replicas: 1
+----
 
-|memory
-|string
-|Total amount of memory to allow Spark jobs to use on the machine, e.g. 1000M, 2G (default: total memory minus 1 GB).
-|SPARK_WORKER_MEMORY
-|===
+or per role:
 
-==== History Server
-[cols="1,1,1,1"]
-|===
-|Name
-|Type
-|Description
-|Related Spark properties
+[source,yaml]
+----
+routers:
+  envOverrides:
+    MY_ENV_VAR: "MY_VALUE"
+  roleGroups:
+    default:
+      config: {}
+      replicas: 1
+----
 
-|storePath
-|string
-|A local directory where to cache application data. If set, the history server will store application data on disk instead of keeping it in memory. The data written to disk will be re-used in the event of a history server restart.
-|spark.history.store.path
-|===
+Here too, overriding properties such as `SPARK_MASTER_PORT` will lead to broken installations.
