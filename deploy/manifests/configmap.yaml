@@ -283,8 +283,8 @@ kind: ConfigMap
 metadata:
   name: spark-operator-configmap
   labels:
-    helm.sh/chart: spark-operator-0.5.0-nightly
+    helm.sh/chart: spark-operator-0.5.0
     app.kubernetes.io/name: spark-operator
     app.kubernetes.io/instance: spark-operator
-    app.kubernetes.io/version: "0.5.0-nightly"
+    app.kubernetes.io/version: "0.5.0"
     app.kubernetes.io/managed-by: Helm

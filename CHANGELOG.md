@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.0] - 2022-02-14
+
 ### Changed
 
 - Complete rewrite to use `StatefulSet`, `Service` and the Kubernetes overlay network. ([#222])
