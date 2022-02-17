@@ -1,6 +1,7 @@
 //! Ensures that `Pod`s are configured and running for each [`SparkCluster`]
 
 use snafu::{OptionExt, ResultExt, Snafu};
+use stackable_operator::logging::controller::ReconcilerError;
 use stackable_operator::product_config_utils::Configuration;
 use stackable_operator::role_utils::{Role, RoleGroupRef};
 use stackable_operator::{
@@ -29,14 +30,14 @@ use stackable_operator::{
     product_config::{types::PropertyNameKind, ProductConfigManager},
     product_config_utils::{transform_all_roles_to_config, validate_all_roles_and_groups_config},
 };
-use stackable_spark_crd::constants::*;
-use stackable_spark_crd::{SparkCluster, SparkRole};
-use std::str::FromStr;
-use std::sync::Arc;
+use stackable_spark_crd::{constants::*, SparkCluster, SparkRole};
 use std::{
     collections::{BTreeMap, HashMap},
+    str::FromStr,
+    sync::Arc,
     time::Duration,
 };
+use strum::{EnumDiscriminants, IntoStaticStr};
 
 const FIELD_MANAGER_SCOPE: &str = "sparkcluster";
 
@@ -58,7 +59,8 @@ pub struct Ctx {
     pub product_config: ProductConfigManager,
 }
 
-#[derive(Snafu, Debug)]
+#[derive(Snafu, Debug, EnumDiscriminants)]
+#[strum_discriminants(derive(IntoStaticStr))]
 #[allow(clippy::enum_variant_names)]
 pub enum Error {
     #[snafu(display("object {obj_ref} is missing metadata to build owner reference"))]
@@ -68,10 +70,6 @@ pub enum Error {
     },
     #[snafu(display("object {obj_ref} defines no version"))]
     ObjectHasNoVersion { obj_ref: ObjectRef<SparkCluster> },
-    #[snafu(display("object defines no {} role", role))]
-    MissingSparkRole { role: String },
-    #[snafu(display("{obj_ref} has no server role"))]
-    MissingRoleGroup { obj_ref: RoleGroupRef<SparkCluster> },
     #[snafu(display("failed to calculate global service name for {obj_ref}"))]
     GlobalServiceNameNotFound { obj_ref: ObjectRef<SparkCluster> },
     #[snafu(display("failed to apply global Service for {obj_ref}"))]
@@ -112,13 +110,6 @@ pub enum Error {
     SerializeSparkEnv {
         rolegroup: RoleGroupRef<SparkCluster>,
     },
-    #[snafu(display("a master role group named 'default' is expected in the cluster defintion"))]
-    MasterRoleGroupDefaultExpected,
-    #[snafu(display("Invalid port configuration for rolegroup {rolegroup_ref}"))]
-    InvalidPort {
-        source: <i32 as FromStr>::Err,
-        rolegroup_ref: RoleGroupRef<SparkCluster>,
-    },
     #[snafu(display("failed to transform configs"))]
     ProductConfigTransform {
         source: stackable_operator::product_config_utils::ConfigError,
@@ -128,6 +119,12 @@ pub enum Error {
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
+
+impl ReconcilerError for Error {
+    fn category(&self) -> &'static str {
+        ErrorDiscriminants::from(self).into()
+    }
+}
 
 /// The main reconcile loop.
 ///
