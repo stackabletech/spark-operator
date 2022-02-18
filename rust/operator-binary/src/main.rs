@@ -11,10 +11,10 @@ use stackable_operator::k8s_openapi::api::core::v1::{ConfigMap, Service};
 use stackable_operator::kube::api::ListParams;
 use stackable_operator::kube::runtime::controller::{Context, Controller};
 use stackable_operator::kube::CustomResourceExt;
+use stackable_operator::logging::controller::report_controller_reconciled;
 use stackable_spark_crd::SparkCluster;
 
 mod built_info {
-    // The file has been placed there by the build script.
     include!(concat!(env!("OUT_DIR"), "/built.rs"));
 }
 
@@ -63,17 +63,14 @@ async fn main() -> anyhow::Result<()> {
                         product_config,
                     }),
                 )
-                .for_each(|res| async {
-                    match res {
-                        Ok((obj, _)) => tracing::info!(object = %obj, "Reconciled object"),
-                        Err(err) => {
-                            tracing::error!(
-                                error = &err as &dyn std::error::Error,
-                                "Failed to reconcile object",
-                            )
-                        }
-                    }
+                .map(|res| {
+                    report_controller_reconciled(
+                        &client,
+                        "sparkclusters.spark.stackable.tech",
+                        &res,
+                    )
                 })
+                .collect::<()>()
                 .await;
         }
     }

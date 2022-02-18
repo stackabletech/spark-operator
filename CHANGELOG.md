@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Reconciliation errors are now reported as Kubernetes events ([#289]).
+
+### Changed
+
+- `operator-rs` `0.10.0` -> `0.11.0` ([#289]).
+
+[#289]: https://github.com/stackabletech/spark-operator/pull/289
+
 ## [0.5.0] - 2022-02-14
 
 ### Changed
