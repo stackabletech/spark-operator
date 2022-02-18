@@ -10,9 +10,10 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
-- `operator-rs` `0.10.0` -> `0.11.0` ([#289]).
+- `operator-rs` `0.10.0` -> `0.12.0` ([#289], [#291]).
 
 [#289]: https://github.com/stackabletech/spark-operator/pull/289
+[#291]: https://github.com/stackabletech/spark-operator/pull/291
 
 ## [0.5.0] - 2022-02-14
 
