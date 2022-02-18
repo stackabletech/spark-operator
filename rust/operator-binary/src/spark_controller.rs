@@ -1,9 +1,6 @@
 //! Ensures that `Pod`s are configured and running for each [`SparkCluster`]
 
 use snafu::{OptionExt, ResultExt, Snafu};
-use stackable_operator::logging::controller::ReconcilerError;
-use stackable_operator::product_config_utils::Configuration;
-use stackable_operator::role_utils::{Role, RoleGroupRef};
 use stackable_operator::{
     builder::{ConfigMapBuilder, ContainerBuilder, ObjectMetaBuilder, PodBuilder},
     k8s_openapi::{
@@ -21,14 +18,14 @@ use stackable_operator::{
     },
     kube::{
         api::ObjectMeta,
-        runtime::{
-            controller::{Context, ReconcilerAction},
-            reflector::ObjectRef,
-        },
+        runtime::controller::{Context, ReconcilerAction},
     },
     labels::{role_group_selector_labels, role_selector_labels},
+    logging::controller::ReconcilerError,
     product_config::{types::PropertyNameKind, ProductConfigManager},
+    product_config_utils::Configuration,
     product_config_utils::{transform_all_roles_to_config, validate_all_roles_and_groups_config},
+    role_utils::{Role, RoleGroupRef},
 };
 use stackable_spark_crd::{constants::*, SparkCluster, SparkRole};
 use std::{
@@ -63,19 +60,17 @@ pub struct Ctx {
 #[strum_discriminants(derive(IntoStaticStr))]
 #[allow(clippy::enum_variant_names)]
 pub enum Error {
-    #[snafu(display("object {obj_ref} is missing metadata to build owner reference"))]
+    #[snafu(display("object is missing metadata to build owner reference"))]
     ObjectMissingMetadataForOwnerRef {
         source: stackable_operator::error::Error,
-        obj_ref: ObjectRef<SparkCluster>,
     },
-    #[snafu(display("object {obj_ref} defines no version"))]
-    ObjectHasNoVersion { obj_ref: ObjectRef<SparkCluster> },
-    #[snafu(display("failed to calculate global service name for {obj_ref}"))]
-    GlobalServiceNameNotFound { obj_ref: ObjectRef<SparkCluster> },
-    #[snafu(display("failed to apply global Service for {obj_ref}"))]
+    #[snafu(display("object defines no version"))]
+    ObjectHasNoVersion,
+    #[snafu(display("failed to calculate global service name"))]
+    GlobalServiceNameNotFound,
+    #[snafu(display("failed to apply global service"))]
     ApplyRoleService {
         source: stackable_operator::error::Error,
-        obj_ref: ObjectRef<SparkCluster>,
     },
     #[snafu(display("failed to apply Service for {rolegroup}"))]
     ApplyRoleGroupService {
@@ -97,10 +92,9 @@ pub enum Error {
         source: stackable_operator::error::Error,
         rolegroup: RoleGroupRef<SparkCluster>,
     },
-    #[snafu(display("invalid product config for {obj_ref}"))]
+    #[snafu(display("invalid product config"))]
     InvalidProductConfig {
         source: stackable_operator::error::Error,
-        obj_ref: ObjectRef<SparkCluster>,
     },
     #[snafu(display("failed to serialize spark-defaults.conf for {rolegroup}"))]
     SerializeSparkDefaults {
@@ -134,7 +128,6 @@ pub async fn reconcile(
     ctx: Context<Ctx>,
 ) -> Result<ReconcilerAction, Error> {
     tracing::info!("Starting reconcile");
-    let spark_ref = ObjectRef::from_obj(&*spark);
     let client = &ctx.get_ref().client;
 
     let validated_config = validate_all_roles_and_groups_config(
@@ -145,9 +138,7 @@ pub async fn reconcile(
         false,
         false,
     )
-    .with_context(|_| InvalidProductConfigSnafu {
-        obj_ref: ObjectRef::from_obj(&*spark),
-    })?;
+    .context(InvalidProductConfigSnafu)?;
 
     let master_role_service = build_master_role_service(&spark)?;
 
@@ -158,9 +149,7 @@ pub async fn reconcile(
             &master_role_service,
         )
         .await
-        .with_context(|_| ApplyRoleServiceSnafu {
-            obj_ref: spark_ref.clone(),
-        })?;
+        .context(ApplyRoleServiceSnafu)?;
 
     for (role_name, group_config) in validated_config.iter() {
         for (rolegroup_name, rolegroup_config) in group_config.iter() {
@@ -200,20 +189,15 @@ pub async fn reconcile(
 /// Build the `NodePort` service for clients.
 fn build_master_role_service(spark: &SparkCluster) -> Result<Service, Error> {
     let role = SparkRole::Master;
-    let role_svc_name =
-        spark
-            .master_role_service_name()
-            .with_context(|| GlobalServiceNameNotFoundSnafu {
-                obj_ref: ObjectRef::from_obj(spark),
-            })?;
+    let role_svc_name = spark
+        .master_role_service_name()
+        .context(GlobalServiceNameNotFoundSnafu)?;
     Ok(Service {
         metadata: ObjectMetaBuilder::new()
             .name_and_namespace(spark)
             .name(&role_svc_name)
             .ownerreference_from_resource(spark, None, Some(true))
-            .with_context(|_| ObjectMissingMetadataForOwnerRefSnafu {
-                obj_ref: ObjectRef::from_obj(spark),
-            })?
+            .context(ObjectMissingMetadataForOwnerRefSnafu)?
             .with_recommended_labels(
                 spark,
                 APP_NAME,
@@ -244,10 +228,7 @@ fn build_rolegroup_config_map(
                 .name_and_namespace(sc)
                 .name(rolegroup.object_name())
                 .ownerreference_from_resource(sc, None, Some(true))
-                .map_err(|e| Error::ObjectMissingMetadataForOwnerRef {
-                    source: e,
-                    obj_ref: ObjectRef::from_obj(sc),
-                })?
+                .context(ObjectMissingMetadataForOwnerRefSnafu)?
                 .with_recommended_labels(
                     sc,
                     APP_NAME,
@@ -308,10 +289,7 @@ fn build_rolegroup_service(
             .name_and_namespace(spark)
             .name(&rolegroup.object_name())
             .ownerreference_from_resource(spark, None, Some(true))
-            .map_err(|e| Error::ObjectMissingMetadataForOwnerRef {
-                source: e,
-                obj_ref: ObjectRef::from_obj(spark),
-            })?
+            .context(ObjectMissingMetadataForOwnerRefSnafu)?
             .with_recommended_labels(
                 spark,
                 APP_NAME,
@@ -384,10 +362,7 @@ fn build_rolegroup_statefulset(
             .name_and_namespace(spark)
             .name(&rolegroup_ref.object_name())
             .ownerreference_from_resource(spark, None, Some(true))
-            .map_err(|e| Error::ObjectMissingMetadataForOwnerRef {
-                source: e,
-                obj_ref: ObjectRef::from_obj(spark),
-            })?
+            .context(ObjectMissingMetadataForOwnerRefSnafu)?
             .with_recommended_labels(
                 spark,
                 APP_NAME,
@@ -522,7 +497,5 @@ fn version(spark: &SparkCluster) -> Result<&str, Error> {
         .spec
         .version
         .as_deref()
-        .with_context(|| ObjectHasNoVersionSnafu {
-            obj_ref: ObjectRef::from_obj(spark),
-        })
+        .context(ObjectHasNoVersionSnafu)
 }
