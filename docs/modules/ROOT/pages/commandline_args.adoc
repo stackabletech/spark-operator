@@ -7,5 +7,22 @@
 
 *Multiple values:* false
 
-This file contains property definitions for the Apache Spark configuration.
+[source]
+----
+cargo run -- run --product-config /foo/bar/properties.yaml
+----
 
+=== watch-namespace
+
+*Default value*: All namespaces
+
+*Required*: false
+
+*Multiple values:* false
+
+The operator will **only** watch for resources in the provided namespace `test`:
+
+[source]
+----
+cargo run -- run --watch-namespace test
+----
