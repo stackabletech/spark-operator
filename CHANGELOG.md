@@ -7,13 +7,16 @@ All notable changes to this project will be documented in this file.
 ### Added
 
 - Reconciliation errors are now reported as Kubernetes events ([#289]).
+- Use cli argument `watch-namespace` / env var `WATCH_NAMESPACE` to specify
+  a single namespace to watch ([#297]).
 
 ### Changed
 
-- `operator-rs` `0.10.0` -> `0.12.0` ([#289], [#291]).
+- `operator-rs` `0.10.0` -> `0.13.0` ([#289], [#291], [#297]).
 
 [#289]: https://github.com/stackabletech/spark-operator/pull/289
 [#291]: https://github.com/stackabletech/spark-operator/pull/291
+[#297]: https://github.com/stackabletech/spark-operator/pull/297
 
 ## [0.5.0] - 2022-02-14
 

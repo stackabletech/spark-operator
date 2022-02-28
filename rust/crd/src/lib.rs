@@ -15,8 +15,7 @@ use stackable_operator::{
 use std::collections::BTreeMap;
 use std::hash::Hash;
 use std::str::FromStr;
-use strum::IntoEnumIterator;
-use strum_macros::EnumIter;
+use strum::{Display, EnumIter, IntoEnumIterator};
 
 #[derive(Snafu, Debug)]
 pub enum Error {
@@ -326,16 +325,7 @@ fn add_common_spark_defaults(
 
 /// Enum to manage the different Spark roles.
 #[derive(
-    Clone,
-    Debug,
-    Deserialize,
-    EnumIter,
-    Eq,
-    Hash,
-    JsonSchema,
-    PartialEq,
-    Serialize,
-    strum_macros::Display,
+    Clone, Debug, Deserialize, EnumIter, Eq, Hash, JsonSchema, PartialEq, Serialize, Display,
 )]
 pub enum SparkRole {
     #[serde(rename = "master")]
