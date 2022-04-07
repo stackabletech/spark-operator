@@ -14,8 +14,6 @@ Because of `enableMonitoring: true`, all pods will be annotated for metric scrap
       name: simple-spark
     spec:
       version: "3.0.1"
-      config:
-        enableMonitoring: true
       masters:
         roleGroups:
           default:
