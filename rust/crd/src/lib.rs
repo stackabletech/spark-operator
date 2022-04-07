@@ -71,7 +71,6 @@ pub struct CommonConfig {
     pub secret: Option<String>,
     pub log_dir: Option<String>,
     pub max_port_retries: Option<usize>,
-    pub enable_monitoring: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
@@ -149,14 +148,6 @@ impl SparkCluster {
                 })
             }))
     }
-
-    pub fn enable_monitoring(&self) -> Option<bool> {
-        let spec: &SparkClusterSpec = &self.spec;
-        spec.config
-            .as_ref()
-            .map(|common_configuration| &common_configuration.config)
-            .and_then(|common_config| common_config.enable_monitoring)
-    }
 }
 
 impl Configuration for MasterConfig {
@@ -194,8 +185,14 @@ impl Configuration for MasterConfig {
     ) -> Result<BTreeMap<String, Option<String>>, ConfigError> {
         let mut config = BTreeMap::new();
 
-        if file == SPARK_DEFAULTS_CONF {
-            add_common_spark_defaults(role_name, &mut config, &resource.spec)
+        match file {
+            SPARK_DEFAULTS_CONF => {
+                add_common_spark_defaults(role_name, &mut config, &resource.spec)
+            }
+            SPARK_METRICS_PROPERTIES => {
+                add_common_monitoring(&mut config);
+            }
+            _ => {}
         }
 
         Ok(config)
@@ -244,6 +241,9 @@ impl Configuration for WorkerConfig {
             SPARK_DEFAULTS_CONF => {
                 add_common_spark_defaults(role_name, &mut config, &resource.spec)
             }
+            SPARK_METRICS_PROPERTIES => {
+                add_common_monitoring(&mut config);
+            }
             _ => {}
         }
 
@@ -278,19 +278,40 @@ impl Configuration for HistoryServerConfig {
     ) -> Result<BTreeMap<String, Option<String>>, ConfigError> {
         let mut config = BTreeMap::new();
 
-        if file == SPARK_DEFAULTS_CONF {
-            if let Some(store_path) = &self.store_path {
-                config.insert(
-                    SPARK_DEFAULTS_HISTORY_STORE_PATH.to_string(),
-                    Some(store_path.to_string()),
-                );
-            }
+        match file {
+            SPARK_DEFAULTS_CONF => {
+                if let Some(store_path) = &self.store_path {
+                    config.insert(
+                        SPARK_DEFAULTS_HISTORY_STORE_PATH.to_string(),
+                        Some(store_path.to_string()),
+                    );
+                }
 
-            add_common_spark_defaults(role_name, &mut config, &resource.spec)
+                add_common_spark_defaults(role_name, &mut config, &resource.spec)
+            }
+            SPARK_METRICS_PROPERTIES => {
+                add_common_monitoring(&mut config);
+            }
+            _ => {}
         }
 
         Ok(config)
     }
+}
+
+fn add_common_monitoring(config: &mut BTreeMap<String, Option<String>>) {
+    config.insert(
+        "*.sink.prometheusServlet.class".to_string(),
+        Some("org.apache.spark.metrics.sink.PrometheusServlet".to_string()),
+    );
+    config.insert(
+        "*.sink.prometheusServlet.path".to_string(),
+        Some("/metrics".to_string()),
+    );
+    config.insert(
+        "*.source.jvm.class".to_string(),
+        Some("org.apache.spark.metrics.source.JvmSource".to_string()),
+    );
 }
 
 fn add_common_spark_defaults(

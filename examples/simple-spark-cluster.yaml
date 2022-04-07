@@ -4,8 +4,6 @@ metadata:
   name: simple-spark
 spec:
   version: "3.0.1"
-  config:
-    enableMonitoring: true
   masters:
     roleGroups:
       default:

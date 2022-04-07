@@ -18,7 +18,7 @@ use stackable_operator::{
     },
     kube::{
         api::ObjectMeta,
-        runtime::controller::{Context, ReconcilerAction},
+        runtime::controller::{Action, Context},
     },
     labels::{role_group_selector_labels, role_selector_labels},
     logging::controller::ReconcilerError,
@@ -123,10 +123,7 @@ impl ReconcilerError for Error {
 /// The main reconcile loop.
 ///
 /// For each rolegroup a [`StatefulSet`] and a `ClusterIP` service is created.
-pub async fn reconcile(
-    spark: Arc<SparkCluster>,
-    ctx: Context<Ctx>,
-) -> Result<ReconcilerAction, Error> {
+pub async fn reconcile(spark: Arc<SparkCluster>, ctx: Context<Ctx>) -> Result<Action, Error> {
     tracing::info!("Starting reconcile");
     let client = &ctx.get_ref().client;
 
@@ -181,9 +178,7 @@ pub async fn reconcile(
         }
     }
 
-    Ok(ReconcilerAction {
-        requeue_after: None,
-    })
+    Ok(Action::await_change())
 }
 
 /// Build the `NodePort` service for clients.
@@ -262,13 +257,8 @@ fn build_rolegroup_config_map(
                 .get(&PropertyNameKind::File(
                     SPARK_METRICS_PROPERTIES.to_string(),
                 ))
-                .and(sc.enable_monitoring())
-                .filter(|&monitoring_enabled_flag| monitoring_enabled_flag)
-                .map(|_| "\
-                            *.sink.prometheusServlet.class=org.apache.spark.metrics.sink.PrometheusServlet\n\
-                            *.sink.prometheusServlet.path=/metrics\n\
-                            *.source.jvm.class=org.apache.spark.metrics.source.JvmSource")
-                .unwrap_or_default()
+                .map(|c| convert_map_to_string(c, "="))
+                .unwrap_or_default(),
         )
         .build()
         .with_context(|_| BuildRoleGroupConfigSnafu {
@@ -434,10 +424,8 @@ fn build_rolegroup_statefulset(
     })
 }
 
-pub fn error_policy(_error: &Error, _ctx: Context<Ctx>) -> ReconcilerAction {
-    ReconcilerAction {
-        requeue_after: Some(Duration::from_secs(5)),
-    }
+pub fn error_policy(_error: &Error, _ctx: Context<Ctx>) -> Action {
+    Action::requeue(Duration::from_secs(5))
 }
 
 /// TODO: this is pure boilerplate code that should be part of product-config.
