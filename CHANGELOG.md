@@ -16,7 +16,7 @@ All notable changes to this project will be documented in this file.
 
 ### Removed
 
-- `enableMonitoring` flag. Metrics / Monitoring always enabled ([#326]).
+- BREAKING: Removed `enableMonitoring` flag. Metrics / Monitoring always enabled ([#326]).
 
 [#289]: https://github.com/stackabletech/spark-operator/pull/289
 [#291]: https://github.com/stackabletech/spark-operator/pull/291
