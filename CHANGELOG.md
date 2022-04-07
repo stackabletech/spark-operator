@@ -12,11 +12,16 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
-- `operator-rs` `0.10.0` -> `0.13.0` ([#289], [#291], [#297]).
+- `operator-rs` `0.10.0` -> `0.15.0` ([#289], [#291], [#297], [#326]).
+
+### Removed
+
+- `enableMonitoring` flag. Metrics / Monitoring always enabled ([#326]).
 
 [#289]: https://github.com/stackabletech/spark-operator/pull/289
 [#291]: https://github.com/stackabletech/spark-operator/pull/291
 [#297]: https://github.com/stackabletech/spark-operator/pull/297
+[#326]: https://github.com/stackabletech/spark-operator/pull/326
 
 ## [0.5.0] - 2022-02-14
 
