@@ -68,7 +68,7 @@ where `<node-ip>` is the IP address of the node running your master.
 == Monitoring
 
 The managed Spark instances are automatically configured to export Prometheus metrics. See
-xref:home::monitoring.adoc[] for more details.
+xref:home:operators:monitoring.adoc[] for more details.
 
 == Configuration & Environment Overrides
 
