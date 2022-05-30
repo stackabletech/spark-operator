@@ -1,5 +1,6 @@
 name: spark
-version: master
+version: nightly
 title: Stackable Operator for Apache Spark
 nav:
   - modules/ROOT/nav.adoc
+prerelease: true
