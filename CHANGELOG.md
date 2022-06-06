@@ -9,10 +9,12 @@ All notable changes to this project will be documented in this file.
 - Reconciliation errors are now reported as Kubernetes events ([#289]).
 - Use cli argument `watch-namespace` / env var `WATCH_NAMESPACE` to specify
   a single namespace to watch ([#297]).
+- Moved tests from integration tests repo to operator repo ([#344]).
 
 ### Changed
 
-- `operator-rs` `0.10.0` -> `0.15.0` ([#289], [#291], [#297], [#326]).
+- `operator-rs` `0.10.0` -> `0.21.1` ([#289], [#291], [#297], [#326], [#344]).
+- BREAKING: Specifying the product version has been changed to adhere to [ADR018](https://docs.stackable.tech/home/contributor/adr/ADR018-product_image_versioning.html) instead of just specifying the product version you will now have to add the Stackable image version as well, so version: 3.1.1 becomes (for example) version: 3.1.1-stackable0 ([#344])
 
 ### Removed
 
@@ -22,6 +24,7 @@ All notable changes to this project will be documented in this file.
 [#291]: https://github.com/stackabletech/spark-operator/pull/291
 [#297]: https://github.com/stackabletech/spark-operator/pull/297
 [#326]: https://github.com/stackabletech/spark-operator/pull/326
+[#344]: https://github.com/stackabletech/spark-operator/pull/344
 
 ## [0.5.0] - 2022-02-14
 
