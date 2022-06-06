@@ -5,7 +5,7 @@
 If you followed the installation instructions, you should now have a Stackable Operator for Apache Spark up and running and you are ready to create your first Apache Spark cluster.
 
 The example below creates an Apache Spark 3.0.1 cluster with one master (because of `replicas: 1`), one history server and as many workers as nodes available.
-Because of `enableMonitoring: true`, all pods will be annotated for metric scraping. Metrics are retrieved from Spark's built in Prometheus Servlet.
+Because of `enableMonitoring: true`, all pods will be annotated for metric scraping. Metrics are retrieved from Spark's built-in Prometheus Servlet.
 
     cat <<EOF | kubectl apply -f -
     apiVersion: spark.stackable.tech/v1alpha1
@@ -13,7 +13,7 @@ Because of `enableMonitoring: true`, all pods will be annotated for metric scrap
     metadata:
       name: simple-spark
     spec:
-      version: "3.0.1"
+      version: 3.1.1-stackable0
       masters:
         roleGroups:
           default:

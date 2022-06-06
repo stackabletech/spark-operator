@@ -110,6 +110,8 @@ pub enum Error {
     },
     #[snafu(display("internal operator failure"))]
     InternalOperatorFailure { source: stackable_spark_crd::Error },
+    #[snafu(display("could not extract Spark product version (x.x.x) from image: [{version}]. Expected format e.g. x.x.x-stackable0.1.0"))]
+    FailedSparkProductVersionRetrieval { version: String },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -128,7 +130,7 @@ pub async fn reconcile(spark: Arc<SparkCluster>, ctx: Context<Ctx>) -> Result<Ac
     let client = &ctx.get_ref().client;
 
     let validated_config = validate_all_roles_and_groups_config(
-        version(&*spark)?,
+        product_version(&*spark)?,
         &transform_all_roles_to_config(&*spark, build_spark_role_properties(&*spark))
             .context(ProductConfigTransformSnafu)?,
         &ctx.get_ref().product_config,
@@ -196,7 +198,7 @@ fn build_master_role_service(spark: &SparkCluster) -> Result<Service, Error> {
             .with_recommended_labels(
                 spark,
                 APP_NAME,
-                version(spark)?,
+                image_version(spark)?,
                 &role.to_string(),
                 "global",
             )
@@ -227,7 +229,7 @@ fn build_rolegroup_config_map(
                 .with_recommended_labels(
                     sc,
                     APP_NAME,
-                    version(sc)?,
+                    image_version(sc)?,
                     &rolegroup.role,
                     &rolegroup.role_group,
                 )
@@ -283,7 +285,7 @@ fn build_rolegroup_service(
             .with_recommended_labels(
                 spark,
                 APP_NAME,
-                version(spark)?,
+                image_version(spark)?,
                 &rolegroup.role,
                 &rolegroup.role_group,
             )
@@ -319,12 +321,9 @@ fn build_rolegroup_statefulset(
     rolegroup_ref: &RoleGroupRef<SparkCluster>,
     rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
 ) -> Result<StatefulSet, Error> {
-    let version = version(spark)?;
+    let version = image_version(spark)?;
 
-    let image = format!(
-        "docker.stackable.tech/stackable/spark:{}-stackable0",
-        version
-    );
+    let image = format!("docker.stackable.tech/stackable/spark:{}", version);
     let env = rolegroup_config
         .get(&PropertyNameKind::Env)
         .iter()
@@ -480,10 +479,24 @@ fn convert_map_to_string(map: &BTreeMap<String, String>, assignment: &str) -> St
     data
 }
 
-fn version(spark: &SparkCluster) -> Result<&str, Error> {
+/// Returns the provided docker image e.g. 3.1.1-stackable0
+fn image_version(spark: &SparkCluster) -> Result<&str, Error> {
     spark
         .spec
         .version
         .as_deref()
         .context(ObjectHasNoVersionSnafu)
+}
+
+/// Returns our semver representation for product config e.g. 3.1.1
+fn product_version(spark: &SparkCluster) -> Result<&str, Error> {
+    let image_version = image_version(spark)?;
+    image_version
+        .split('-')
+        .collect::<Vec<_>>()
+        .first()
+        .cloned()
+        .with_context(|| FailedSparkProductVersionRetrievalSnafu {
+            version: image_version.to_string(),
+        })
 }
