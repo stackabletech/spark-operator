@@ -1,9 +1,18 @@
+---
+apiVersion: kuttl.dev/v1beta1
+kind: TestStep
+metadata:
+  name: install-spark
+timeout: 300
+---
 apiVersion: spark.stackable.tech/v1alpha1
 kind: SparkCluster
 metadata:
-  name: simple-spark
+  name: spark
 spec:
-  version: 3.1.1-stackable0
+  version: {{ test_scenario['values']['spark'] }}
+  config:
+    enableMonitoring: true
   masters:
     roleGroups:
       default:
@@ -25,4 +34,3 @@ spec:
           matchLabels:
             kubernetes.io/os: linux
         replicas: 1
-

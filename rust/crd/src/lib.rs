@@ -21,10 +21,14 @@ use strum::{Display, EnumIter, IntoEnumIterator};
 pub enum Error {
     #[snafu(display("object has no namespace associated"))]
     NoNamespace,
+    #[snafu(display("object defines no version"))]
+    ObjectHasNoVersion,
     #[snafu(display("Unknown spark role found {role}. Should be one of {roles:?}"))]
     UnknownSparkRole { role: String, roles: Vec<String> },
     #[snafu(display("spark master fqdn is missing"))]
     SparkMasterFqdnIsMissing,
+    #[snafu(display("could not parse product version from image: [{image_version}]. Expected format e.g. [3.1.1-stackable0.1.0]"))]
+    SparkProductVersion { image_version: String },
 }
 
 #[derive(Clone, CustomResource, Debug, Default, Deserialize, JsonSchema, PartialEq, Serialize)]
@@ -147,6 +151,25 @@ impl SparkCluster {
                     pod_name: format!("{}-{}", rolegroup_ref.object_name(), i),
                 })
             }))
+    }
+
+    /// Returns the provided docker image e.g. 3.1.1-stackable0
+    pub fn image_version(&self) -> Result<&str, Error> {
+        self.spec
+            .version
+            .as_deref()
+            .context(ObjectHasNoVersionSnafu)
+    }
+
+    /// Returns our semver representation for product config e.g. 3.1.1
+    pub fn product_version(&self) -> Result<&str, Error> {
+        let image_version = self.image_version()?;
+        image_version
+            .split('-')
+            .next()
+            .with_context(|| SparkProductVersionSnafu {
+                image_version: image_version.to_string(),
+            })
     }
 }
 

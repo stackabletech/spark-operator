@@ -1,9 +1,12 @@
+---
 apiVersion: spark.stackable.tech/v1alpha1
 kind: SparkCluster
 metadata:
-  name: simple-spark
+  name: spark
 spec:
-  version: 3.1.1-stackable0
+  version: {{ test_scenario['values']['spark'] }}
+  config:
+    enableMonitoring: true
   masters:
     roleGroups:
       default:
@@ -17,7 +20,7 @@ spec:
         selector:
           matchLabels:
             kubernetes.io/os: linux
-        replicas: 1
+        replicas: 3
   historyServers:
     roleGroups:
       default:
@@ -25,4 +28,3 @@ spec:
           matchLabels:
             kubernetes.io/os: linux
         replicas: 1
-

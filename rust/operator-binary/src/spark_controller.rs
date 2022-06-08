@@ -64,8 +64,6 @@ pub enum Error {
     ObjectMissingMetadataForOwnerRef {
         source: stackable_operator::error::Error,
     },
-    #[snafu(display("object defines no version"))]
-    ObjectHasNoVersion,
     #[snafu(display("failed to calculate global service name"))]
     GlobalServiceNameNotFound,
     #[snafu(display("failed to apply global service"))]
@@ -110,6 +108,8 @@ pub enum Error {
     },
     #[snafu(display("internal operator failure"))]
     InternalOperatorFailure { source: stackable_spark_crd::Error },
+    #[snafu(display("failed to parse Spark version/image"))]
+    SparkVersionParseFailure { source: stackable_spark_crd::Error },
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -128,7 +128,9 @@ pub async fn reconcile(spark: Arc<SparkCluster>, ctx: Context<Ctx>) -> Result<Ac
     let client = &ctx.get_ref().client;
 
     let validated_config = validate_all_roles_and_groups_config(
-        version(&*spark)?,
+        spark
+            .product_version()
+            .context(SparkVersionParseFailureSnafu)?,
         &transform_all_roles_to_config(&*spark, build_spark_role_properties(&*spark))
             .context(ProductConfigTransformSnafu)?,
         &ctx.get_ref().product_config,
@@ -196,7 +198,9 @@ fn build_master_role_service(spark: &SparkCluster) -> Result<Service, Error> {
             .with_recommended_labels(
                 spark,
                 APP_NAME,
-                version(spark)?,
+                spark
+                    .image_version()
+                    .context(SparkVersionParseFailureSnafu)?,
                 &role.to_string(),
                 "global",
             )
@@ -213,21 +217,23 @@ fn build_master_role_service(spark: &SparkCluster) -> Result<Service, Error> {
 
 /// The rolegroup [`ConfigMap`] configures the rolegroup based on the configuration given by the administrator
 fn build_rolegroup_config_map(
-    sc: &SparkCluster,
+    spark: &SparkCluster,
     rolegroup: &RoleGroupRef<SparkCluster>,
     rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
 ) -> Result<ConfigMap, Error> {
     ConfigMapBuilder::new()
         .metadata(
             ObjectMetaBuilder::new()
-                .name_and_namespace(sc)
+                .name_and_namespace(spark)
                 .name(rolegroup.object_name())
-                .ownerreference_from_resource(sc, None, Some(true))
+                .ownerreference_from_resource(spark, None, Some(true))
                 .context(ObjectMissingMetadataForOwnerRefSnafu)?
                 .with_recommended_labels(
-                    sc,
+                    spark,
                     APP_NAME,
-                    version(sc)?,
+                    spark
+                        .image_version()
+                        .context(SparkVersionParseFailureSnafu)?,
                     &rolegroup.role,
                     &rolegroup.role_group,
                 )
@@ -283,7 +289,9 @@ fn build_rolegroup_service(
             .with_recommended_labels(
                 spark,
                 APP_NAME,
-                version(spark)?,
+                spark
+                    .image_version()
+                    .context(SparkVersionParseFailureSnafu)?,
                 &rolegroup.role,
                 &rolegroup.role_group,
             )
@@ -319,12 +327,11 @@ fn build_rolegroup_statefulset(
     rolegroup_ref: &RoleGroupRef<SparkCluster>,
     rolegroup_config: &HashMap<PropertyNameKind, BTreeMap<String, String>>,
 ) -> Result<StatefulSet, Error> {
-    let version = version(spark)?;
+    let image_version = spark
+        .image_version()
+        .context(SparkVersionParseFailureSnafu)?;
 
-    let image = format!(
-        "docker.stackable.tech/stackable/spark:{}-stackable0",
-        version
-    );
+    let image = format!("docker.stackable.tech/stackable/spark:{}", image_version);
     let env = rolegroup_config
         .get(&PropertyNameKind::Env)
         .iter()
@@ -356,7 +363,7 @@ fn build_rolegroup_statefulset(
             .with_recommended_labels(
                 spark,
                 APP_NAME,
-                version,
+                image_version,
                 &rolegroup_ref.role,
                 &rolegroup_ref.role_group,
             )
@@ -384,7 +391,7 @@ fn build_rolegroup_statefulset(
                     m.with_recommended_labels(
                         spark,
                         APP_NAME,
-                        version,
+                        image_version,
                         &rolegroup_ref.role,
                         &rolegroup_ref.role_group,
                     )
@@ -478,12 +485,4 @@ fn convert_map_to_string(map: &BTreeMap<String, String>, assignment: &str) -> St
         data.push_str(format!("{}{}{}\n", key, assignment, value).as_str());
     }
     data
-}
-
-fn version(spark: &SparkCluster) -> Result<&str, Error> {
-    spark
-        .spec
-        .version
-        .as_deref()
-        .context(ObjectHasNoVersionSnafu)
 }
